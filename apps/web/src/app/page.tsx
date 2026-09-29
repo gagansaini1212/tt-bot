@@ -101,6 +101,24 @@ const decisions = [
   },
 ];
 
+const fixtureSnapshot = {
+  capturedAt: "2026-09-29T10:36:18Z",
+  dataKind: "deterministic fixture",
+  account: {
+    customer: "Alex",
+    venue: "Binance mock",
+    quoteCurrency: "USDT",
+    portfolioValue: "24860.42",
+    todaysPnl: "184.20",
+    availableAllocation: "6920.00",
+    openPositions: 2,
+    liveTradingLocked: true,
+  },
+  positions,
+  strategies,
+  recentDecisions: decisions,
+};
+
 export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-background">
@@ -384,7 +402,7 @@ export default function DashboardPage() {
             </div>
 
             <div className="space-y-6">
-              <AssistantPanel />
+              <AssistantPanel fixtureSnapshot={fixtureSnapshot} />
 
               <Card>
                 <CardHeader>

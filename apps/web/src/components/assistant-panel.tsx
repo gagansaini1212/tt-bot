@@ -14,7 +14,17 @@ import {
 } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 
-export function AssistantPanel() {
+type JsonValue = string | number | boolean | null | JsonObject | JsonValue[];
+
+type JsonObject = {
+  [key: string]: JsonValue;
+};
+
+type AssistantPanelProps = {
+  fixtureSnapshot: JsonObject;
+};
+
+export function AssistantPanel({ fixtureSnapshot }: AssistantPanelProps) {
   const [draft, setDraft] = useState("");
   const agent = useEveAgent();
   const busy = agent.status === "submitted" || agent.status === "streaming";
@@ -31,6 +41,7 @@ export function AssistantPanel() {
         route: "/",
         account: "Binance mock",
         mode: "simulation",
+        fixtureSnapshot,
       },
     });
   }
