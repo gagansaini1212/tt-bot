@@ -1,0 +1,33 @@
+{
+  "name": "crypto-trading-agent",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.26.2",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "pnpm run build:agent && pnpm -r --if-present build",
+    "build:agent": "eve build",
+    "check": "pnpm -r --if-present check",
+    "db:down": "docker compose down",
+    "db:migrate": "docker compose exec -T postgres psql -U trading -d trading -v ON_ERROR_STOP=1 < packages/database/migrations/0001_initial.sql",
+    "db:up": "docker compose up -d postgres",
+    "dev": "pnpm --filter @crypto-trading/web dev",
+    "dev:agent": "eve dev",
+    "dev:worker": "pnpm --filter @crypto-trading/execution dev",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "pnpm -r --if-present test"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "ai": "^7.0.105",
+    "eve": "0.68.0",
+    "zod": "^4.1.8"
+  }
+}
