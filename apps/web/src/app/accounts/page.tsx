@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { CircleDollarSign, ShieldCheck, WalletCards } from "lucide-react";
 
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -18,141 +17,127 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { positions } from "@/lib/dashboard-fixtures";
+import { AccountRefresh } from "@/components/account-refresh";
+import { AccountBalances } from "@/components/account-balances";
+import { getTestnetAccount } from "@/lib/testnet-account";
+
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   title: "Accounts · Northstar Trading",
 };
 
-export default function AccountsPage() {
+export default async function AccountsPage() {
+  const testnet = await getTestnetAccount();
   return (
     <>
       <PageHeader
-        action={<Badge variant="secondary">Connected</Badge>}
-        description="Exchange balances, strategy allocation, and positions for the selected simulation account."
+        action={<AccountRefresh />}
+        description="Balances, orders, and fills reported by your connected Binance Spot Testnet account."
         eyebrow="Portfolio control"
         title="Accounts"
       />
 
-      <section
-        className="mt-6 grid gap-4 sm:grid-cols-3"
-        aria-label="Account summary"
-      >
-        <SummaryCard
-          icon={WalletCards}
-          label="Portfolio value"
-          value="24,860.42 USDT"
-        />
-        <SummaryCard
-          icon={CircleDollarSign}
-          label="Available allocation"
-          value="6,920.00 USDT"
-        />
-        <SummaryCard
-          icon={ShieldCheck}
-          label="Position protection"
-          value="2 of 2 protected"
-        />
-      </section>
-
-      <div className="mt-6 grid gap-6 xl:grid-cols-[0.7fr_1.3fr]">
-        <Card>
-          <CardHeader>
-            <CardTitle>Binance mock</CardTitle>
-            <CardDescription>
-              Primary simulated exchange account
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4 text-sm">
-            <DetailRow label="Customer" value="Alex" />
-            <DetailRow label="Quote currency" value="USDT" />
-            <DetailRow label="Trading mode" value="Simulation" />
-            <DetailRow label="Live order access" value="Locked" />
-            <DetailRow label="Fixture customers" value="10" />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Open positions</CardTitle>
-            <CardDescription>
-              Positions owned by active strategy versions on this account.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Market</TableHead>
-                  <TableHead>Strategy</TableHead>
-                  <TableHead>Quantity</TableHead>
-                  <TableHead>P&amp;L</TableHead>
-                  <TableHead className="text-right">Exit deadline</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {positions.map((position) => (
-                  <TableRow key={position.instrument}>
-                    <TableCell>
-                      <p className="font-medium">{position.instrument}</p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        {position.type}
-                      </p>
-                    </TableCell>
-                    <TableCell>{position.strategy}</TableCell>
-                    <TableCell className="font-mono text-xs">
-                      {position.quantity}
-                    </TableCell>
-                    <TableCell
-                      className={
-                        position.positive ? "text-emerald-400" : "text-rose-400"
-                      }
-                    >
-                      {position.pnl} USDT
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {position.deadline}
-                    </TableCell>
+      <Card className="mt-6">
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <CardTitle>Binance Spot Testnet</CardTitle>
+            <Badge
+              variant={testnet.status === "connected" ? "secondary" : "outline"}
+            >
+              {testnet.status === "connected"
+                ? "Connected · virtual funds"
+                : testnet.status === "not_configured"
+                  ? "Setup required"
+                  : "Unavailable"}
+            </Badge>
+          </div>
+          <CardDescription>
+            {testnet.status === "connected"
+              ? `Account snapshot ${testnet.snapshot.capturedAt}. Refreshes every 10 seconds. Trading permission: ${testnet.snapshot.canTrade ? "enabled" : "disabled"}.`
+              : testnet.message}
+          </CardDescription>
+        </CardHeader>
+        {testnet.status === "connected" ? (
+          <CardContent className="space-y-6">
+            <AccountBalances balances={testnet.snapshot.balances} />
+            <div className="overflow-x-auto">
+              <h2 className="mb-3 text-sm font-medium">
+                Open orders · BTC/USDT and ETH/USDT
+              </h2>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Market / side</TableHead>
+                    <TableHead>Client ID</TableHead>
+                    <TableHead>Price</TableHead>
+                    <TableHead>Filled / quantity</TableHead>
+                    <TableHead>Status</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {testnet.snapshot.orders.map((order) => (
+                    <TableRow key={`${order.symbol}-${order.orderId}`}>
+                      <TableCell>
+                        {order.symbol} {order.side}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {order.clientOrderId}
+                      </TableCell>
+                      <TableCell className="font-mono">{order.price}</TableCell>
+                      <TableCell className="font-mono">
+                        {order.executedQty} / {order.origQty}
+                      </TableCell>
+                      <TableCell>{order.status}</TableCell>
+                    </TableRow>
+                  ))}
+                  {testnet.snapshot.orders.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5}>No open orders.</TableCell>
+                    </TableRow>
+                  ) : null}
+                </TableBody>
+              </Table>
+            </div>
+            <div className="overflow-x-auto">
+              <h2 className="mb-3 text-sm font-medium">
+                Recent fills · latest 50 across BTC/USDT and ETH/USDT
+              </h2>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Market / side</TableHead>
+                    <TableHead>Quantity</TableHead>
+                    <TableHead>Price</TableHead>
+                    <TableHead>Fee</TableHead>
+                    <TableHead>Time</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {testnet.snapshot.fills.map((fill) => (
+                    <TableRow key={`${fill.symbol}-${fill.id}`}>
+                      <TableCell>
+                        {fill.symbol} {fill.isBuyer ? "BUY" : "SELL"}
+                      </TableCell>
+                      <TableCell className="font-mono">{fill.qty}</TableCell>
+                      <TableCell className="font-mono">{fill.price}</TableCell>
+                      <TableCell>
+                        {fill.commission} {fill.commissionAsset}
+                      </TableCell>
+                      <TableCell>{new Date(fill.time).toISOString()}</TableCell>
+                    </TableRow>
+                  ))}
+                  {testnet.snapshot.fills.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5}>No recent fills.</TableCell>
+                    </TableRow>
+                  ) : null}
+                </TableBody>
+              </Table>
+            </div>
           </CardContent>
-        </Card>
-      </div>
+        ) : null}
+      </Card>
     </>
-  );
-}
-
-function SummaryCard({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: typeof WalletCards;
-  label: string;
-  value: string;
-}) {
-  return (
-    <Card>
-      <CardContent className="p-5">
-        <div className="flex items-center gap-2 text-muted-foreground">
-          <Icon className="size-4" />
-          <p className="text-xs font-medium uppercase tracking-wider">
-            {label}
-          </p>
-        </div>
-        <p className="mt-4 font-mono text-xl font-semibold">{value}</p>
-      </CardContent>
-    </Card>
-  );
-}
-
-function DetailRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between gap-4 border-b border-border/70 pb-3 last:border-0 last:pb-0">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="font-medium">{value}</span>
-    </div>
   );
 }

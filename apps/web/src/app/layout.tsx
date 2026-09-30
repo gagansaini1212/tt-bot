@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Northstar Trading",
-  description: "Simulation-first crypto trading controls and analysis.",
+  description: "Binance Spot Testnet account monitoring and trading analysis.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

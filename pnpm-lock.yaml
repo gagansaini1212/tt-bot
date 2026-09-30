@@ -36,6 +36,12 @@ importers:
       '@crypto-trading/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@crypto-trading/exchanges':
+        specifier: workspace:*
+        version: link:../../packages/exchanges
+      decimal.js:
+        specifier: ^10.6.0
+        version: 10.6.0
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -49,6 +55,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@crypto-trading/exchanges':
+        specifier: workspace:*
+        version: link:../../packages/exchanges
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -123,6 +132,22 @@ importers:
       decimal.js:
         specifier: ^10.6.0
         version: 10.6.0
+      zod:
+        specifier: ^4.1.8
+        version: 4.6.5
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.19.0
+      tsx:
+        specifier: ^4.20.5
+        version: 4.23.15
+      typescript:
+        specifier: ^5.9.2
+        version: 5.9.3
+
+  packages/exchanges:
+    dependencies:
       zod:
         specifier: ^4.1.8
         version: 4.6.5

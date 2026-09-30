@@ -20,7 +20,7 @@ const navigation = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
   { href: "/accounts", label: "Accounts", icon: WalletCards },
   { href: "/strategies", label: "Strategies", icon: Activity },
-  { href: "/decisions", label: "Decisions", icon: Database },
+  { href: "/decisions", label: "Activity", icon: Database },
 ];
 
 function NavigationLink({
@@ -96,11 +96,11 @@ export function DashboardShell({ children }: { children: ReactNode }) {
             </Link>
             <div className="rounded-lg border border-border bg-background/40 p-3">
               <div className="flex items-center gap-2 text-xs font-medium">
-                <span className="size-2 rounded-full bg-emerald-400" />
-                Mock exchange online
+                <span className="size-2 rounded-full bg-amber-400" />
+                Development trading
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
-                Fixture data · 10 customers
+                Binance testnet · virtual funds
               </p>
             </div>
           </div>

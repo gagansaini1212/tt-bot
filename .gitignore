@@ -9,3 +9,5 @@ coverage/
 *.tsbuildinfo
 .DS_Store
 pnpm-debug.log*
+.testnet-orders/
+apps/execution/.keys/

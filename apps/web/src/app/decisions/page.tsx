@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
-import { Database, FileCheck2 } from "lucide-react";
 
+import { AccountRefresh } from "@/components/account-refresh";
 import { PageHeader } from "@/components/page-header";
-import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
@@ -10,70 +9,99 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
-import { decisions } from "@/lib/dashboard-fixtures";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { getTestnetAccount } from "@/lib/testnet-account";
 
-export const metadata: Metadata = {
-  title: "Decisions · Northstar Trading",
-};
+export const metadata: Metadata = { title: "Activity · Northstar Trading" };
+export const dynamic = "force-dynamic";
 
-export default function DecisionsPage() {
+export default async function DecisionsPage() {
+  const account = await getTestnetAccount();
   return (
     <>
       <PageHeader
-        action={<Badge variant="outline">Fixture audit trail</Badge>}
-        description="Analysis outcomes and independent execution checks in newest-first order."
-        eyebrow="Audit history"
-        title="Decisions"
+        action={<AccountRefresh />}
+        description="Recent exchange fills for BTC/USDT and ETH/USDT, reported directly by Binance Spot Testnet."
+        eyebrow="Exchange history"
+        title="Activity"
       />
-
-      <div className="mt-6 grid gap-6 xl:grid-cols-[1.4fr_0.6fr]">
-        <Card>
-          <CardHeader>
-            <CardTitle>Latest activity</CardTitle>
-            <CardDescription>
-              Captured at 2026-09-29 10:36:18 UTC
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-5">
-            {decisions.map((decision, index) => (
-              <div key={`${decision.time}-${decision.title}`}>
-                {index > 0 ? <Separator className="mb-5" /> : null}
-                <div className="flex gap-4">
-                  <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-secondary text-secondary-foreground">
-                    <Database className="size-4" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <Badge variant={decision.tone}>{decision.title}</Badge>
-                      <time className="font-mono text-xs text-muted-foreground">
-                        {decision.time}
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle>Recent fills</CardTitle>
+          <CardDescription>
+            {account.status === "connected"
+              ? `Latest 50 fills across the supported markets. Updated ${account.snapshot.capturedAt}. Refreshes every 10 seconds.`
+              : account.message}
+          </CardDescription>
+        </CardHeader>
+        {account.status === "connected" ? (
+          <CardContent className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Time · UTC</TableHead>
+                  <TableHead>Market</TableHead>
+                  <TableHead>Side</TableHead>
+                  <TableHead>Quantity</TableHead>
+                  <TableHead>Price</TableHead>
+                  <TableHead>Fee</TableHead>
+                  <TableHead>Order ID</TableHead>
+                  <TableHead>Fill ID</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {account.snapshot.fills.map((fill) => (
+                  <TableRow key={`${fill.symbol}-${fill.id}`}>
+                    <TableCell className="whitespace-nowrap text-xs">
+                      <time dateTime={new Date(fill.time).toISOString()}>
+                        {new Date(fill.time).toISOString()}
                       </time>
-                    </div>
-                    <p className="mt-3 text-sm leading-6 text-muted-foreground">
-                      {decision.detail}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            ))}
+                    </TableCell>
+                    <TableCell>{fill.symbol}</TableCell>
+                    <TableCell>{fill.isBuyer ? "BUY" : "SELL"}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {fill.qty}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {fill.price}
+                    </TableCell>
+                    <TableCell>
+                      {fill.commission} {fill.commissionAsset}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {fill.orderId}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {fill.id}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {account.snapshot.fills.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={8}>No recorded fills.</TableCell>
+                  </TableRow>
+                ) : null}
+              </TableBody>
+            </Table>
           </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <div className="flex size-9 items-center justify-center rounded-lg bg-primary/15 text-primary">
-              <FileCheck2 className="size-4" />
-            </div>
-            <CardTitle className="mt-3">Audit guarantees</CardTitle>
-            <CardDescription>
-              Every proposal, rejection, order transition, fill, and protection
-              check is designed to retain its tenant, account, and
-              strategy-version ownership.
-            </CardDescription>
-          </CardHeader>
-        </Card>
-      </div>
+        ) : null}
+      </Card>
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle>AI decision history</CardTitle>
+          <CardDescription>
+            AI decision persistence is not implemented. The exchange fills above
+            are manual trading activity.
+          </CardDescription>
+        </CardHeader>
+      </Card>
     </>
   );
 }

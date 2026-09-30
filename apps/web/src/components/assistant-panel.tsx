@@ -21,10 +21,14 @@ type JsonObject = {
 };
 
 type AssistantPanelProps = {
-  fixtureSnapshot: JsonObject;
+  accountSnapshot: JsonObject;
+  accountLabel: string;
 };
 
-export function AssistantPanel({ fixtureSnapshot }: AssistantPanelProps) {
+export function AssistantPanel({
+  accountSnapshot,
+  accountLabel,
+}: AssistantPanelProps) {
   const [draft, setDraft] = useState("");
   const agent = useEveAgent();
   const busy = agent.status === "submitted" || agent.status === "streaming";
@@ -39,9 +43,9 @@ export function AssistantPanel({ fixtureSnapshot }: AssistantPanelProps) {
     await agent.send(message, {
       clientContext: {
         route: "/",
-        account: "Binance mock",
-        mode: "simulation",
-        fixtureSnapshot,
+        account: accountLabel,
+        mode: "testnet",
+        accountSnapshot,
       },
     });
   }
@@ -65,8 +69,8 @@ export function AssistantPanel({ fixtureSnapshot }: AssistantPanelProps) {
         <div className="mb-4 min-h-32 space-y-3 rounded-lg border border-border bg-background/45 p-3">
           {messages.length === 0 ? (
             <p className="text-sm leading-6 text-muted-foreground">
-              Ask why a proposal was rejected, review a strategy, or draft a
-              change. Drafts never alter live settings.
+              Ask about your balances, recent trades, or open orders. The
+              assistant uses the account snapshot shown here.
             </p>
           ) : (
             messages.map((message) => (
@@ -104,13 +108,13 @@ export function AssistantPanel({ fixtureSnapshot }: AssistantPanelProps) {
             aria-label="Message the analysis assistant"
             disabled={busy}
             onChange={(event) => setDraft(event.target.value)}
-            placeholder="Why was the last ETH proposal rejected?"
+            placeholder="What happened in my latest BTC trade?"
             rows={3}
             value={draft}
           />
           <div className="flex items-center justify-between">
             <p className="text-xs text-muted-foreground">
-              {busy ? "Analyzing fixture data…" : "Fixture-backed analysis"}
+              {busy ? "Analyzing account data…" : "Testnet account analysis"}
             </p>
             {busy ? (
               <Button
