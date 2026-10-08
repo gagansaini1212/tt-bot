@@ -9,12 +9,12 @@ A Binance Spot Testnet trading application built with Next.js, eve, shadcn/ui, a
 - A typed trade-proposal tool that cannot place orders or change limits.
 - Independent execution checks for customer scope, strategy version, instrument access, leverage, protection, expiry, position size, and available allocation.
 - Exact decimal arithmetic for quantities and money calculations.
-- A PostgreSQL schema for customers, accounts, strategy versions, proposals, reservations, orders, fills, position ownership, deadlines, audit events, and outbox jobs.
-- Row-level security policies for customer-owned records.
+- A PostgreSQL schema for customers, accounts, strategy versions, proposals, reservations, orders, fills, position ownership, deadlines, audit events, and outbox jobs, applied by a migration runner that records each migration.
+- Row-level security for customer-owned records. The apps connect as a role it applies to and work in one customer's scope at a time. See [the database guide](docs/database.md).
 - A local execution service with a Binance Spot Testnet adapter for balances, limit orders, cancellation, order lookup, recent fills, and public market data (24-hour tickers, candles, and order book depth).
 - A testnet Overview with net worth and its 24-hour change in USDT, balances, open orders, recent fills, and automatic refresh every ten seconds. Accounts shows holdings valued in USDT with their 24-hour change and each asset's share of net worth, and can hide zero and dust balances. Activity lists exchange fills. Settings shows the current account connection.
 - Markets for BTC/USDT and ETH/USDT: a candlestick chart (TradingView Lightweight Charts) marking your recent fills and open orders, the order book, and a market depth chart, refreshed every three seconds while the tab is visible.
-- Manual development order commands with a notional cap, Binance filter validation, and an order-intent journal to prevent duplicate submission after restart.
+- Manual development order commands with a notional cap, Binance filter validation, and order intents saved in PostgreSQL before anything is sent, to prevent duplicate submission after restart.
 - Testnet order placement from the dashboard: limit and market buys with a required take profit and stop loss that Binance attaches to the entry, a pre-execution check preview, and a confirmed Cancel button on every open order.
 
 ## Requirements
@@ -32,7 +32,10 @@ pnpm install
 cp .env.example .env
 pnpm db:up
 pnpm db:migrate
+pnpm db:seed
 ```
+
+`pnpm db:seed` creates the development customer, their Binance Spot Testnet exchange account, and the login role `DATABASE_URL` names. Both commands are safe to run again. Until customer sign-in exists, every request acts for that development customer. [The database guide](docs/database.md) explains the roles, migrations and customer scoping.
 
 Start the web app and eve agent together:
 
@@ -54,7 +57,13 @@ pnpm --filter @crypto-trading/web lint
 pnpm build
 ```
 
-CI runs the same checks on pull requests and pushes to `main`.
+The database tests skip unless `TEST_DATABASE_URL` names a PostgreSQL superuser. They create and drop their own databases, so the Compose database works:
+
+```bash
+TEST_DATABASE_URL=postgresql://trading:trading@localhost:5432/postgres pnpm test
+```
+
+CI runs the same checks on pull requests and pushes to `main`, with PostgreSQL for the database tests.
 
 ## Repository layout
 
@@ -63,7 +72,7 @@ agent/                eve instructions, channel, and proposal tool
 apps/web/             Next.js dashboard
 apps/execution/       independent execution worker
 packages/domain/      trading rules and exact arithmetic
-packages/database/    PostgreSQL client and migrations
+packages/database/    PostgreSQL client, migrations and development seed
 docs/                 accepted product and architecture decisions
 ```
 
@@ -74,7 +83,9 @@ Live trading remains locked until the deployment prerequisites in [the implement
 1. Sign in at [Binance Spot Testnet](https://testnet.binance.vision/) and register an Ed25519 or RSA public key with account-read and trading permissions. Keep the corresponding private key locally. These API keys are separate from production and Demo Trading keys.
 2. Copy `apps/execution/.env.example` to `apps/execution/.env` if it does not already exist. Set `BINANCE_TESTNET_API_KEY` to the API key Binance issues and `BINANCE_TESTNET_PRIVATE_KEY_PATH` to the absolute path of the private PEM file. Leave `BINANCE_TESTNET_API_SECRET` empty. For an existing HMAC API key, set its secret instead of a private-key path. Set `EXECUTION_API_TOKEN` to a random token, generated with `openssl rand -hex 32`.
 3. Copy `apps/web/.env.example` to `apps/web/.env.local`. Copy the same `EXECUTION_API_TOKEN` there. Binance credentials belong only in `apps/execution/.env`, which the execution service loads. Keep both files private.
-4. Run `pnpm exchange check` to verify authenticated connectivity. Then run `pnpm dev:worker` and `pnpm dev` in separate terminals. Open `/` to see virtual balances, open BTC/ETH orders, and recent fills, and `/accounts` for holdings valued in USDT. Restart the processes after changing their environment files.
+4. Run `pnpm exchange check` to verify authenticated connectivity. Then run `pnpm dev:worker` and `pnpm dev` in separate terminals. The worker needs the migrated and seeded database from [Run locally](#run-locally); market data works without it. Open `/` to see virtual balances, open BTC/ETH orders, and recent fills, and `/accounts` for holdings valued in USDT. Restart the processes after changing their environment files.
+
+The credentials belong to the development customer's exchange account, so the worker serves account data and orders only for that customer. If you placed orders before order intents moved to PostgreSQL, the worker refuses to start while `.testnet-orders/` holds intents: run `pnpm exchange import-journal` once to copy them into the database, then delete the directory.
 
 The worker listens on `127.0.0.1:4001`, and on `[::1]:4001` when IPv6 is available. Its HTTP interface requires the shared token. It serves the account snapshot and market data, and places and cancels dashboard orders. **The dashboard can place and cancel orders on the connected testnet account, so it must stay on this machine.** It has no customer authentication: never expose it to a network, put it behind a proxy, or reach it through a tunnel. Its order actions refuse requests that are not from `localhost`, `127.0.0.1` or `[::1]`. The Overview assistant receives the displayed testnet account snapshot and cannot access exchange credentials or submit orders. The application has no demo account data or invented strategy/decision records. Strategy management and AI decision persistence are not implemented.
 
@@ -103,7 +114,7 @@ Dashboard orders stay off until these are set in `apps/execution/.env`; they hav
 
 The allocation counts the unfilled value of every open buy, plus the entry value of each position whose exits are still open. Holdings with no open order are outside it.
 
-Each order gets a new `ct_` client ID in the browser. The worker records it in `.testnet-orders/` before submitting and never submits it twice. If the worker cannot confirm an order, the drawer offers **Check order status**, which looks the order up by that ID, instead of letting you resend it. If an entry fills at once, the worker confirms on Binance that both exits are open and reports loudly when they are not.
+Each order gets a new `ct_` client ID in the browser. The worker saves the order intent in PostgreSQL before submitting and never submits that ID twice. If the worker cannot confirm an order, the drawer offers **Check order status**, which looks the order up by that ID, instead of letting you resend it. If an entry fills at once, the worker confirms on Binance that both exits are open and reports loudly when they are not.
 
 Binance cancels every order in a list together, so cancelling any leg cancels the entry and both exits. The confirmation dialog lists what will be cancelled. If the entry has already bought anything, it names the quantity that will be left without exits and needs a second, explicit confirmation.
 
@@ -123,7 +134,7 @@ pnpm exchange orders
 pnpm exchange fills
 ```
 
-`test-order` validates with Binance without creating an order. `place-order` validates first, writes intent to `.testnet-orders/`, then submits once. Use a unique `ct_` client ID for each new order. Preserve the journal across restarts. A timeout or server error can mean Binance accepted the order; query that same client ID before taking further action. Commands never automatically retry an order submission. Canceling does not reverse fills.
+`test-order` validates with Binance without creating an order. `place-order` validates first, saves the order intent in PostgreSQL for the development customer, then submits once. Use a unique `ct_` client ID for each new order; an ID the dashboard or CLI used before is refused. A timeout or server error can mean Binance accepted the order; query that same client ID before taking further action. Commands never automatically retry an order submission. Canceling does not reverse fills.
 
 Balances, quantities, prices, and fees remain decimal strings. The account snapshot is fetched through REST and cached in the worker for at most ten seconds. Market data is cached for at most five seconds (tickers and candles) or one second (order book depth). Overview, Accounts, Activity, and Settings refresh every ten seconds while the tab is visible and offer a manual refresh button. Overview shows the latest ten fills across BTC/USDT and ETH/USDT; Activity shows the latest fifty. Net worth and holding values use the 24-hour tickers: available plus locked balances at last prices, with USDT counted as 1 and assets without a USDT market priced through the inverse market or BTC, ETH or BNB. Assets with no price are listed as left out, never counted as zero. This is an account monitor, not a full trade-history import or automated execution loop.
 
