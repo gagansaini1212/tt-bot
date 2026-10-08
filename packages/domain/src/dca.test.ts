@@ -139,6 +139,13 @@ describe("planDcaBuy", () => {
       assert.equal(plan.intents[0].quantity, "0.00064");
   });
 
+  it("rejects a zero price instead of buying infinitely much", () => {
+    assert.throws(
+      () => planDcaBuy(rules, { ...state, price: "0" }),
+      RangeError,
+    );
+  });
+
   it("waits for the first buy", () => {
     assert.deepEqual(
       planDcaBuy(rules, {
@@ -190,11 +197,29 @@ describe("planDcaBuy", () => {
         ...last,
         previousBuy: { index: 9, entryPrice: "60000" },
       }),
-      { action: "finished", reason: "schedule_complete" },
+      { action: "no_more_entries", reason: "schedule_complete" },
     );
     assert.deepEqual(
       planDcaBuy(rules, { ...last, now: new Date("2026-10-11T09:00:00.000Z") }),
-      { action: "finished", reason: "schedule_complete" },
+      { action: "no_more_entries", reason: "schedule_complete" },
+    );
+  });
+
+  it("waits rather than submit a stop that rounds onto the entry", () => {
+    assert.deepEqual(
+      planDcaBuy(
+        { ...rules, stopLossPercent: "0.1" },
+        {
+          ...state,
+          price: "100",
+          steps: { tickSize: "1", quantityStep: "0.01" },
+        },
+      ),
+      {
+        action: "wait",
+        reason: "unprotectable",
+        until: "2026-10-04T09:00:00.000Z",
+      },
     );
   });
 
@@ -203,7 +228,7 @@ describe("planDcaBuy", () => {
       planDcaBuy({ ...rules, amountPerBuy: "0.5", dip: undefined }, state),
       {
         action: "wait",
-        reason: "amount_too_small",
+        reason: "unprotectable",
         until: "2026-10-04T09:00:00.000Z",
       },
     );

@@ -152,14 +152,14 @@ describe("planStandingEntries", () => {
           closed: false,
         })),
       }),
-      { action: "finished", reason: "all_entries_filled" },
+      { action: "no_more_entries", reason: "all_entries_filled" },
     );
     assert.deepEqual(
       planStandingEntries(rules, {
         ...state,
         now: new Date("2026-10-15T00:00:00.000Z"),
       }),
-      { action: "finished", reason: "expired" },
+      { action: "no_more_entries", reason: "expired" },
     );
     assert.equal(
       planStandingEntries(rules, {

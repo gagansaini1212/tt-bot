@@ -34,36 +34,51 @@ export const tradeProposalSchema = z.object({
 
 export type TradeProposal = z.infer<typeof tradeProposalSchema>;
 
-export const executionPolicySchema = z.object({
-  customerId: z.uuid(),
-  exchangeAccountId: z.uuid(),
-  strategyId: z.uuid(),
-  strategyVersion: z.int().positive(),
-  tradingMode: tradingModeSchema,
-  strategyStatus: z.enum(["simulation", "active", "paused"]),
-  liveTradingEnabled: z.boolean(),
-  allowedInstruments: z.array(instrumentSchema).min(1),
-  allocation: positiveDecimalString,
-  // Summed across all of the strategy's protected entries: the capital of its
-  // open entries, and the reservations of its pending ones.
-  committedCapital: decimalString,
-  reservedBudget: decimalString,
-  // The largest position in one instrument, counting every protected entry the
-  // strategy holds in it.
-  maxPositionNotional: positiveDecimalString,
-  maxLeverage: z.int().positive(),
-  // Entry notional of the strategy's open and pending entries, per instrument.
-  positionNotionalByInstrument: z
-    .partialRecord(instrumentSchema, decimalString)
-    .default({}),
-  // Protected entries the strategy holds now, pending or open, and the most it
-  // may hold. Without a maximum, only capital limits the entries.
-  protectedEntries: z.int().nonnegative().default(0),
-  maxProtectedEntries: z.int().positive().optional(),
-});
+export const executionPolicySchema = z
+  .object({
+    customerId: z.uuid(),
+    exchangeAccountId: z.uuid(),
+    strategyId: z.uuid(),
+    strategyVersion: z.int().positive(),
+    tradingMode: tradingModeSchema,
+    strategyStatus: z.enum(["simulation", "active", "paused"]),
+    liveTradingEnabled: z.boolean(),
+    allowedInstruments: z.array(instrumentSchema).min(1),
+    allocation: positiveDecimalString,
+    // Summed across all of the strategy's protected entries: the capital of its
+    // open entries, and the reservations of its pending ones.
+    committedCapital: decimalString,
+    reservedBudget: decimalString,
+    // The largest position in one instrument, counting every protected entry the
+    // strategy holds in it.
+    maxPositionNotional: positiveDecimalString,
+    maxLeverage: z.int().positive(),
+    // The market kind and directions the strategy's rules allow, when set.
+    marketKind: marketKindSchema.optional(),
+    allowedDirections: z.array(tradeDirectionSchema).min(1).optional(),
+    // A strategy that may hold several protected entries states the most it may
+    // hold, how many it holds now, pending or open, and the entry notional of
+    // those entries per instrument. A policy without a maximum checks each
+    // entry's capital and size on its own.
+    maxProtectedEntries: z.int().positive().optional(),
+    protectedEntries: z.int().nonnegative().optional(),
+    positionNotionalByInstrument: z
+      .partialRecord(instrumentSchema, decimalString)
+      .optional(),
+  })
+  .refine(
+    (policy) =>
+      policy.maxProtectedEntries === undefined ||
+      (policy.protectedEntries !== undefined &&
+        policy.positionNotionalByInstrument !== undefined),
+    {
+      error:
+        "A policy with an entry limit must state the entries the strategy holds and their notional per instrument.",
+      path: ["maxProtectedEntries"],
+    },
+  );
 
 export type ExecutionPolicy = z.infer<typeof executionPolicySchema>;
-export type ExecutionPolicyInput = z.input<typeof executionPolicySchema>;
 
 export type AuthorizationRejection = {
   allowed: false;
@@ -73,6 +88,8 @@ export type AuthorizationRejection = {
     | "strategy_not_active"
     | "live_trading_disabled"
     | "instrument_not_allowed"
+    | "market_kind_not_allowed"
+    | "direction_not_allowed"
     | "unsupported_spot_short"
     | "leverage_exceeded"
     | "invalid_protection"
@@ -102,7 +119,7 @@ function reject(
 
 export function authorizeTradeProposal(
   rawProposal: unknown,
-  rawPolicy: ExecutionPolicyInput,
+  rawPolicy: ExecutionPolicy,
   now: Date,
 ): AuthorizationResult {
   const parsedProposal = tradeProposalSchema.safeParse(rawProposal);
@@ -148,6 +165,23 @@ export function authorizeTradeProposal(
     );
   }
 
+  if (policy.marketKind && proposal.marketKind !== policy.marketKind) {
+    return reject(
+      "market_kind_not_allowed",
+      `The strategy trades ${policy.marketKind} only.`,
+    );
+  }
+
+  if (
+    policy.allowedDirections &&
+    !policy.allowedDirections.includes(proposal.direction)
+  ) {
+    return reject(
+      "direction_not_allowed",
+      `The strategy does not open ${proposal.direction} positions.`,
+    );
+  }
+
   if (proposal.marketKind === "spot" && proposal.direction === "short") {
     return reject(
       "unsupported_spot_short",
@@ -182,7 +216,7 @@ export function authorizeTradeProposal(
 
   if (
     policy.maxProtectedEntries !== undefined &&
-    policy.protectedEntries >= policy.maxProtectedEntries
+    (policy.protectedEntries ?? 0) >= policy.maxProtectedEntries
   ) {
     return reject(
       "entry_limit_exceeded",
@@ -194,7 +228,7 @@ export function authorizeTradeProposal(
     proposal.entryPrice,
   );
   const heldNotional =
-    policy.positionNotionalByInstrument[proposal.instrument] ?? "0";
+    policy.positionNotionalByInstrument?.[proposal.instrument] ?? "0";
   if (
     positionNotional.plus(heldNotional).greaterThan(policy.maxPositionNotional)
   ) {

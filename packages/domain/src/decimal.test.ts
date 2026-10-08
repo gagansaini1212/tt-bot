@@ -6,7 +6,6 @@ import {
   floorToStep,
   positiveDecimalString,
   quantityFor,
-  signedDecimalString,
 } from "./decimal";
 
 describe("decimal strings", () => {
@@ -15,11 +14,6 @@ describe("decimal strings", () => {
       assert.equal(positiveDecimalString.safeParse(value).success, false);
     assert.equal(positiveDecimalString.safeParse("0").success, false);
     assert.equal(positiveDecimalString.safeParse("0.00000001").success, true);
-  });
-
-  it("accepts signed decimals only in the signed schema", () => {
-    assert.equal(signedDecimalString.safeParse("-12.5").success, true);
-    assert.equal(signedDecimalString.safeParse("--1").success, false);
   });
 });
 
@@ -44,5 +38,10 @@ describe("quantityFor", () => {
     // Exactly 0.001 BTC fits.
     assert.equal(quantityFor("60", "60000", "0.00001").toFixed(), "0.001");
     assert.equal(quantityFor("0.5", "60000", "0.00001").toFixed(), "0");
+  });
+
+  it("rejects a price that is not positive instead of buying infinitely much", () => {
+    assert.throws(() => quantityFor("10", "0", "0.00001"), RangeError);
+    assert.throws(() => quantityFor("10", "-1", "0.00001"), RangeError);
   });
 });

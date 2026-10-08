@@ -340,6 +340,37 @@ describe("grid rules", () => {
     assert.deepEqual(parse({ ...gridRules, levelCount: 4 }), ["levelCount"]);
     // 4000 over 8 steps is 500.
     assert.deepEqual(parse({ ...gridRules, levelCount: 9 }), []);
+    // 2 over 3 steps is 0.666…, however far the digits go.
+    assert.deepEqual(
+      parse({
+        ...gridRules,
+        lowerPrice: "100",
+        upperPrice: "102",
+        levelCount: 4,
+        rangeStopPrice: "99",
+      }),
+      ["levelCount"],
+    );
+    assert.deepEqual(
+      parse({
+        ...gridRules,
+        lowerPrice: "100",
+        upperPrice: "100.00000000000000002",
+        levelCount: 4,
+        rangeStopPrice: "99",
+      }),
+      ["levelCount"],
+    );
+    assert.deepEqual(
+      parse({
+        ...gridRules,
+        lowerPrice: "100",
+        upperPrice: "100.03",
+        levelCount: 4,
+        rangeStopPrice: "99",
+      }),
+      [],
+    );
   });
 
   it("bounds the level count", () => {
@@ -356,6 +387,7 @@ describe("maximumCommitment and ruleLimits", () => {
     assert.deepEqual(ruleLimits(standingRules), {
       allowedInstruments: ["BTC-USDT"],
       marketKind: "spot",
+      allowedDirections: ["long"],
       maxLeverage: 1,
       maxPositionNotional: "294",
       maxProtectedEntries: 2,
@@ -385,6 +417,7 @@ describe("maximumCommitment and ruleLimits", () => {
     assert.deepEqual(ruleLimits(gridRules), {
       allowedInstruments: ["BTC-USDT"],
       marketKind: "spot",
+      allowedDirections: ["long"],
       maxLeverage: 1,
       maxPositionNotional: "400",
       maxProtectedEntries: 4,
@@ -394,6 +427,16 @@ describe("maximumCommitment and ruleLimits", () => {
   it("bounds an AI-managed strategy by each instrument's position limit", () => {
     assert.equal(maximumCommitment(aiRules), "600");
     assert.equal(ruleLimits(aiRules).maxProtectedEntries, 4);
+    assert.deepEqual(ruleLimits(aiRules).allowedDirections, ["long"]);
+    assert.deepEqual(
+      ruleLimits({
+        ...aiRules,
+        marketKind: "perpetual",
+        allowShort: true,
+        maxLeverage: 3,
+      }).allowedDirections,
+      ["long", "short"],
+    );
   });
 });
 

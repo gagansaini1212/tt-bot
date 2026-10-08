@@ -36,10 +36,13 @@ export type EntryIntent = {
  *
  * - `enter`: submit these entries, in this order.
  * - `wait`: nothing to submit now. `until` is when the plan next changes if
- *   nothing else does.
- * - `finished`: the rules open no more entries. Open entries keep their exits
- *   and deadlines, and the strategy is completed once none remain.
- * - `close_all`: cancel pending entries, close open entries and open no more.
+ *   nothing else does. `unprotectable` means the rules' next entry cannot be
+ *   protected: its amount buys less than one quantity step, or rounding to the
+ *   tick leaves its stop or target at the entry price.
+ * - `no_more_entries`: the rules open no more entries. Open entries keep their
+ *   exits and deadlines, and the strategy is completed once none remain.
+ * - `close_and_complete`: the market left a grid's range. Cancel pending
+ *   entries, close open entries, and complete the strategy.
  */
 export type EntryPlan =
   | { action: "enter"; intents: EntryIntent[] }
@@ -51,14 +54,14 @@ export type EntryPlan =
         | "entry_limit"
         | "entries_pending"
         | "no_free_level"
-        | "amount_too_small";
+        | "unprotectable";
       until?: string;
     }
   | {
-      action: "finished";
+      action: "no_more_entries";
       reason: "expired" | "schedule_complete" | "all_entries_filled";
     }
-  | { action: "close_all"; reason: "range_stop" | "above_range" };
+  | { action: "close_and_complete"; reason: "range_stop" | "above_range" };
 
 /** The trade proposal that submits an intent, for `authorizeTradeProposal`. */
 export function entryIntentProposal(

@@ -1,7 +1,7 @@
 import Decimal from "decimal.js";
 import { z } from "zod";
 
-import { positiveDecimalString } from "./decimal";
+import { ExactDecimal, positiveDecimalString } from "./decimal";
 import { protectionIsValid } from "./protection";
 import {
   instrumentSchema,
@@ -9,6 +9,7 @@ import {
   tradeDirectionSchema,
   type Instrument,
   type MarketKind,
+  type TradeDirection,
 } from "./trading";
 
 /**
@@ -268,7 +269,7 @@ export const gridRulesSchema = z
         message: "The range stop must be below the lower price.",
         path: ["rangeStopPrice"],
       });
-    const span = upper.minus(lower);
+    const span = new ExactDecimal(rules.upperPrice).minus(rules.lowerPrice);
     const gaps = rules.levelCount - 1;
     if (!span.dividedBy(gaps).times(gaps).equals(span))
       ctx.addIssue({
@@ -295,6 +296,15 @@ export type AiManagedRules = z.infer<typeof aiManagedRulesSchema>;
 export type DcaRules = z.infer<typeof dcaRulesSchema>;
 export type GridRules = z.infer<typeof gridRulesSchema>;
 
+/** What a standing instruction's entries cost at their prices, together. */
+function standingNotional(rules: StandingPriceInstructionRules) {
+  return rules.entries.reduce(
+    (total, entry) =>
+      total.plus(new Decimal(entry.quantity).times(entry.entryPrice)),
+    new Decimal(0),
+  );
+}
+
 /** The most a DCA buy can spend: amountPerBuy, times the dip multiplier. */
 export function largestDcaBuy(rules: DcaRules) {
   return new Decimal(rules.amountPerBuy).times(rules.dip?.multiplier ?? 1);
@@ -308,12 +318,7 @@ export function largestDcaBuy(rules: DcaRules) {
 export function maximumCommitment(rules: StrategyRules): string {
   switch (rules.kind) {
     case "standing_price_instruction":
-      return rules.entries
-        .reduce(
-          (total, entry) =>
-            total.plus(new Decimal(entry.quantity).times(entry.entryPrice)),
-          new Decimal(0),
-        )
+      return standingNotional(rules)
         .dividedBy(rules.marketKind === "spot" ? 1 : rules.leverage)
         .toFixed();
     case "ai_managed":
@@ -333,6 +338,7 @@ export function maximumCommitment(rules: StrategyRules): string {
 export type RuleLimits = {
   allowedInstruments: Instrument[];
   marketKind: MarketKind;
+  allowedDirections: TradeDirection[];
   maxLeverage: number;
   maxPositionNotional: string;
   maxProtectedEntries: number;
@@ -344,20 +350,16 @@ export function ruleLimits(rules: StrategyRules): RuleLimits {
       return {
         allowedInstruments: [rules.instrument],
         marketKind: rules.marketKind,
+        allowedDirections: [rules.direction],
         maxLeverage: rules.leverage,
-        maxPositionNotional: rules.entries
-          .reduce(
-            (total, entry) =>
-              total.plus(new Decimal(entry.quantity).times(entry.entryPrice)),
-            new Decimal(0),
-          )
-          .toFixed(),
+        maxPositionNotional: standingNotional(rules).toFixed(),
         maxProtectedEntries: rules.entries.length,
       };
     case "ai_managed":
       return {
         allowedInstruments: rules.allowedInstruments,
         marketKind: rules.marketKind,
+        allowedDirections: rules.allowShort ? ["long", "short"] : ["long"],
         maxLeverage: rules.maxLeverage,
         maxPositionNotional: rules.maxPositionNotional,
         maxProtectedEntries: rules.maxProtectedEntries,
@@ -366,6 +368,7 @@ export function ruleLimits(rules: StrategyRules): RuleLimits {
       return {
         allowedInstruments: [rules.instrument],
         marketKind: "spot",
+        allowedDirections: ["long"],
         maxLeverage: 1,
         maxPositionNotional: maximumCommitment(rules),
         maxProtectedEntries: rules.maxBuys,
@@ -374,6 +377,7 @@ export function ruleLimits(rules: StrategyRules): RuleLimits {
       return {
         allowedInstruments: [rules.instrument],
         marketKind: "spot",
+        allowedDirections: ["long"],
         maxLeverage: 1,
         maxPositionNotional: maximumCommitment(rules),
         maxProtectedEntries: rules.levelCount - 1,

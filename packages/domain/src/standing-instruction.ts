@@ -52,9 +52,9 @@ export function planStandingEntries(
       .map((entry) => entry.index),
   );
   if (rules.entries.every((_, index) => filled.has(index)))
-    return { action: "finished", reason: "all_entries_filled" };
+    return { action: "no_more_entries", reason: "all_entries_filled" };
   if (state.now.getTime() >= Date.parse(rules.entryExpiresAt))
-    return { action: "finished", reason: "expired" };
+    return { action: "no_more_entries", reason: "expired" };
 
   const unclosed = state.entries.filter((entry) => !entry.closed);
   const active = new Set(unclosed.map((entry) => entry.index));

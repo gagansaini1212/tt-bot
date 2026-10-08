@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import Decimal from "decimal.js";
 
-import { entryIntentProposal } from "./entry-plans";
+import { entryIntentProposal, type EntryIntent } from "./entry-plans";
 import {
   gridLevelEntry,
   gridLevels,
@@ -86,6 +86,50 @@ describe("grid levels", () => {
       gridLevelEntry({ ...rules, amountPerLevel: "0.5" }, 0, steps),
       undefined,
     );
+  });
+
+  it("rounds prices off the tick: the buy down, the target and stop up", () => {
+    // Levels 100, 100.01, 100.02 and 100.03.
+    const narrow: GridRules = {
+      ...rules,
+      lowerPrice: "100",
+      upperPrice: "100.03",
+      levelCount: 4,
+      rangeStopPrice: "99.9",
+    };
+    const prices = (intent: EntryIntent | undefined) =>
+      intent && [
+        intent.entryPrice,
+        intent.takeProfitPrice,
+        intent.stopLossPrice,
+      ];
+
+    assert.deepEqual(prices(gridLevelEntry(narrow, 1, steps)), [
+      "100.01",
+      "100.02",
+      "99.9",
+    ]);
+    assert.deepEqual(
+      prices(gridLevelEntry(narrow, 1, { ...steps, tickSize: "0.02" })),
+      ["100", "100.02", "99.9"],
+    );
+  });
+
+  it("skips a level when rounding leaves its stop at the entry", () => {
+    const narrow: GridRules = {
+      ...rules,
+      lowerPrice: "100",
+      upperPrice: "100.03",
+      levelCount: 4,
+      rangeStopPrice: "99.995",
+    };
+
+    // The stop rounds up to 100, which is where level 0 buys.
+    assert.equal(gridLevelEntry(narrow, 0, steps), undefined);
+    assert.deepEqual(planGridEntries(narrow, { ...state, price: "100.005" }), {
+      action: "wait",
+      reason: "unprotectable",
+    });
   });
 });
 
@@ -173,13 +217,13 @@ describe("planGridEntries", () => {
   it("closes everything when the market reaches the range stop", () => {
     assert.deepEqual(
       planGridEntries(rules, { ...state, price: "57000", occupiedLevels: [0] }),
-      { action: "close_all", reason: "range_stop" },
+      { action: "close_and_complete", reason: "range_stop" },
     );
   });
 
   it("closes everything when the market leaves the range upwards", () => {
     assert.deepEqual(planGridEntries(rules, { ...state, price: "62000.01" }), {
-      action: "close_all",
+      action: "close_and_complete",
       reason: "above_range",
     });
   });
@@ -195,11 +239,11 @@ describe("planGridEntries", () => {
     const expired = { ...state, now: new Date(rules.entryExpiresAt) };
 
     assert.deepEqual(planGridEntries(rules, expired), {
-      action: "finished",
+      action: "no_more_entries",
       reason: "expired",
     });
     assert.deepEqual(planGridEntries(rules, { ...expired, price: "56000" }), {
-      action: "close_all",
+      action: "close_and_complete",
       reason: "range_stop",
     });
   });
@@ -207,7 +251,7 @@ describe("planGridEntries", () => {
   it("waits when no level's amount buys a whole step", () => {
     assert.deepEqual(
       planGridEntries({ ...rules, amountPerLevel: "0.5" }, state),
-      { action: "wait", reason: "amount_too_small" },
+      { action: "wait", reason: "unprotectable" },
     );
   });
 

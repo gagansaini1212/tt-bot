@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   authorizeTradeProposal,
-  type ExecutionPolicyInput,
+  type ExecutionPolicy,
   type TradeProposal,
 } from "./trading";
 
@@ -28,7 +28,7 @@ const proposal: TradeProposal = {
   sourceSnapshotId: "10000000-0000-4000-8000-000000000005",
 };
 
-const policy: ExecutionPolicyInput = {
+const policy: ExecutionPolicy = {
   customerId: proposal.customerId,
   exchangeAccountId: proposal.exchangeAccountId,
   strategyId: proposal.strategyId,
@@ -182,7 +182,12 @@ describe("authorizeTradeProposal with several protected entries", () => {
   it("rejects an entry once the strategy holds its most protected entries", () => {
     const result = authorizeTradeProposal(
       proposal,
-      { ...policy, protectedEntries: 3, maxProtectedEntries: 3 },
+      {
+        ...policy,
+        positionNotionalByInstrument: {},
+        protectedEntries: 3,
+        maxProtectedEntries: 3,
+      },
       now,
     );
 
@@ -221,11 +226,68 @@ describe("authorizeTradeProposal with several protected entries", () => {
   it("still rejects a paused strategy's entries", () => {
     const result = authorizeTradeProposal(
       proposal,
-      { ...policy, strategyStatus: "paused", maxProtectedEntries: 5 },
+      {
+        ...policy,
+        strategyStatus: "paused",
+        positionNotionalByInstrument: {},
+        protectedEntries: 0,
+        maxProtectedEntries: 5,
+      },
       now,
     );
 
     assert.equal(result.allowed, false);
     if (!result.allowed) assert.equal(result.code, "strategy_not_active");
+  });
+
+  it("requires an entry limit to come with the entries already held", () => {
+    assert.throws(() =>
+      authorizeTradeProposal(
+        proposal,
+        { ...policy, maxProtectedEntries: 3 },
+        now,
+      ),
+    );
+    assert.throws(() =>
+      authorizeTradeProposal(
+        proposal,
+        { ...policy, protectedEntries: 0, maxProtectedEntries: 3 },
+        now,
+      ),
+    );
+  });
+
+  it("rejects a market kind the strategy does not trade", () => {
+    const result = authorizeTradeProposal(
+      {
+        ...proposal,
+        marketKind: "perpetual",
+        direction: "short",
+        stopLossPrice: "63000",
+        takeProfitPrice: "54000",
+      },
+      { ...policy, marketKind: "spot", allowedDirections: ["long"] },
+      now,
+    );
+
+    assert.equal(result.allowed, false);
+    if (!result.allowed) assert.equal(result.code, "market_kind_not_allowed");
+  });
+
+  it("rejects a short on a strategy that only opens longs", () => {
+    const result = authorizeTradeProposal(
+      {
+        ...proposal,
+        marketKind: "perpetual",
+        direction: "short",
+        stopLossPrice: "63000",
+        takeProfitPrice: "54000",
+      },
+      { ...policy, marketKind: "perpetual", allowedDirections: ["long"] },
+      now,
+    );
+
+    assert.equal(result.allowed, false);
+    if (!result.allowed) assert.equal(result.code, "direction_not_allowed");
   });
 });

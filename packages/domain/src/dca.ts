@@ -2,6 +2,7 @@ import Decimal from "decimal.js";
 
 import { ceilToStep, quantityFor } from "./decimal";
 import type { EntryPlan, InstrumentSteps } from "./entry-plans";
+import { protectionIsValid } from "./protection";
 import {
   largestDcaBuy,
   type DcaInterval,
@@ -82,12 +83,12 @@ export function planDcaBuy(rules: DcaRules, state: DcaState): EntryPlan {
       until: new Date(rules.startsAt).toISOString(),
     };
   if (index >= rules.maxBuys)
-    return { action: "finished", reason: "schedule_complete" };
+    return { action: "no_more_entries", reason: "schedule_complete" };
 
   const nextDueAt = dcaBuyDueAt(rules, index + 1).toISOString();
   if (state.previousBuy && state.previousBuy.index >= index) {
     return index + 1 >= rules.maxBuys
-      ? { action: "finished", reason: "schedule_complete" }
+      ? { action: "no_more_entries", reason: "schedule_complete" }
       : { action: "wait", reason: "buy_made", until: nextDueAt };
   }
   if (state.protectedEntries >= state.maxProtectedEntries)
@@ -95,11 +96,22 @@ export function planDcaBuy(rules: DcaRules, state: DcaState): EntryPlan {
 
   const { amount } = dcaBuyAmount(rules, state.price, state.previousBuy);
   const quantity = quantityFor(amount, state.price, state.steps.quantityStep);
-  if (quantity.isZero())
-    return { action: "wait", reason: "amount_too_small", until: nextDueAt };
-
   const entry = new Decimal(state.price);
   const percent = (value: string) => new Decimal(value).dividedBy(100);
+  const stopLoss = ceilToStep(
+    entry.times(new Decimal(1).minus(percent(rules.stopLossPercent))),
+    state.steps.tickSize,
+  );
+  const takeProfit = ceilToStep(
+    entry.times(new Decimal(1).plus(percent(rules.takeProfitPercent))),
+    state.steps.tickSize,
+  );
+  if (
+    quantity.isZero() ||
+    !protectionIsValid("long", entry, stopLoss, takeProfit)
+  )
+    return { action: "wait", reason: "unprotectable", until: nextDueAt };
+
   return {
     action: "enter",
     intents: [
@@ -111,14 +123,8 @@ export function planDcaBuy(rules: DcaRules, state: DcaState): EntryPlan {
         leverage: 1,
         quantity: quantity.toFixed(),
         entryPrice: entry.toFixed(),
-        stopLossPrice: ceilToStep(
-          entry.times(new Decimal(1).minus(percent(rules.stopLossPercent))),
-          state.steps.tickSize,
-        ).toFixed(),
-        takeProfitPrice: ceilToStep(
-          entry.times(new Decimal(1).plus(percent(rules.takeProfitPercent))),
-          state.steps.tickSize,
-        ).toFixed(),
+        stopLossPrice: stopLoss.toFixed(),
+        takeProfitPrice: takeProfit.toFixed(),
         entryExpiresAt: nextDueAt,
         holdingPeriodSeconds: rules.holdingPeriodSeconds,
       },

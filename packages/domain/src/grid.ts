@@ -1,13 +1,14 @@
 import Decimal from "decimal.js";
 
-import { quantityFor } from "./decimal";
+import { ceilToStep, ExactDecimal, floorToStep, quantityFor } from "./decimal";
 import type { EntryIntent, EntryPlan, InstrumentSteps } from "./entry-plans";
+import { protectionIsValid } from "./protection";
 import type { GridRules } from "./strategy-rules";
 
 /** Every level's price, lowest first. The last level is the upper price. */
 export function gridLevels(rules: GridRules): string[] {
-  const lower = new Decimal(rules.lowerPrice);
-  const spacing = new Decimal(rules.upperPrice)
+  const lower = new ExactDecimal(rules.lowerPrice);
+  const spacing = new ExactDecimal(rules.upperPrice)
     .minus(lower)
     .dividedBy(rules.levelCount - 1);
   return Array.from({ length: rules.levelCount }, (_, level) =>
@@ -19,7 +20,7 @@ export function gridLevels(rules: GridRules): string[] {
  * Where the market is against the range. At or below the range stop, every
  * grid entry's stop has been reached. Above the upper price, every level's
  * take profit has been. Either way the market has left the range, and the
- * grid closes what remains and stops.
+ * grid closes what remains and completes.
  */
 export function gridRangePosition(
   rules: GridRules,
@@ -34,8 +35,10 @@ export function gridRangePosition(
 /**
  * The protected entry for a buy level, counted from 0 at the lower price: a
  * limit buy of amountPerLevel at the level, taking profit at the next level up
- * and stopped at the range stop. Undefined when amountPerLevel buys less than
- * one quantity step there.
+ * and stopped at the range stop. Prices off the tick round conservatively: the
+ * buy down, the target up and the stop up. Undefined when the entry cannot be
+ * protected: amountPerLevel buys less than one quantity step, or rounding
+ * leaves the stop or target at the entry price.
  */
 export function gridLevelEntry(
   rules: GridRules,
@@ -47,11 +50,11 @@ export function gridLevelEntry(
       `Buy levels run from 0 to ${rules.levelCount - 2}, not ${level}.`,
     );
   const levels = gridLevels(rules);
-  const quantity = quantityFor(
-    rules.amountPerLevel,
-    levels[level],
-    steps.quantityStep,
-  );
+  const entry = floorToStep(levels[level], steps.tickSize);
+  const stopLoss = ceilToStep(rules.rangeStopPrice, steps.tickSize);
+  const takeProfit = ceilToStep(levels[level + 1], steps.tickSize);
+  if (!protectionIsValid("long", entry, stopLoss, takeProfit)) return undefined;
+  const quantity = quantityFor(rules.amountPerLevel, entry, steps.quantityStep);
   if (quantity.isZero()) return undefined;
   return {
     key: `level:${level}`,
@@ -60,9 +63,9 @@ export function gridLevelEntry(
     direction: "long",
     leverage: 1,
     quantity: quantity.toFixed(),
-    entryPrice: levels[level],
-    stopLossPrice: new Decimal(rules.rangeStopPrice).toFixed(),
-    takeProfitPrice: levels[level + 1],
+    entryPrice: entry.toFixed(),
+    stopLossPrice: stopLoss.toFixed(),
+    takeProfitPrice: takeProfit.toFixed(),
     entryExpiresAt: new Date(rules.entryExpiresAt).toISOString(),
     holdingPeriodSeconds: rules.holdingPeriodSeconds,
   };
@@ -83,13 +86,14 @@ export type GridState = {
 /**
  * The grid's next entries. It buys only at free levels strictly below the
  * market, nearest first, so no buy fills at once, and it never buys to stock
- * the levels above. Leaving the range closes everything.
+ * the levels above. Leaving the range closes everything and completes it.
  */
 export function planGridEntries(rules: GridRules, state: GridState): EntryPlan {
   const position = gridRangePosition(rules, state.price);
-  if (position !== "in_range") return { action: "close_all", reason: position };
+  if (position !== "in_range")
+    return { action: "close_and_complete", reason: position };
   if (state.now.getTime() >= Date.parse(rules.entryExpiresAt))
-    return { action: "finished", reason: "expired" };
+    return { action: "no_more_entries", reason: "expired" };
 
   const occupied = new Set(state.occupiedLevels);
   const capacity = state.maxProtectedEntries - occupied.size;
@@ -110,7 +114,6 @@ export function planGridEntries(rules: GridRules, state: GridState): EntryPlan {
     .map((level) => gridLevelEntry(rules, level, state.steps))
     .filter((intent) => intent !== undefined)
     .slice(0, capacity);
-  if (intents.length === 0)
-    return { action: "wait", reason: "amount_too_small" };
+  if (intents.length === 0) return { action: "wait", reason: "unprotectable" };
   return { action: "enter", intents };
 }

@@ -96,6 +96,10 @@ function measure(pnl: Decimal, limit: string): LossMeasure {
  * entries. The total runs from the strategy's first trade. The daily measure
  * is the change since midnight UTC: bookings from then on, plus the change in
  * unrealized results since then. A limit is reached when the loss equals it.
+ *
+ * Throws on a negative fee or a booking time that does not parse, rather than
+ * guess what was meant. A caller that cannot measure a strategy's losses opens
+ * no entries for it.
  */
 export function lossLimitStatus(input: LossLimitInput): LossLimitStatus {
   const dayStart = utcDayStart(input.now);

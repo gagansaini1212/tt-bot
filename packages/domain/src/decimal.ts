@@ -12,13 +12,14 @@ export const positiveDecimalString = decimalString.refine(
   "Must be greater than zero",
 );
 
-/** A decimal string that may be negative, such as a profit or loss. */
-export const signedDecimalString = z
-  .string()
-  .regex(/^-?(0|[1-9]\d*)(\.\d+)?$/, {
-    error: "Must be a decimal string",
-    abort: true,
-  });
+/**
+ * Decimal arithmetic that rounds down and keeps 100 digits. A division that
+ * does not end can then never multiply back to where it started.
+ */
+export const ExactDecimal = Decimal.clone({
+  precision: 100,
+  rounding: Decimal.ROUND_DOWN,
+});
 
 function positiveStep(step: Decimal.Value) {
   const value = new Decimal(step);
@@ -48,6 +49,8 @@ export function quantityFor(
   price: Decimal.Value,
   quantityStep: Decimal.Value,
 ) {
+  if (!new Decimal(price).greaterThan(0))
+    throw new RangeError(`A price must be positive, not ${price}.`);
   const step = positiveStep(quantityStep);
   return new Decimal(amount)
     .dividedToIntegerBy(new Decimal(price).times(step))
