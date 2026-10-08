@@ -37,14 +37,16 @@ jobs:
 
       - run: pnpm format:check
 
+      # Before the build, which also writes Next's route types, so this proves
+      # `pnpm check` works on a fresh checkout.
+      - run: pnpm check
+
       # `pnpm build` without `eve build`. eve fetches AI Gateway's public model
       # catalog (no credentials) to look up the agent model's context window, so
       # the agent build needs network beyond the package install. CI skips it;
       # build the agent locally with `pnpm build:agent`.
       - name: pnpm -r build (skips eve build)
         run: pnpm -r --if-present build
-
-      - run: pnpm check
 
       - run: pnpm test
 
