@@ -113,10 +113,44 @@ Dashboard orders and CLI orders are the customer's own instructions, not AI prop
 
 5. **Check order status** finds the intent by client order ID, then asks Binance by that ID. If Binance has the order, an `unknown` intent becomes `acknowledged`. If Binance has no such order, the page says so, but the intent stays `unknown` and its ID stays used: only reconciliation may decide that an unknown outcome failed.
 
-Nothing retries a submission. A crash between steps 2 and 4 leaves the intent `submitting` with its job due, which is how reconciliation (#42) finds it. A consumer of `order_intent.reconcile` jobs looks the order up by client order ID, never resubmits it, and completes the job once the outcome is known.
+Nothing retries a submission. A crash between steps 2 and 4 leaves the intent `submitting` with its job due, which is how the execution loop finds it. The loop looks the order up by client order ID, never resubmits it, and completes the job once the outcome is known. If Binance has the order, the intent becomes `acknowledged`. If Binance says it has no such order, the intent becomes `rejected`, audited as `order_intent.not_found`. The job only falls due after the one-minute grace period, so by then Binance cannot still be working on the request. If the lookup fails, the job is retried later with its error in `last_error`.
 
 Each protected entry ([ADR 0004](adr/0004-hold-several-protected-entries-per-strategy.md)) is one order intent. Its holding deadline is a `holding_deadlines` row keyed by `order_intent_id`, one per entry, so a position can hold several.
 
 `exchange_orders` keeps what Binance last reported for each order: the entry, and each exit once Binance sizes it after the entry fills. Placements, status checks and cancels update it. Cancels are audited as `order.cancelled`.
 
+A stop-limit entry is an intent with a `trigger` in `manual_order` and status `pending`, and nothing is sent ([ADR 0006](adr/0006-hold-stop-limit-triggers-and-sell-unprotected-quantity.md)). When its stop price trades, the loop moves it to `submitting`, queues its reconcile job, and sends it like any dashboard entry. The customer can cancel it while it is `pending`, which makes it `cancelled`.
+
 Before PostgreSQL, intents were files in `.testnet-orders/`. The worker refuses to start or place CLI orders while that directory holds any. `pnpm exchange import-journal` copies them in for the dev customer, keeping each outcome; an unconfirmed one becomes `unknown`. Delete the directory afterwards.
+
+## The execution loop
+
+`ExecutionLoop` in `apps/execution/src/execution-loop.ts` runs in `pnpm dev:worker` every five seconds. It visits each customer from `listCustomerIds` whose exchange account the worker trades on, in that customer's scopes, and never holds a transaction while it waits on Binance. A pass:
+
+1. claims due `order_intent.reconcile` jobs and settles each intent, as described above;
+2. sends `pending` stop-limit entries whose stop price has traded;
+3. starts the exit of entries whose holding deadline has passed;
+4. reconciles every `acknowledged` protected entry with Binance, recording its orders in `exchange_orders` and their fills in `fills`;
+5. marks exits still held a minute after their deadline `overdue`.
+
+### Records
+
+| Table                   | What the loop keeps there                                                                                                                                                                                                                                                                                                                                                |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `entry_reconciliations` | One row per protected entry: its state (`working`, `partly_filled`, `awaiting_exits`, `protected`, `unprotected`, `exiting`, and the final `closed`, `not_filled`, `handed_over`, `missing`), what it filled and still holds, its first fill, why it is being sold (`exit_reason`), and a detail line for the dashboard.                                                 |
+| `order_intents`         | Each market sell closing an entry is its own intent of kind `exit`, saved before it is sent, with `closes_order_intent_id` naming the entry. Its client order ID is the entry's list ID plus `_c1`, `_c2` or `_c3`, so two workers cannot send the same attempt.                                                                                                         |
+| `holding_deadlines`     | Created at an entry's first fill, for entries made from a proposal. The deadline is the first fill plus the strategy version's `holdingPeriodSeconds`. `pending` becomes `triggered`, then `satisfied` once the entry holds nothing, or `overdue`. The entry's `position_ownership` row is created or reopened then too, and closed when its last deadline is satisfied. |
+| `notifications`         | Alerts for the customer, raised in the same transaction as the change they report.                                                                                                                                                                                                                                                                                       |
+| `audit_events`          | `order_intent.triggered`, `order_intent.not_found`, `order.cancelled`, `entry.exit_requested`, `strategy.paused` and the intent events above.                                                                                                                                                                                                                            |
+
+An entry made from a proposal is reconciled like a dashboard entry when its order intent has a `proposal_id` for a spot long proposal. Its `idempotency_key` must be the client ID of the GTC limit OPOCO list sent for it, with the legs suffixed `_en`, `_tp` and `_sl` (`protectedLegIds` in `packages/exchanges`), and its instrument, quantity and prices are the proposal's.
+
+### Running twice
+
+Each customer's pass holds a session advisory lock, `pg_try_advisory_lock`, so a second worker skips that customer. The lock is held by a session, not a transaction, so it locks no rows. Each step is also safe without the lock. Sells and triggers are claimed by inserting or updating an order intent, so only one worker can send each. State changes lock their `entry_reconciliations` row. A worker that finds the entry already finished, or already being sold, does nothing more. `apps/execution/src/execution-loop.test.ts` runs two loops at once both with and without the lock, against a fake Binance and a real PostgreSQL.
+
+### For other modules
+
+- **Stop an entry.** `requestEntryExit(database, scope, orderIntentId, reason)` in `execution-store.ts` saves a request that the next pass carries out. The pass cancels what is open on Binance and sells what the entry holds at market. An entry that holds nothing is only cancelled. Close all, loss limits and pauses use it. `reason` is a lowercase word such as `close_all`, and the dashboard shows it.
+- **Pause a strategy.** When protection fails on an entry made from a proposal, the loop pauses its strategy through a `StrategyPauser`. The default sets `strategies.status` to `paused` and audits it. Pass your own as `pauseStrategy` to `ExecutionLoop`.
+- **Deliver notifications.** Every notification queues an outbox job with topic `notification.created` (`NOTIFICATION_TOPIC` in `notifications.ts`) and payload `{ notificationId }`, in the same transaction. A webhook sender claims due jobs with `claimDueJobs(database, customerId, NOTIFICATION_TOPIC, now)` from `outbox.ts`, delivers each one, and calls `completeJob`, or `retryJob` if delivery failed. Claimed jobs are leased for two minutes, so two senders never deliver the same one.

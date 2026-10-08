@@ -16,7 +16,8 @@ A Binance Spot Testnet trading application built with Next.js, eve, shadcn/ui, a
 - A testnet Overview with net worth and its 24-hour change in USDT, balances, open orders, recent fills, and automatic refresh every ten seconds. Accounts shows holdings valued in USDT with their 24-hour change and each asset's share of net worth, and can hide zero and dust balances. Activity lists exchange fills. Settings shows the current account connection.
 - Markets for BTC/USDT and ETH/USDT: a candlestick chart (TradingView Lightweight Charts) marking your recent fills and open orders, the order book, and a market depth chart, refreshed every three seconds while the tab is visible.
 - Manual development order commands with a notional cap, Binance filter validation, and order intents saved in PostgreSQL before anything is sent, to prevent duplicate submission after restart.
-- Testnet order placement from the dashboard: limit and market buys with a required take profit and stop loss that Binance attaches to the entry, a pre-execution check preview, and a confirmed Cancel button on every open order.
+- Testnet order placement from the dashboard: limit, market and stop-limit buys with a required take profit and stop loss that Binance attaches to the entry, a pre-execution check preview, and a confirmed Cancel button on every open order.
+- An execution loop in the worker that reconciles every protected entry with Binance, records its orders and fills, sells any bought quantity left without a stop loss, enforces holding deadlines, sends stop-limit entries when their stop price trades, and raises in-app notifications. See [the execution loop](#the-execution-loop).
 
 ## Requirements
 
@@ -88,7 +89,7 @@ Live trading remains locked until the deployment prerequisites in [the implement
 
 The credentials belong to the development customer's exchange account, so the worker serves account data and orders only for that customer. If you placed orders before order intents moved to PostgreSQL, the worker refuses to start while `.testnet-orders/` holds intents: run `pnpm exchange import-journal` once to copy them into the database, then delete the directory.
 
-The worker listens on `127.0.0.1:4001`, and on `[::1]:4001` when IPv6 is available. Its HTTP interface requires the shared token. It serves the account snapshot and market data, and places and cancels dashboard orders. **The dashboard can place and cancel orders on the connected testnet account, so it must stay on this machine.** It has no customer authentication: never expose it to a network, put it behind a proxy, or reach it through a tunnel. Its order actions refuse requests that are not from `localhost`, `127.0.0.1` or `[::1]`. The Overview assistant receives the displayed testnet account snapshot and cannot access exchange credentials or submit orders. The application has no demo account data or invented strategy/decision records. Strategy management and AI decision persistence are not implemented.
+The worker listens on `127.0.0.1:4001`, and on `[::1]:4001` when IPv6 is available. Its HTTP interface requires the shared token. It serves the account snapshot and market data, places and cancels dashboard orders, and runs the execution loop while it is serving. **The dashboard can place and cancel orders on the connected testnet account, so it must stay on this machine.** It has no customer authentication: never expose it to a network, put it behind a proxy, or reach it through a tunnel. Its order actions refuse requests that are not from `localhost`, `127.0.0.1` or `[::1]`. The Overview assistant receives the displayed testnet account snapshot and cannot access exchange credentials or submit orders. The application has no demo account data or invented strategy/decision records. Strategy management and AI decision persistence are not implemented.
 
 ### Dashboard orders
 
@@ -102,7 +103,7 @@ Each order is one Binance order list (OPOCO): a limit buy that, once it fills co
 
 - **Limit** entries rest on the book until they fill or are cancelled. Binance Spot has no good-till-date orders.
 - **Market** entries are fill-or-kill limit buys at the best ask plus `TESTNET_MARKET_MAX_SLIPPAGE_PERCENT`. They fill completely at or below that price, or not at all. A plain market order cannot carry attached exits.
-- **Stop-limit** entries are not offered. Binance attaches exits only to limit entries, so a filled stop-limit buy would have none until something else placed them.
+- **Stop-limit** entries are held by the execution worker, not Binance: Binance attaches exits only to limit working orders, and its order lists still accept no stop working order (checked against the Spot API changelog of 2026-09-18). When the market trades at or above the stop price, the worker runs every check again with fresh account data and sends a limit entry at the limit price with its exits, as one order list. The stop price must be above the best ask and the stop loss below the stop price. A held entry reserves its value in the allocation, is listed in Open orders as **Held by the worker**, and can be cancelled there until it triggers. Binance has no record of it until then.
 
 Dashboard orders stay off until these are set in `apps/execution/.env`; they have no defaults:
 
@@ -115,13 +116,28 @@ Dashboard orders stay off until these are set in `apps/execution/.env`; they hav
 
 The allocation counts the unfilled value of every open buy, plus the entry value of each position whose exits are still open. Holdings with no open order are outside it.
 
-Each order gets a new `ct_` client ID in the browser. The worker saves the order intent in PostgreSQL before submitting and never submits that ID twice. If the worker cannot confirm an order, the drawer offers **Check order status**, which looks the order up by that ID, instead of letting you resend it. If an entry fills at once, the worker confirms on Binance that both exits are open and reports loudly when they are not.
+Each order gets a new `ct_` client ID in the browser. The worker saves the order intent in PostgreSQL before submitting and never submits that ID twice. If the worker cannot confirm an order, the drawer offers **Check order status**, which looks the order up by that ID, instead of letting you resend it. If an entry fills at once, the worker confirms on Binance that both exits are open and reports loudly when they are not. After that, the execution loop watches it.
+
+### The execution loop
+
+The worker checks every customer's orders every five seconds, whether or not the dashboard is open ([ADR 0002](docs/adr/0002-run-execution-controls-independently-of-ai.md)). Each pass:
+
+- settles orders whose outcome was unknown, by looking them up on Binance by client ID once a minute has passed. It never resubmits one;
+- sends stop-limit entries whose stop price has traded;
+- reconciles each entry with Binance and keeps what Binance reports for it, its orders and fills, in PostgreSQL;
+- starts the exit of entries past their holding deadline.
+
+When an entry holds bought quantity that no stop loss protects, the worker treats it as a protection failure ([ADR 0006](docs/adr/0006-hold-stop-limit-triggers-and-sell-unprotected-quantity.md)). This happens when Binance drops or rejects the exits after the entry fills, or when a partly filled entry is cancelled outside the dashboard. The worker cancels whatever is left of the order list, sells the quantity at market, pauses the strategy if the entry has one, and raises a critical alert. A partly filled entry has no exits on Binance, so if its market falls to the stop loss, the worker sells what it bought the same way. It tries three market sells. If none sells the quantity, it stops and asks you to sell it yourself. If you cancel a partly filled entry from the dashboard and confirm that its quantity is left without exits, the worker hands that quantity over to you instead of selling it.
+
+Dashboard orders have no holding deadline. Entries made from a strategy's proposals get one at their first fill, from the strategy version's holding period. When it passes, the worker cancels the entry's orders and sells what it holds. If the entry still holds anything a minute later, the exit is overdue and raises a critical alert.
+
+The Overview shows each position that needs attention in red at the top, and the Open orders table lists them above the orders. The **Alerts** card lists the week's latest notifications and when the loop last checked your orders. Two workers can run at once without selling, sending or alerting twice. [The database guide](docs/database.md#the-execution-loop) has the details.
 
 Binance cancels every order in a list together, so cancelling any leg cancels the entry and both exits. The confirmation dialog lists what will be cancelled. If the entry has already bought anything, it names the quantity that will be left without exits and needs a second, explicit confirmation.
 
 ### Manual test orders
 
-These commands are for developer-controlled limit orders on virtual funds. They do not activate automated strategies or attach stop-loss/take-profit protection. Automatic proposal execution still requires persisted reservations, position ownership, protection, deadlines, and reconciliation.
+These commands are for developer-controlled limit orders on virtual funds. They do not activate automated strategies or attach stop-loss/take-profit protection, and the execution loop does not watch them. Automatic proposal execution still requires persisted reservations.
 
 Set `TESTNET_MAX_ORDER_NOTIONAL_USDT` to your per-order development cap. The example configuration uses 100 virtual USDT. Use a current testnet price and a quantity meeting Binance's filters; the numbers below only illustrate the command syntax.
 
@@ -137,6 +153,6 @@ pnpm exchange fills
 
 `test-order` validates with Binance without creating an order. `place-order` validates first, saves the order intent in PostgreSQL for the development customer, then submits once. Use a unique `ct_` client ID for each new order; an ID the dashboard or CLI used before is refused. A timeout or server error can mean Binance accepted the order; query that same client ID before taking further action. Commands never automatically retry an order submission. Canceling does not reverse fills.
 
-Balances, quantities, prices, and fees remain decimal strings. The account snapshot is fetched through REST and cached in the worker for at most ten seconds. Market data is cached for at most five seconds (tickers and candles) or one second (order book depth). Overview, Accounts, Activity, and Settings refresh every ten seconds while the tab is visible and offer a manual refresh button. Overview shows the latest ten fills across BTC/USDT and ETH/USDT; Activity shows the latest fifty. Net worth and holding values use the 24-hour tickers: available plus locked balances at last prices, with USDT counted as 1 and assets without a USDT market priced through the inverse market or BTC, ETH or BNB. Assets with no price are listed as left out, never counted as zero. This is an account monitor, not a full trade-history import or automated execution loop.
+Balances, quantities, prices, and fees remain decimal strings. The account snapshot is fetched through REST and cached in the worker for at most ten seconds. Market data is cached for at most five seconds (tickers and candles) or one second (order book depth). Overview, Accounts, Activity, and Settings refresh every ten seconds while the tab is visible and offer a manual refresh button. Overview shows the latest ten fills across BTC/USDT and ETH/USDT; Activity shows the latest fifty. Net worth and holding values use the 24-hour tickers: available plus locked balances at last prices, with USDT counted as 1 and assets without a USDT market priced through the inverse market or BTC, ETH or BNB. Assets with no price are listed as left out, never counted as zero. Balances and fills are a monitor, not a full trade-history import.
 
 The [official testnet documentation](https://github.com/binance/binance-spot-api-docs/blob/master/testnet/general-info.md) explains that balances are virtual and the environment resets approximately monthly. API keys survive resets, but orders and balances change. See the [Spot REST API documentation](https://github.com/binance/binance-spot-api-docs/blob/master/rest-api.md) for signing and order semantics.
