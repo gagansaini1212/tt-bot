@@ -33,10 +33,20 @@ const orderFields = {
   // place a second order.
   listClientOrderId: listClientOrderIdSchema,
 };
-/** A buy from the order drawer. Spot is long only, so there is no side. */
+/**
+ * A buy from the order drawer. Spot is long only, so there is no side. A
+ * stop-limit entry is held by the worker until the market trades at or above
+ * its stop price, then sent as a limit entry with its exits.
+ */
 export const manualOrderRequestSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("limit"), price: amount, ...orderFields }),
   z.strictObject({ type: z.literal("market"), ...orderFields }),
+  z.strictObject({
+    type: z.literal("stop_limit"),
+    stopPrice: amount,
+    price: amount,
+    ...orderFields,
+  }),
 ]);
 export type ManualOrderRequest = z.infer<typeof manualOrderRequestSchema>;
 
@@ -69,6 +79,8 @@ export const manualOrderOutcomeSchema = z.object({
     // The worker cannot tell whether Binance acted. Look the order up.
     "unknown",
     "unverified",
+    // The worker holds a stop-limit entry until its stop price trades.
+    "held",
     // Binance acted.
     "working",
     "protected",
@@ -225,7 +237,7 @@ export function planManualOrder(
   );
   const checks: ManualOrderCheck[] = [];
   let price: string;
-  if (request.type === "limit") {
+  if (request.type !== "market") {
     price = request.price;
   } else {
     const failure = (detail: string): ManualOrderPlan => ({
@@ -250,19 +262,23 @@ export function planManualOrder(
       detail: `Pays at most ${price} USDT, ${new Decimal(ticket.marketSlippage).times(100).toFixed()}% above the best ask of ${market.bestAsk}. It fills completely now or not at all.`,
     });
   }
+  if (request.type === "stop_limit")
+    checks.push(stopPriceCheck(request, market));
   const entry: ProtectedEntry = {
     instrument: request.instrument,
     quantity: request.quantity,
     price,
-    timeInForce: request.type === "limit" ? "GTC" : "FOK",
+    timeInForce: request.type === "market" ? "FOK" : "GTC",
     takeProfitPrice: request.takeProfitPrice,
     stopLossPrice: request.stopLossPrice,
     listClientOrderId: request.listClientOrderId,
   };
   // A marketable entry fills at the ask, below its limit. A stop loss at or
-  // above the fill price would trigger as soon as Binance placed it.
+  // above the fill price would trigger as soon as Binance placed it. A
+  // stop-limit entry buys later, and its stop price check covers this.
   const stop = new Decimal(entry.stopLossPrice);
   if (
+    request.type !== "stop_limit" &&
     market?.bestAsk &&
     stop.lessThan(entry.price) &&
     stop.greaterThanOrEqualTo(market.bestAsk)
@@ -351,6 +367,43 @@ export function planManualOrder(
     entry,
     notional: notional.toFixed(),
   };
+}
+
+/**
+ * A stop-limit entry waits for the market to rise to its stop price. A stop at
+ * or below the best ask would trigger at once, and a stop loss at or above the
+ * stop price would sell as soon as the entry filled there.
+ */
+function stopPriceCheck(
+  request: Extract<ManualOrderRequest, { type: "stop_limit" }>,
+  market: ManualOrderTicket["markets"][number] | undefined,
+): ManualOrderCheck {
+  const check = (passed: boolean, detail: string): ManualOrderCheck => ({
+    name: "price",
+    label: "Stop price",
+    passed,
+    detail,
+  });
+  const stop = new Decimal(request.stopPrice);
+  if (!market?.bestAsk)
+    return check(
+      false,
+      "No current ask price from Binance. Refresh and retry.",
+    );
+  if (stop.lessThanOrEqualTo(market.bestAsk))
+    return check(
+      false,
+      `The stop price must be above the best ask of ${market.bestAsk}, or the entry would trigger at once. Use a limit order to buy now.`,
+    );
+  if (stop.lessThanOrEqualTo(request.stopLossPrice))
+    return check(
+      false,
+      "The stop loss must be below the stop price, where the entry starts to buy.",
+    );
+  return check(
+    true,
+    `The worker holds this entry and sends it with its exits once ${request.instrument.replace("-", "/")} trades at or above ${stop.toFixed()}.`,
+  );
 }
 
 /**

@@ -84,6 +84,16 @@ export const limitOrderSchema = z.object({
   clientOrderId: z.string().regex(/^ct_[A-Za-z0-9_-]{1,33}$/),
 });
 export type TestnetLimitOrder = z.infer<typeof limitOrderSchema>;
+/**
+ * A market sell the worker sends to close a protected entry's quantity, such
+ * as one whose exits Binance dropped, or one past its holding deadline.
+ */
+export const marketSellSchema = z.object({
+  instrument: testnetInstrumentSchema,
+  quantity: positiveDecimal,
+  clientOrderId: z.string().regex(/^ct_[A-Za-z0-9_-]{1,33}$/),
+});
+export type TestnetMarketSell = z.infer<typeof marketSellSchema>;
 export type TestnetOrder = z.infer<typeof orderSchema>;
 export type TestnetOrderList = z.infer<typeof orderListSchema>;
 export type TestnetOrderListReport = z.infer<typeof orderListReportSchema>;
@@ -560,6 +570,50 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
       "DELETE",
       "/api/v3/order",
       { symbol: symbol(instrument), orderId: String(id.parse(orderId)) },
+      orderSchema,
+    );
+  }
+  /** The latest traded price, which Binance also triggers stop orders on. */
+  async getLastPrice(instrument: TestnetInstrument) {
+    const { price } = await this.#request(
+      "GET",
+      "/api/v3/ticker/price",
+      { symbol: symbol(instrument) },
+      z.object({ symbol: z.string(), price: positiveDecimal }),
+      false,
+    );
+    return price;
+  }
+  /** Every fill of one order. */
+  getOrderFills(instrument: TestnetInstrument, orderId: number) {
+    return this.#request(
+      "GET",
+      "/api/v3/myTrades",
+      {
+        symbol: symbol(instrument),
+        orderId: String(id.parse(orderId)),
+        limit: "1000",
+      },
+      z.array(fillSchema),
+    );
+  }
+  /**
+   * Sells at market. It closes a position at whatever the book pays, so only
+   * the worker's exits use it.
+   */
+  async placeMarketSell(raw: TestnetMarketSell) {
+    const order = marketSellSchema.parse(raw);
+    return this.#request(
+      "POST",
+      "/api/v3/order",
+      {
+        symbol: symbol(order.instrument),
+        side: "SELL",
+        type: "MARKET",
+        quantity: order.quantity,
+        newClientOrderId: order.clientOrderId,
+        newOrderRespType: "RESULT",
+      },
       orderSchema,
     );
   }

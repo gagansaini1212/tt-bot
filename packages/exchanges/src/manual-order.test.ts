@@ -12,6 +12,7 @@ import {
   type ManualOrderTicket,
 } from "./manual-order.js";
 import {
+  closeOrderId,
   protectedEntryFilterIssues,
   protectedLeg,
   protectedLegIds,
@@ -347,4 +348,58 @@ test("protected leg IDs round-trip and ignore other client IDs", () => {
   });
   assert.equal(protectedLeg("ct_dev_001"), undefined);
   assert.equal(protectedLeg("x_list_001_tp"), undefined);
+  // The worker's sells closing an entry are not legs of its list.
+  assert.equal(closeOrderId("ct_list_001", 2), "ct_list_001_c2");
+  assert.equal(protectedLeg(closeOrderId("ct_list_001", 1)), undefined);
+  assert.throws(() => closeOrderId("ct_list_001", 0));
+  assert.throws(() => closeOrderId("not-ours", 1));
+});
+
+test("a stop-limit entry is planned as a resting limit entry held until its stop price", () => {
+  const stopLimit: ManualOrderRequest = {
+    type: "stop_limit",
+    instrument: "BTC-USDT",
+    quantity: "0.001",
+    stopPrice: "61000",
+    price: "61100",
+    takeProfitPrice: "64000",
+    stopLossPrice: "59000",
+    listClientOrderId: "ct_list_stop",
+  };
+  const plan = planManualOrder(stopLimit, ticket(), now, ids);
+  assert.equal(plan.passed, true);
+  assert.deepEqual(
+    plan.checks.map((check) => check.name),
+    ["price", "limits", "cap", "filters", "balance"],
+  );
+  assert.match(plan.checks[0].detail, /at or above 61000/);
+  assert.equal(plan.entry?.timeInForce, "GTC");
+  assert.equal(plan.entry?.price, "61100");
+  assert.equal(plan.notional, "61.1");
+  // A stop at or below the ask would trigger at once.
+  assert.deepEqual(failed({ ...stopLimit, stopPrice: "60000" }), ["price"]);
+  // A stop loss at or above the stop price would sell as soon as it bought.
+  assert.deepEqual(
+    failed({ ...stopLimit, stopLossPrice: "61000", price: "61500" }),
+    ["price"],
+  );
+  // Its stop loss may sit above today's ask: it buys later, higher.
+  assert.equal(
+    planManualOrder(
+      { ...stopLimit, stopLossPrice: "60500" },
+      ticket(),
+      now,
+      ids,
+    ).passed,
+    true,
+  );
+  assert.deepEqual(
+    failed(stopLimit, ticket({ markets: [{ rules, bestAsk: null }] })),
+    ["price"],
+  );
+  assert.equal(
+    manualOrderRequestSchema.safeParse({ ...stopLimit, stopPrice: undefined })
+      .success,
+    false,
+  );
 });

@@ -40,6 +40,16 @@ export function protectedLegIds(listClientOrderId: string) {
   };
 }
 
+/**
+ * The client order ID of the worker's `attempt`th market sell closing a
+ * protected entry. Each attempt has its own ID, so none is sent twice.
+ */
+export function closeOrderId(listClientOrderId: string, attempt: number) {
+  if (!Number.isInteger(attempt) || attempt < 1 || attempt > 9)
+    throw new Error("Close attempts are numbered 1 to 9.");
+  return `${listClientOrderIdSchema.parse(listClientOrderId)}_c${attempt}`;
+}
+
 /** Recognises the legs of a protected entry placed by this application. */
 export function protectedLeg(
   clientOrderId: string,

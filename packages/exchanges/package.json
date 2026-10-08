@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./execution": "./src/execution-state.ts",
     "./manual-order": "./src/manual-order.ts",
     "./order-rules": "./src/order-rules.ts"
   },

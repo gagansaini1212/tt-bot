@@ -750,3 +750,68 @@ test("rejections carry Binance's reason only when it is a documented message", a
     );
   }
 });
+
+test("the loop's price, fills and market sell map to Binance's contract", async () => {
+  const { exchange, requests } = setup((url) =>
+    url.pathname === "/api/v3/ticker/price"
+      ? Response.json({ symbol: "BTCUSDT", price: "60123.45000000" })
+      : url.pathname === "/api/v3/myTrades"
+        ? Response.json([
+            {
+              symbol: "BTCUSDT",
+              id: 5,
+              orderId: 12,
+              price: "60000.00000000",
+              qty: "0.00100000",
+              quoteQty: "60.00000000",
+              commission: "0.00000100",
+              commissionAsset: "BTC",
+              time: 1_800_000_000_000,
+              isBuyer: true,
+            },
+          ])
+        : Response.json({
+            ...orderResponse,
+            clientOrderId: "ct_list_001_c1",
+            type: "MARKET",
+            side: "SELL",
+            status: "FILLED",
+            executedQty: "0.00099",
+          }),
+  );
+  assert.equal(await exchange.getLastPrice("BTC-USDT"), "60123.45000000");
+  assert.equal(requests[0].url.searchParams.get("symbol"), "BTCUSDT");
+  // Public: neither signed nor sent with the API key.
+  assert.equal(requests[0].url.searchParams.get("signature"), null);
+
+  const [fill] = await exchange.getOrderFills("BTC-USDT", 12);
+  assert.equal(fill.commission, "0.00000100");
+  const trades = requests.find(
+    (request) => request.url.pathname === "/api/v3/myTrades",
+  )!;
+  assert.equal(trades.url.searchParams.get("orderId"), "12");
+  assert.ok(trades.url.searchParams.get("signature"));
+
+  const sold = await exchange.placeMarketSell({
+    instrument: "BTC-USDT",
+    quantity: "0.00099",
+    clientOrderId: "ct_list_001_c1",
+  });
+  assert.equal(sold.status, "FILLED");
+  const sale = requests.at(-1)!;
+  const params = new URLSearchParams(String(sale.init.body));
+  assert.equal(sale.init.method, "POST");
+  assert.equal(sale.url.pathname, "/api/v3/order");
+  assert.equal(params.get("side"), "SELL");
+  assert.equal(params.get("type"), "MARKET");
+  assert.equal(params.get("quantity"), "0.00099");
+  assert.equal(params.get("newClientOrderId"), "ct_list_001_c1");
+  assert.equal(params.get("price"), null);
+  await assert.rejects(
+    exchange.placeMarketSell({
+      instrument: "BTC-USDT",
+      quantity: "-1",
+      clientOrderId: "ct_list_001_c2",
+    }),
+  );
+});
