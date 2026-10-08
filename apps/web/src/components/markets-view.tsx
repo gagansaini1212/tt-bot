@@ -1,0 +1,283 @@
+import type { TestnetDepth, TestnetKline } from "@crypto-trading/exchanges";
+
+import { CandlestickChart } from "@/components/candlestick-chart";
+import { DepthChart } from "@/components/depth-chart";
+import styles from "@/components/market-colors.module.css";
+import { MarketRefresh } from "@/components/market-refresh";
+import { OrderBook } from "@/components/order-book";
+import { PageHeader } from "@/components/page-header";
+import { SegmentedLinks } from "@/components/segmented-links";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  candlePriceDigits,
+  fillMarkers,
+  orderLines,
+  toCandles,
+} from "@/lib/candles";
+import { fractionDigits, formatDecimal } from "@/lib/decimals";
+import {
+  chartIntervals,
+  markets,
+  marketsHref,
+  type MarketSelection,
+} from "@/lib/markets";
+import { orderBook } from "@/lib/order-book";
+import type { TestnetAccountState } from "@/lib/testnet-account";
+import type { WorkerState } from "@/lib/worker-client";
+
+/** Within the worker's caches: 1 s for depth, 5 s for candles, 10 s for the account. */
+export const MARKETS_REFRESH_SECONDS = 3;
+const BOOK_ROWS = 10;
+
+export function MarketsView({
+  selection,
+  klines,
+  depth,
+  account,
+}: {
+  selection: MarketSelection;
+  klines: WorkerState<{ klines: TestnetKline[] }>;
+  depth: WorkerState<{ depth: TestnetDepth }>;
+  account: TestnetAccountState;
+}) {
+  const { market, interval } = selection;
+  const book = depth.status === "connected" ? orderBook(depth.depth) : null;
+  const depthMessage = depth.status === "connected" ? null : depth.message;
+  return (
+    <div className={styles.colors}>
+      <PageHeader
+        action={<MarketRefresh seconds={MARKETS_REFRESH_SECONDS} />}
+        description={`Candles, order book, and market depth from Binance Spot Testnet, with your recent fills and open orders marked. Refreshes every ${MARKETS_REFRESH_SECONDS} seconds while this tab is visible.`}
+        title="Markets"
+      />
+
+      <SegmentedLinks
+        className="mt-6"
+        items={markets.map((item) => ({
+          href: marketsHref({ market: item, interval }),
+          label: item.label,
+          current: item.instrument === market.instrument,
+        }))}
+        label="Market"
+      />
+
+      <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(340px,1fr)]">
+        <PriceCard account={account} klines={klines} selection={selection} />
+
+        <Card className="min-w-0">
+          <CardHeader>
+            <CardTitle>Order book</CardTitle>
+            <CardDescription className="mt-1">
+              The {BOOK_ROWS} best levels on each side. Total is the cumulative
+              quantity from the best price.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {book ? (
+              <OrderBook
+                base={market.base}
+                book={book}
+                quote="USDT"
+                rows={BOOK_ROWS}
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground">{depthMessage}</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="min-w-0 xl:col-span-2">
+          <CardHeader>
+            <CardTitle>Market depth</CardTitle>
+            <CardDescription className="mt-1">
+              Cumulative {market.base} bid and asked around the mid price, from
+              the 100 best levels on each side.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {book ? (
+              <DepthChart
+                base={market.base}
+                curve={book.curve}
+                label={market.label}
+                priceDigits={book.priceDigits}
+                quantityDigits={book.quantityDigits}
+              />
+            ) : (
+              <p className="text-sm text-muted-foreground">{depthMessage}</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function PriceCard({
+  selection,
+  klines,
+  account,
+}: {
+  selection: MarketSelection;
+  klines: WorkerState<{ klines: TestnetKline[] }>;
+  account: TestnetAccountState;
+}) {
+  const { market, interval } = selection;
+  return (
+    <Card className="min-w-0">
+      <CardHeader>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <CardTitle>{market.label} price</CardTitle>
+            <CardDescription className="mt-1">
+              {interval} candles, times in UTC.
+            </CardDescription>
+          </div>
+          <SegmentedLinks
+            items={chartIntervals.map((item) => ({
+              href: marketsHref({ market, interval: item }),
+              label: item,
+              current: item === interval,
+            }))}
+            label="Candle interval"
+          />
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {klines.status !== "connected" ? (
+          <p className="text-sm text-muted-foreground">{klines.message}</p>
+        ) : klines.klines.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Binance Spot Testnet has no {interval} candles for {market.label}{" "}
+            yet.
+          </p>
+        ) : (
+          <Candles
+            account={account}
+            klines={klines.klines}
+            selection={selection}
+          />
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** The chart with the customer's fills and open orders on this market. */
+function Candles({
+  selection: { market, interval },
+  klines,
+  account,
+}: {
+  selection: MarketSelection;
+  klines: TestnetKline[];
+  account: TestnetAccountState;
+}) {
+  const priceDigits = candlePriceDigits(klines);
+  const connected = account.status === "connected";
+  const fills = connected
+    ? account.snapshot.fills.filter(({ symbol }) => symbol === market.symbol)
+    : [];
+  const { markers, outside } = fillMarkers(fills, klines);
+  const orders = orderLines(
+    connected
+      ? account.snapshot.orders.filter(({ symbol }) => symbol === market.symbol)
+      : [],
+  );
+  const price = (value: string) =>
+    formatDecimal(value, Math.max(priceDigits, fractionDigits([value])));
+
+  return (
+    <>
+      <CandlestickChart
+        candles={toCandles(klines)}
+        dataKey={`${market.instrument} ${interval}`}
+        label={`${market.label} ${interval} candles`}
+        markers={markers}
+        orders={orders}
+        priceDigits={priceDigits}
+      />
+      {connected ? (
+        <div className="space-y-2 text-xs text-muted-foreground">
+          {markers.length > 0 || orders.length > 0 ? (
+            <ul className="flex flex-wrap gap-x-4 gap-y-1">
+              <li className="flex items-center gap-1.5">
+                <Arrow side="BUY" />
+                Your buys
+              </li>
+              <li className="flex items-center gap-1.5">
+                <Arrow side="SELL" />
+                Your sells
+              </li>
+              <li className="flex items-center gap-1.5">
+                <span className="w-3 border-t-2 border-dashed border-(--market-up)" />
+                <span className="w-3 border-t-2 border-dashed border-(--market-down)" />
+                Your open buy and sell orders
+              </li>
+            </ul>
+          ) : null}
+          <p>{fillSummary(fills.length, outside, market.label)}</p>
+          <p>
+            {orders.length === 0
+              ? `No open orders on ${market.label}.`
+              : `Open orders: ${orders
+                  .map(
+                    ({ side, quantity, price: level }) =>
+                      `${side === "BUY" ? "Buy" : "Sell"} ${quantity} ${market.base} at ${price(level)}`,
+                  )
+                  .join(" · ")}.`}
+          </p>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Your fills and open orders are not shown. {account.message}
+        </p>
+      )}
+      <p className="text-xs text-muted-foreground">
+        Chart by{" "}
+        <a
+          className="underline underline-offset-2 hover:text-foreground"
+          href="https://www.tradingview.com/"
+          rel="noreferrer"
+          target="_blank"
+        >
+          TradingView Lightweight Charts™
+        </a>
+        . Copyright (c) 2025 TradingView, Inc.
+      </p>
+    </>
+  );
+}
+
+function fillSummary(count: number, outside: number, label: string) {
+  const fills = count === 1 ? "fill" : "fills";
+  if (count === 0) return `No recent fills on ${label}.`;
+  if (outside === 0)
+    return `Your ${count} recent ${label} ${fills} ${count === 1 ? "is" : "are"} marked.`;
+  const marked = count - outside;
+  return `${marked} of your ${count} recent ${label} ${fills} ${marked === 1 ? "is" : "are"} marked; ${outside} ${outside === 1 ? "falls" : "fall"} outside these candles.`;
+}
+
+function Arrow({ side }: { side: "BUY" | "SELL" }) {
+  return (
+    <svg
+      aria-hidden
+      className={
+        side === "BUY"
+          ? "fill-(--market-up)"
+          : "rotate-180 fill-(--market-down)"
+      }
+      height={10}
+      viewBox="0 0 10 10"
+      width={10}
+    >
+      <path d="M5 1 9.5 9h-9z" />
+    </svg>
+  );
+}

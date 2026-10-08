@@ -1,0 +1,28 @@
+/* Colors for the Markets charts and order book. Hex, not oklch(): the canvas
+   chart library parses colors itself and cannot read oklch().
+
+   Up candles and bids are green, down candles and asks red. The pair passes
+   the dataviz palette checks against the card surface in both themes, but
+   light mode's colorblind separation is in the warning band, so color is
+   never the only cue: up candles are hollow, fills have arrows and labels,
+   and bids and asks are labeled and sit on opposite sides. */
+.colors {
+  --market-up: #008300;
+  --market-down: #e34948;
+  --market-up-wash: rgb(0 131 0 / 12%);
+  --market-down-wash: rgb(227 73 72 / 12%);
+  --market-text: #737373;
+  --market-grid: #f0f0f0;
+  --market-axis: #e5e5e5;
+  --market-crosshair: #a1a1a1;
+}
+
+:global(.dark) .colors {
+  --market-down: #e66767;
+  --market-up-wash: rgb(0 131 0 / 20%);
+  --market-down-wash: rgb(230 103 103 / 16%);
+  --market-text: #a1a1a1;
+  --market-grid: #1a1e24;
+  --market-axis: #2a2f36;
+  --market-crosshair: #5f6670;
+}
