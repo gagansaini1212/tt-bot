@@ -31,8 +31,10 @@ import { orderBook } from "@/lib/order-book";
 import type { TestnetAccountState } from "@/lib/testnet-account";
 import type { WorkerState } from "@/lib/worker-client";
 
-/** Within the worker's caches: 1 s for depth, 5 s for candles, 10 s for the account. */
-export const MARKETS_REFRESH_SECONDS = 3;
+// The worker caches depth for 1 s, so the order book and depth chart are at
+// most 4 s old. Candles (5 s) and the account (10 s) refresh with the page and
+// usually come from the worker's cache.
+const MARKETS_REFRESH_SECONDS = 3;
 const BOOK_ROWS = 10;
 
 export function MarketsView({
@@ -106,6 +108,7 @@ export function MarketsView({
                 base={market.base}
                 curve={book.curve}
                 label={market.label}
+                mid={book.spread?.mid}
                 priceDigits={book.priceDigits}
                 quantityDigits={book.quantityDigits}
               />
@@ -239,17 +242,17 @@ function Candles({
           Your fills and open orders are not shown. {account.message}
         </p>
       )}
+      {/* The attribution notice the chart library's licence asks for. */}
       <p className="text-xs text-muted-foreground">
-        Chart by{" "}
+        TradingView Lightweight Charts™ Copyright (c) 2025 TradingView, Inc.{" "}
         <a
           className="underline underline-offset-2 hover:text-foreground"
           href="https://www.tradingview.com/"
           rel="noreferrer"
           target="_blank"
         >
-          TradingView Lightweight Charts™
+          https://www.tradingview.com/
         </a>
-        . Copyright (c) 2025 TradingView, Inc.
       </p>
     </>
   );
