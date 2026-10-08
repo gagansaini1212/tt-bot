@@ -4,6 +4,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  ArrowLeftRight,
   ChartCandlestick,
   History,
   LayoutDashboard,
@@ -13,6 +14,7 @@ import {
   Workflow,
 } from "lucide-react";
 
+import { OrderTicket } from "@/components/order-ticket";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -86,6 +88,8 @@ export function DashboardShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
   const closeMenu = () => setMenuOpen(false);
+  // One order drawer, opened from the desktop top bar or the mobile header.
+  const [tradeOpen, setTradeOpen] = useState(false);
 
   // Close the menu on every route change, including back and forward.
   const [menuPathname, setMenuPathname] = useState(pathname);
@@ -142,44 +146,60 @@ export function DashboardShell({ children }: { children: ReactNode }) {
             <Link className="flex min-w-0 items-center gap-3" href="/">
               <Brand />
             </Link>
-            <Sheet onOpenChange={setMenuOpen} open={menuOpen}>
-              <SheetTrigger asChild>
-                <Button size="lg" variant="outline">
-                  <Menu />
-                  Menu
-                </Button>
-              </SheetTrigger>
-              <SheetContent aria-describedby={undefined} side="left">
-                <SheetHeader className="flex-row items-center gap-3 pr-12">
-                  <SheetTitle className="sr-only">Menu</SheetTitle>
-                  <Brand />
-                </SheetHeader>
-                <nav
-                  className="space-y-1 px-4 text-sm"
-                  aria-label="Main navigation"
-                >
-                  {navigation.map((item) => (
+            <div className="flex shrink-0 items-center gap-2">
+              <Button onClick={() => setTradeOpen(true)} size="lg">
+                <ArrowLeftRight />
+                Trade
+              </Button>
+              <Sheet onOpenChange={setMenuOpen} open={menuOpen}>
+                <SheetTrigger asChild>
+                  <Button size="lg" variant="outline">
+                    <Menu />
+                    Menu
+                  </Button>
+                </SheetTrigger>
+                <SheetContent aria-describedby={undefined} side="left">
+                  <SheetHeader className="flex-row items-center gap-3 pr-12">
+                    <SheetTitle className="sr-only">Menu</SheetTitle>
+                    <Brand />
+                  </SheetHeader>
+                  <nav
+                    className="space-y-1 px-4 text-sm"
+                    aria-label="Main navigation"
+                  >
+                    {navigation.map((item) => (
+                      <NavigationLink
+                        active={pathname === item.href}
+                        key={item.href}
+                        onNavigate={closeMenu}
+                        {...item}
+                      />
+                    ))}
+                  </nav>
+                  <div className="mt-auto space-y-4 p-4">
+                    <Separator />
                     <NavigationLink
-                      active={pathname === item.href}
-                      key={item.href}
+                      active={pathname === settings.href}
                       onNavigate={closeMenu}
-                      {...item}
+                      {...settings}
                     />
-                  ))}
-                </nav>
-                <div className="mt-auto space-y-4 p-4">
-                  <Separator />
-                  <NavigationLink
-                    active={pathname === settings.href}
-                    onNavigate={closeMenu}
-                    {...settings}
-                  />
-                  <ThemeToggle />
-                </div>
-              </SheetContent>
-            </Sheet>
+                    <ThemeToggle />
+                  </div>
+                </SheetContent>
+              </Sheet>
+            </div>
           </header>
+          <div className="hidden items-center justify-end gap-3 border-b border-border/70 bg-card/35 px-6 py-2 md:flex lg:px-8">
+            <span className="text-xs text-muted-foreground">
+              Binance Spot Testnet · virtual funds
+            </span>
+            <Button onClick={() => setTradeOpen(true)}>
+              <ArrowLeftRight />
+              Trade
+            </Button>
+          </div>
           <main className="min-w-0 px-4 py-5 sm:px-6 lg:px-8">{children}</main>
+          <OrderTicket onOpenChange={setTradeOpen} open={tradeOpen} />
         </div>
       </div>
     </div>

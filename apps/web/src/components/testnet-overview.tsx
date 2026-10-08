@@ -9,6 +9,7 @@ import {
 
 import { AccountRefresh } from "@/components/account-refresh";
 import { AssistantPanel } from "@/components/assistant-panel";
+import { OpenOrders } from "@/components/open-orders";
 import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -220,41 +221,12 @@ function AccountContent({
             <CardHeader>
               <CardTitle>Open orders</CardTitle>
               <CardDescription>
-                Pending limit orders on the connected testnet account.
+                Open and pending orders on the connected testnet account. Orders
+                in a list, such as an entry with its exits, are grouped.
               </CardDescription>
             </CardHeader>
             <CardContent className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Market / side</TableHead>
-                    <TableHead>Filled / quantity</TableHead>
-                    <TableHead>Price</TableHead>
-                    <TableHead>Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {snapshot.orders.map((order) => (
-                    <TableRow key={`${order.symbol}-${order.orderId}`}>
-                      <TableCell>
-                        {order.symbol} {order.side}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">
-                        {order.executedQty} / {order.origQty}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">
-                        {order.price}
-                      </TableCell>
-                      <TableCell>{order.status}</TableCell>
-                    </TableRow>
-                  ))}
-                  {snapshot.orders.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={4}>No open orders.</TableCell>
-                    </TableRow>
-                  ) : null}
-                </TableBody>
-              </Table>
+              <OpenOrders snapshot={snapshot} />
             </CardContent>
           </Card>
         </div>
