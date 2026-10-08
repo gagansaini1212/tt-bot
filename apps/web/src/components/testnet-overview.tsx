@@ -28,6 +28,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { WelcomeCard } from "@/components/welcome-card";
 import type { TestnetAccountState } from "@/lib/testnet-account";
 
 export function TestnetOverview({ account }: { account: TestnetAccountState }) {
@@ -52,6 +53,8 @@ export function TestnetOverview({ account }: { account: TestnetAccountState }) {
         description="Virtual balances, open orders, and recent fills from your Binance Spot Testnet exchange account."
         title="Overview"
       />
+
+      <WelcomeCard />
 
       <Alert className="mt-6">
         <ShieldCheck className="size-4" />
