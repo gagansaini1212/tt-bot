@@ -5,11 +5,13 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type KeyboardEvent,
   type UIEvent,
 } from "react";
 import { Bot, Send, Square } from "lucide-react";
 import { useEveAgent, type EveMessagePart } from "eve/react";
 
+import { AssistantMarkdown } from "@/components/assistant-markdown";
 import { AssistantToolPart } from "@/components/assistant-tool-part";
 import { Button } from "@/components/ui/button";
 import {
@@ -36,6 +38,12 @@ type AssistantPanelProps = {
 // conversation.
 const FOLLOW_THRESHOLD_PX = 48;
 
+const starterPrompts = [
+  { icon: "📊", prompt: "Analyze my BTC allocation and exposure" },
+  { icon: "⚠️", prompt: "Check for high-risk open orders" },
+  { icon: "💡", prompt: "Suggest a limit buy strategy for ETH" },
+];
+
 export function AssistantPanel({
   accountSnapshot,
   accountLabel,
@@ -45,6 +53,7 @@ export function AssistantPanel({
   const busy = agent.status === "submitted" || agent.status === "streaming";
   const messages = agent.data.messages;
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const followLatest = useRef(true);
 
   // Keep the newest message in view while the reader is following along,
@@ -60,6 +69,26 @@ export function AssistantPanel({
     const { clientHeight, scrollHeight, scrollTop } = event.currentTarget;
     followLatest.current =
       scrollHeight - scrollTop - clientHeight <= FOLLOW_THRESHOLD_PX;
+  }
+
+  // Enter sends and Shift+Enter starts a new line. Enter that confirms an IME
+  // composition must not send; Safari reports that keydown as keyCode 229.
+  function handleInputKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (
+      event.key !== "Enter" ||
+      event.shiftKey ||
+      event.nativeEvent.isComposing ||
+      event.nativeEvent.keyCode === 229
+    ) {
+      return;
+    }
+    event.preventDefault();
+    event.currentTarget.form?.requestSubmit();
+  }
+
+  function applyStarterPrompt(prompt: string) {
+    setDraft(prompt);
+    inputRef.current?.focus();
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -129,6 +158,7 @@ export function AssistantPanel({
                         : `${message.id}-${index}`
                     }
                     part={part}
+                    role={message.role}
                   />
                 ))}
               </div>
@@ -140,11 +170,35 @@ export function AssistantPanel({
         </div>
 
         <form className="space-y-3" onSubmit={handleSubmit}>
+          {messages.length === 0 ? (
+            <div
+              aria-label="Starter prompts"
+              className="flex flex-wrap gap-1.5"
+              role="group"
+            >
+              {starterPrompts.map(({ icon, prompt }) => (
+                <Button
+                  className="h-auto min-h-6 py-1 text-left whitespace-normal"
+                  disabled={busy}
+                  key={prompt}
+                  onClick={() => applyStarterPrompt(prompt)}
+                  size="xs"
+                  type="button"
+                  variant="outline"
+                >
+                  <span aria-hidden="true">{icon}</span>
+                  {prompt}
+                </Button>
+              ))}
+            </div>
+          ) : null}
           <Textarea
             aria-label="Message the analysis assistant"
             disabled={busy}
             onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={handleInputKeyDown}
             placeholder="What happened in my latest BTC trade?"
+            ref={inputRef}
             rows={3}
             value={draft}
           />
@@ -175,10 +229,20 @@ export function AssistantPanel({
   );
 }
 
-function MessagePart({ part }: { part: EveMessagePart }) {
+function MessagePart({
+  part,
+  role,
+}: {
+  part: EveMessagePart;
+  role: "assistant" | "user";
+}) {
   switch (part.type) {
     case "text":
-      return <p className="text-sm leading-5">{part.text}</p>;
+      return role === "assistant" ? (
+        <AssistantMarkdown text={part.text} />
+      ) : (
+        <p className="text-sm leading-5 whitespace-pre-wrap">{part.text}</p>
+      );
     case "dynamic-tool":
       return <AssistantToolPart part={part} />;
     default:
