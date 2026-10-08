@@ -31,6 +31,13 @@ _Avoid_: Per-trade budget, loss limit
 An entry order together with the stop loss, take profit and holding deadline that protect the quantity it fills. A strategy may hold several at once, and its position in an instrument is the sum of its protected entries there.
 _Avoid_: Safety order, averaging down
 
+**AI decision**:
+The recorded conclusion of one AI analysis: a trade proposal or no trade, with the model, prompt version, input snapshot and rationale that produced it.
+
+**Trade proposal**:
+A protected entry the AI drafts for the customer to approve or reject. Approval runs every execution check again before the entry is sent, and a proposal is approved at most once, before its entry expiry.
+_Avoid_: Signal, recommendation
+
 **Standing price instruction**:
 A customer's instruction to buy or sell a specified amount at a specified price, without allowing AI to silently override that instruction. It may list several protected entries, which expire together.
 _Avoid_: AI-managed trade
