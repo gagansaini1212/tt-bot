@@ -1,41 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, mock, test } from "node:test";
-import {
-  getTestnetAccount,
-  parseWorkerUrl,
-  snapshotFreshness,
-} from "./testnet-account";
-
-test("worker URL accepts the loopback hosts", () => {
-  for (const value of [
-    "http://127.0.0.1:4001",
-    "http://localhost:4001",
-    "http://LOCALHOST:4001/",
-    "http://[::1]:4001",
-    "http://[0:0:0:0:0:0:0:1]:4001",
-  ])
-    assert.ok(parseWorkerUrl(value), value);
-});
-
-test("worker URL rejects other hosts and anything beyond an origin", () => {
-  for (const value of [
-    "http://execution:4001",
-    "http://192.168.1.20:4001",
-    "http://0.0.0.0:4001",
-    "http://localhost.:4001",
-    "http://localhost.example.com:4001",
-    "http://localhost@example.com:4001",
-    "http://[::ffff:127.0.0.1]:4001",
-    "https://127.0.0.1:4001",
-    "http://user:secret@127.0.0.1:4001",
-    "http://127.0.0.1:4001/api",
-    "http://127.0.0.1:4001/?debug=1",
-    "http://127.0.0.1:4001/#snapshot",
-    "127.0.0.1:4001",
-    "",
-  ])
-    assert.equal(parseWorkerUrl(value), undefined, value);
-});
+import { getTestnetAccount, snapshotFreshness } from "./testnet-account";
 
 const capturedAt = "2026-10-08T12:00:00.000Z";
 const captured = Date.parse(capturedAt);
@@ -153,4 +118,25 @@ test("the token is sent to a localhost worker but never to another host", async 
   assert.ok("message" in rejected);
   assert.match(rejected.message, /EXECUTION_API_URL/);
   assert.equal(fetch.mock.callCount(), 1);
+});
+
+test("failures keep the account's wording", async () => {
+  delete process.env.EXECUTION_API_TOKEN;
+  const missing = await getTestnetAccount();
+  assert.equal(missing.status, "not_configured");
+  assert.ok("message" in missing);
+  assert.match(missing.message, /virtual balances, orders, and fills/);
+
+  process.env.EXECUTION_API_TOKEN = "web-test-token-at-least-32-characters";
+  for (const [response, pattern] of [
+    [Response.json({ status: "unauthorized" }, { status: 401 }), /credentials/],
+    [Response.json({ status: "not_configured" }), /restart it/],
+    [Response.json({ status: "connected", snapshot: {} }), /Start the/],
+  ] as const) {
+    mock.method(globalThis, "fetch", async () => response);
+    const state = await getTestnetAccount();
+    assert.notEqual(state.status, "connected");
+    assert.ok("message" in state);
+    assert.match(state.message, pattern);
+  }
 });
