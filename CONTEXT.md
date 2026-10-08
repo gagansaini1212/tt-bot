@@ -13,8 +13,36 @@ An email and password that signs a person in to act for one customer. A customer
 _Avoid_: User, account
 
 **Exchange account**:
-A customer's account at a crypto exchange, connected to the product for trading.
+A customer's account at one venue, connected to the product. Its capital and positions never fund or offset another exchange account's.
 _Avoid_: Customer when referring to the exchange account
+
+**Read-only exchange account**:
+An exchange account on a venue whose adapter cannot place orders, such as HTX in M4. It is monitored, but never the target of a strategy, proposal or order, and its keys have no trade or withdraw permission.
+_Avoid_: Paused account, disconnected account
+
+**Transfer**:
+Moving funds between exchange accounts. The product never makes one, and it is never trading profit or loss.
+_Avoid_: Rebalance
+
+**Venue**:
+A crypto exchange the product connects to through an adapter, such as Binance Spot Testnet or HTX, with its own markets, rules, credentials and limits.
+_Avoid_: Provider, exchange when meaning a specific connection
+
+**Instrument**:
+The venue-neutral name of what is traded, written BASE-QUOTE, such as BTC-USDT.
+_Avoid_: Symbol
+
+**Market**:
+One instrument as one venue trades it, with that venue's price tick, quantity step and minimum order. BTC-USDT on Binance and BTC-USDT on HTX are two markets.
+_Avoid_: Pair when the venue matters
+
+**Venue symbol**:
+The name a venue's API uses for a market, such as `BTCUSDT` on Binance or `btcusdt` on HTX. Only adapters use it.
+_Avoid_: Symbol alone, ticker
+
+**Market catalogue**:
+A venue's list of markets, with each market's venue symbol and trading rules, as last read from the venue.
+_Avoid_: Exchange info, symbol list
 
 **Live trading**:
 Trading that submits real orders to a connected exchange account and uses real funds.
@@ -35,7 +63,7 @@ _Avoid_: Safety order, averaging down
 The recorded conclusion of one AI analysis: a trade proposal or no trade, with the model, prompt version, input snapshot and rationale that produced it.
 
 **Trade proposal**:
-A protected entry the AI drafts for the customer to approve or reject. Approval runs every execution check again before the entry is sent, and a proposal is approved at most once, before its entry expiry.
+A protected entry the AI drafts on one exchange account for the customer to approve or reject. Approval runs every execution check again before the entry is sent, and a proposal is approved at most once, before its entry expiry.
 _Avoid_: Signal, recommendation
 
 **Standing price instruction**:
@@ -100,7 +128,7 @@ A customer action that pauses every strategy on an exchange account and runs clo
 _Avoid_: Panic button, emergency stop
 
 **Daily drawdown limit**:
-A customer-set percentage of the allocations of all their strategies on an exchange account. When the strategies together lose it since midnight UTC, counting what each strategy's loss limits count, every strategy is paused until the customer resumes it.
+A customer-set percentage of the allocations of all their strategies on an exchange account. When the strategies together lose it since midnight UTC, counting what each strategy's loss limits count, every strategy is paused until the customer resumes it. Other exchange accounts never count towards it.
 _Avoid_: Loss limit when referring to the portfolio
 
 **Strategy status**:
@@ -117,7 +145,16 @@ Comparing the product's recorded orders, fills, balances, and positions with the
 The assignment of an instrument's managed position to one strategy within an exchange account, including every protected entry in it. Other strategies must wait or use a separate account.
 
 **Accounting currency**:
-The explicitly selected currency used to measure an exchange account's allocations and profit or loss. A display conversion into GBP does not change this currency.
+The explicitly selected currency used to measure an exchange account's allocations, profit or loss, and limits. Conversion into the reporting currency does not change it.
+_Avoid_: Reporting currency
+
+**Reporting currency**:
+The one currency a customer chooses, USDT by default, for displaying amounts and adding them up across exchange accounts. It never changes an allocation, a limit or an execution check.
+_Avoid_: Accounting currency, base currency
+
+**Conversion route**:
+The direct market, or two markets through USDT or USDC, on an exchange account's own venue whose prices convert its amounts into the reporting currency. Without a fresh route, the amount is shown as unconverted, never as zero.
+_Avoid_: FX rate, exchange rate
 
 **Standing entry expiry**:
 The customer-specified time after which an unfilled standing entry instruction may no longer open a position.

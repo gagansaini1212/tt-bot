@@ -2,6 +2,8 @@
 
 Status: accepted in interview Q43. Implementation follows the final shared-understanding checkpoint. Deployment, purchases, and real orders are outside the current local build scope.
 
+> **Amended 2026-10-09 by [ADR 0009](adr/0009-keep-exchange-accounts-isolated-across-venues.md).** The execution worker serves exchange accounts on several venues at once. It keeps rate limits, clock offsets and health per venue, and request queues, nonces and credentials per exchange account, so one venue's failure never pauses another's work. Adapters declare whether they can trade, and every order path rejects a read-only account. Cross-account totals use a customer reporting currency, converted only with the account's own venue prices. The rest of this document is unchanged.
+
 ## Components
 
 Use a TypeScript repository with a Next.js web dashboard, an eve agent service, a separate execution worker, and PostgreSQL. Run the services locally, with PostgreSQL in a container. Exercise ten simulated customers; do not treat this as a measured production capacity.
