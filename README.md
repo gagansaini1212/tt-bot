@@ -52,7 +52,7 @@ pnpm --filter @crypto-trading/web lint
 pnpm build
 ```
 
-CI runs the same checks on pull requests and pushes to `main`, except `eve build`, which fetches AI Gateway's model catalog.
+CI runs the same checks on pull requests and pushes to `main`.
 
 ## Repository layout
 
