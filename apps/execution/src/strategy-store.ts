@@ -17,7 +17,6 @@ import {
 } from "@crypto-trading/domain";
 import {
   aiSettingsSchema,
-  STOP_REASON_LABELS,
   testnetInstrumentSchema,
   type AiSettings,
   type PortfolioLimitsState,
@@ -125,7 +124,9 @@ export type EntryCandidate = {
 
 export type Reservation =
   | { status: "saved"; proposalId: string; entry: ProtectedEntry }
-  | { status: "refused"; reason: string };
+  // `waits` when the entry may pass later unchanged: another strategy
+  // holds the market's position, or Binance's stop orders are in use.
+  | { status: "refused"; reason: string; waits?: boolean };
 
 export type ControlResult =
   | { result: "saved"; message: string; strategy: StrategyRecord }
@@ -904,9 +905,10 @@ export class StrategyStore {
     now: Date,
   ): Promise<Reservation> {
     return this.#scoped(scope, async (tx) => {
-      const refuse = (reason: string): Reservation => ({
+      const refuse = (reason: string, waits = false): Reservation => ({
         status: "refused",
         reason,
+        waits,
       });
       const [row] = await selectStrategies(tx, scope, {
         id: candidate.strategyId,
@@ -971,10 +973,12 @@ export class StrategyStore {
       if (owner)
         return refuse(
           `${owner.name} holds the ${intent.instrument.replace("-", "/")} position on this account; a strategy waits until it holds nothing there.`,
+          true,
         );
       if (candidate.freeStopOrders <= 0)
         return refuse(
           `Binance's limit on open stop orders for ${intent.instrument.replace("-", "/")} is full, so the entry could not be protected.`,
+          true,
         );
       const limits = ruleLimits(strategy.rules);
       const positionNotionalByInstrument: Partial<
@@ -1384,5 +1388,3 @@ function toEntry(row: EntryRow): StrategyEntry | undefined {
     exitReason: row.exit_reason,
   };
 }
-
-export { STOP_REASON_LABELS };

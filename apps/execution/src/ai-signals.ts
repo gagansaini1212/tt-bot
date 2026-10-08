@@ -12,6 +12,7 @@ import {
   type AiManagedRules,
 } from "@crypto-trading/domain";
 import {
+  RECORDED_FIXTURE_MODEL,
   testnetInstrumentSchema,
   tradeProposalDraftSchema,
   type AiDecisionRequest,
@@ -59,8 +60,7 @@ export interface SignalSource {
   decide(request: SignalRequest): Promise<SignalDecision>;
 }
 
-/** The model name every fixture decision is recorded with. */
-export const RECORDED_FIXTURE_MODEL = "recorded-fixture";
+export { RECORDED_FIXTURE_MODEL };
 
 const percent = z
   .string()

@@ -686,6 +686,37 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
     assert.equal(placed.intent_status, "acknowledged");
   });
 
+  test("an approval blocked by another strategy's position leaves the proposal waiting", async () => {
+    const w = await world();
+    await holding(w, { daily: "50", total: "90" });
+    const id = await w.create(
+      draft({
+        name: "AI on BTC",
+        allocation: "200",
+        ai: { proposalApproval: "required", analysisIntervalMinutes: 60 },
+        rules: {
+          kind: "ai_managed",
+          allowedInstruments: ["BTC-USDT"],
+          marketKind: "spot",
+          allowShort: false,
+          maxLeverage: 1,
+          maxPositionNotional: "200",
+          maxProtectedEntries: 3,
+          holdingPeriodSeconds: 3_600,
+          takeProfitAdjustable: false,
+          lossLimits: { daily: "20", total: "50" },
+        },
+      }),
+    );
+    await w.pass();
+    const [proposal] = await entries(id);
+    const outcome = await w.runner.approve(w.scope, w.fake, proposal.id);
+    assert.equal(outcome.status, "rejected");
+    assert.match(outcome.message, /still waits for your approval/);
+    assert.match(outcome.message, /Standing holds the BTC\/USDT position/);
+    assert.equal((await entries(id))[0].status, "draft");
+  });
+
   test("a restarted worker never sends an entry twice, and makes it again only once Binance proves it never received it", async () => {
     const w = await world();
     const id = await w.create(

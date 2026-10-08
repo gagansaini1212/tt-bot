@@ -90,7 +90,7 @@ export function testnetRuleIssues(
  */
 export const strategyDraftSchema = z
   .strictObject({
-    name: z.string().trim().min(1).max(80),
+    name: z.string().trim().min(1, "Give it a name.").max(80),
     allocation: usdtAmount,
     rules: strategyRulesSchema,
     ai: aiSettingsSchema.nullable(),
@@ -245,6 +245,12 @@ export const portfolioTodaySchema = z.object({
   reached: z.boolean(),
 });
 export type PortfolioToday = z.infer<typeof portfolioTodaySchema>;
+
+/**
+ * The model an AI-managed strategy's decisions name when they come from a
+ * recorded fixture rather than a model.
+ */
+export const RECORDED_FIXTURE_MODEL = "recorded-fixture";
 
 /** Where the AI-managed strategies' decisions come from. */
 export const aiSourceSchema = z.object({

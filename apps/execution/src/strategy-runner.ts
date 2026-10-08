@@ -288,7 +288,11 @@ export class StrategyRunner {
       const note =
         notes.get(strategy.id) ??
         (strategy.status === "paused"
-          ? `Paused: ${STOP_REASON_LABELS[strategy.pauseReason ?? ""] ?? "paused"}. Open entries keep their exits.`
+          ? `Paused: ${STOP_REASON_LABELS[strategy.pauseReason ?? ""] ?? "paused"}. ${
+              strategy.exitRequest && strategy.exitRequest !== "pause"
+                ? "Its entries are being closed."
+                : "Open entries keep their exits."
+            }`
           : "");
       if (note) await this.store.note(scope, strategy.id, note);
     }
@@ -486,8 +490,9 @@ export class StrategyRunner {
     const { now } = context;
     const ai = strategy.ai!;
     const next = strategy.nextAnalysisAt;
+    // The last analysis's note stays until the next one.
     if (next && next.getTime() > now.getTime())
-      return `Next analysis at ${next.toISOString()}.`;
+      return strategy.runnerNote || `Next analysis at ${utc(next)}.`;
     if (
       !(await this.store.claimAnalysis(
         scope,
@@ -541,7 +546,7 @@ export class StrategyRunner {
       this.#warn(
         `The AI could not decide for ${strategy.id}: ${describe(error)}`,
       );
-      return `The AI could not be asked at ${now.toISOString()}: ${describe(error)} It is asked again at the next analysis.`;
+      return `The AI could not be asked at ${utc(now)}: ${describe(error)} It is asked again at the next analysis.`;
     }
     const saved = await this.#proposals.record(
       scope,
@@ -553,7 +558,7 @@ export class StrategyRunner {
     const label =
       decision.model === RECORDED_FIXTURE_MODEL ? " (recorded fixture)" : "";
     if (!proposal || proposal.status !== "draft")
-      return `The AI decided not to trade${label} at ${now.toISOString()}.`;
+      return `The AI decided not to trade${label} at ${utc(now)}.`;
     const summary = `Buy ${proposal.quantity} ${proposal.instrument.split("-")[0]} at ${proposal.entryPrice}, stop loss ${proposal.stopLossPrice}, take profit ${proposal.takeProfitPrice}${label}.`;
     if (ai.proposalApproval === "required") {
       await this.store.awaitingApproval(scope, strategy, {
@@ -703,7 +708,7 @@ export class StrategyRunner {
         return {
           status: "skipped",
           reason: reservation.reason,
-          checksRefused: true,
+          checksRefused: !reservation.waits,
         };
       reads.forgetBalance();
       reads.forgetOpenOrders(instrument);
@@ -1077,11 +1082,10 @@ export class StrategyRunner {
       ? result.outcome
       : {
           status: "rejected",
-          message:
-            `${result.checksRefused ? "The execution checks refused this proposal, so it was rejected" : "Nothing was sent"}: ${result.reason}`.slice(
-              0,
-              500,
-            ),
+          message: (result.checksRefused
+            ? `The execution checks refused this proposal, so it was rejected: ${result.reason}`
+            : `Nothing was sent, and the proposal still waits for your approval until it expires: ${result.reason}`
+          ).slice(0, 500),
         };
   }
 
@@ -1204,12 +1208,12 @@ function waitNote(
   freeStops: number,
   symbol: SymbolRules,
 ) {
-  const until = plan.until ? ` until ${plan.until}` : "";
+  const until = plan.until ? ` until ${utc(plan.until)}` : "";
   switch (plan.reason) {
     case "not_started":
-      return `Waiting for its first buy, due at ${plan.until}.`;
+      return `Waiting for its first buy, due at ${utc(plan.until!)}.`;
     case "buy_made":
-      return `This interval's buy is made; the next is due at ${plan.until}.`;
+      return `This interval's buy is made; the next is due at ${utc(plan.until!)}.`;
     case "entry_limit":
       return freeStops <= 0
         ? `Waiting: Binance allows ${maxStopOrders(symbol)} open stop orders on ${pair(instrument)} and all are in use, so no further entry could be protected${plan.until ? `; a buy due now is skipped` : ""}.`
@@ -1224,7 +1228,8 @@ function waitNote(
 }
 
 function entryRationale(intent: EntryIntent) {
-  return `${describeKey(intent.key)}: buy ${intent.quantity} at ${intent.entryPrice}, take profit ${intent.takeProfitPrice}, stop loss ${intent.stopLossPrice}.`;
+  const what = describeKey(intent.key);
+  return `${what[0].toUpperCase()}${what.slice(1)}: buy ${intent.quantity} at ${intent.entryPrice}, take profit ${intent.takeProfitPrice}, stop loss ${intent.stopLossPrice}.`;
 }
 
 function describeKey(key: string) {
@@ -1240,6 +1245,11 @@ function describeKey(key: string) {
     default:
       return "the AI's entry";
   }
+}
+
+/** Like "2026-10-08 13:05 UTC". */
+function utc(time: Date | string) {
+  return `${new Date(time).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 }
 
 function plural(count: number, one: string, many: string) {
