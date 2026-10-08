@@ -71,7 +71,7 @@ Live trading remains locked until the deployment prerequisites in [the implement
 3. Copy `apps/web/.env.example` to `apps/web/.env.local`. Copy the same `EXECUTION_API_TOKEN` there. Binance credentials belong only in `apps/execution/.env`, which the execution service loads. Keep both files private.
 4. Run `pnpm exchange check` to verify authenticated connectivity. Then run `pnpm dev:worker` and `pnpm dev` in separate terminals. Open `/accounts` to see virtual balances, open BTC/ETH orders, and recent fills. Restart the processes after changing their environment files.
 
-The worker listens on `127.0.0.1:4001`. Its HTTP interface requires the shared token and exposes account reads only. The web app is currently a local development dashboard without customer account authentication; do not expose the connected dashboard publicly. The Overview assistant receives the displayed testnet account snapshot and cannot access exchange credentials or submit orders. The application has no demo account data or invented strategy/decision records. Strategy management and AI decision persistence are not implemented.
+The worker listens on `127.0.0.1:4001`, and on `[::1]:4001` when IPv6 is available. Its HTTP interface requires the shared token and exposes account reads only. The web app is currently a local development dashboard without customer account authentication; do not expose the connected dashboard publicly. The Overview assistant receives the displayed testnet account snapshot and cannot access exchange credentials or submit orders. The application has no demo account data or invented strategy/decision records. Strategy management and AI decision persistence are not implemented.
 
 ### Manual test orders
 

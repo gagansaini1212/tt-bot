@@ -32,7 +32,8 @@ async function fixture() {
     spawnSync(
       process.execPath,
       ["--import", "tsx", "--import", preload, entry, ...args],
-      { env: { ...env, ...overrides }, encoding: "utf8" },
+      // The timeout stops a `serve` that starts unexpectedly from hanging the test.
+      { env: { ...env, ...overrides }, encoding: "utf8", timeout: 10_000 },
     );
   const requests = async () =>
     (await readFile(log, "utf8"))
@@ -45,6 +46,13 @@ async function fixture() {
     requests,
     cleanup: () => rm(directory, { recursive: true, force: true }),
   };
+}
+// Hosts without IPv6 loopback cannot bind [::1].
+function canListenOnIpv6(port: number) {
+  return new Promise<boolean>((resolve) => {
+    const probe = createServer().once("error", () => resolve(false));
+    probe.listen(port, "::1", () => probe.close(() => resolve(true)));
+  });
 }
 
 test("manual order validates, submits once, survives restart and can be queried/cancelled", async () => {
@@ -155,6 +163,7 @@ test("worker HTTP requires a token, rejects browser origins and writes, caches a
   assert.ok(address && typeof address !== "string");
   const port = address.port;
   await new Promise<void>((resolve) => socket.close(() => resolve()));
+  const ipv6 = await canListenOnIpv6(port);
   const worker = spawn(
     process.execPath,
     ["--import", "tsx", "--import", preload, "--import", clock, entry, "serve"],
@@ -196,6 +205,11 @@ test("worker HTTP requires a token, rejects browser origins and writes, caches a
     assert.equal(data.snapshot.balances[0].free, "10000.12345678");
     assert.doesNotMatch(JSON.stringify(data), /test-key|test-secret/);
     await fetch(url, { headers });
+    if (ipv6)
+      assert.equal(
+        (await fetch(`http://[::1]:${port}/snapshot`, { headers })).status,
+        200,
+      );
     assert.equal(
       (await f.requests()).filter((r) => r.path === "/api/v3/account").length,
       1,
@@ -213,6 +227,26 @@ test("worker HTTP requires a token, rejects browser origins and writes, caches a
     const exited = once(worker, "exit");
     worker.kill("SIGTERM");
     await exited;
+    await f.cleanup();
+  }
+});
+
+test("worker refuses to start while another process holds its [::1] port", async (t) => {
+  const f = await fixture();
+  const squatter = createServer();
+  try {
+    const listening = await new Promise<boolean>((resolve) => {
+      squatter.once("error", () => resolve(false));
+      squatter.listen(0, "::1", () => resolve(true));
+    });
+    if (!listening) return t.skip("This host has no IPv6 loopback.");
+    const address = squatter.address();
+    assert.ok(address && typeof address !== "string");
+    const result = f.run(["serve"], { EXECUTION_PORT: String(address.port) });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /address already in use ::1:/);
+  } finally {
+    squatter.close();
     await f.cleanup();
   }
 });

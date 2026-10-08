@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+import { createServer, type RequestListener, type Server } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { timingSafeEqual } from "node:crypto";
 import { resolve } from "node:path";
@@ -74,7 +74,7 @@ async function main() {
     let snapshot:
       Awaited<ReturnType<BinanceSpotTestnet["getSnapshot"]>> | undefined;
     let pending: ReturnType<BinanceSpotTestnet["getSnapshot"]> | undefined;
-    const server = createServer(async (request, response) => {
+    const handle: RequestListener = async (request, response) => {
       response.setHeader("Cache-Control", "no-store");
       response.setHeader("Content-Type", "application/json");
       const received = Buffer.from(request.headers.authorization ?? "");
@@ -122,13 +122,26 @@ async function main() {
           }),
         );
       }
-    });
-    server.listen(port, "127.0.0.1", () =>
-      console.info(
-        `Execution service on http://127.0.0.1:${port}. Provider: ${provider}.`,
-      ),
+    };
+    const servers = [await listen(handle, port, "127.0.0.1")];
+    // `localhost` usually resolves to [::1] first, so hold it too: no other local
+    // process may receive the token there. Skip it only without IPv6 loopback.
+    const ipv6 = await listen(handle, port, "::1").catch(
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === "EADDRNOTAVAIL" || error.code === "EAFNOSUPPORT")
+          return undefined;
+        servers[0].close();
+        throw error;
+      },
     );
-    const shutdown = () => server.close(() => process.exit(0));
+    if (ipv6) servers.push(ipv6);
+    console.info(
+      `Execution service on http://127.0.0.1:${port}${ipv6 ? ` and http://[::1]:${port}` : ""}. Provider: ${provider}.`,
+    );
+    const shutdown = () =>
+      Promise.all(
+        servers.map((server) => new Promise((closed) => server.close(closed))),
+      ).then(() => process.exit(0));
     process.once("SIGINT", shutdown);
     process.once("SIGTERM", shutdown);
     return;
@@ -233,6 +246,17 @@ async function main() {
       throw new Error("Unknown execution command. Run pnpm exchange help.");
   }
   console.info(JSON.stringify(result, null, 2));
+}
+
+function listen(handle: RequestListener, port: number, host: string) {
+  return new Promise<Server>((resolve, reject) => {
+    const server = createServer(handle);
+    server.once("error", reject);
+    server.listen(port, host, () => {
+      server.off("error", reject);
+      resolve(server);
+    });
+  });
 }
 
 function safeError(error: unknown): string {
