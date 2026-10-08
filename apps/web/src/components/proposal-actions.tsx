@@ -72,8 +72,9 @@ export function ProposalActions({
     });
   };
 
+  if (status !== "draft" && !outcome && !message) return null;
   return (
-    <div className="space-y-2">
+    <div className="space-y-2 text-xs">
       {outcome ? <OutcomeAlert outcome={outcome} /> : null}
       {message ? (
         <p className="text-muted-foreground" role="status">

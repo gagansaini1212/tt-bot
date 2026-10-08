@@ -96,10 +96,10 @@ function Decision({ decision, now }: { decision: DecisionView; now: number }) {
         </p>
       ) : null}
       {proposal?.order ? <OrderList proposal={proposal} now={now} /> : null}
-      {proposal?.status === "draft" && !proposal.strategyId ? (
-        <div className="text-xs">
-          <ProposalActions proposalId={proposal.id} status={proposal.status} />
-        </div>
+      {proposal && !proposal.strategyId ? (
+        // Kept mounted after a decision, so its outcome stays in view when
+        // the page refreshes with the new status.
+        <ProposalActions proposalId={proposal.id} status={proposal.status} />
       ) : null}
       <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
         {decision.model
