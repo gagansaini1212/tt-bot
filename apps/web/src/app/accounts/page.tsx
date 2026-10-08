@@ -1,6 +1,11 @@
 import type { Metadata } from "next";
+import { TriangleAlert } from "lucide-react";
 
+import { AccountRefresh } from "@/components/account-refresh";
+import { AllocationChart } from "@/components/allocation-chart";
+import { Holdings } from "@/components/holdings";
 import { PageHeader } from "@/components/page-header";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -9,17 +14,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { getAccountPortfolio } from "@/lib/account-portfolio";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { AccountRefresh } from "@/components/account-refresh";
-import { AccountBalances } from "@/components/account-balances";
-import { getTestnetAccount } from "@/lib/testnet-account";
+  allocationSlices,
+  valuePortfolio,
+  type Portfolio,
+} from "@/lib/portfolio";
 
 export const dynamic = "force-dynamic";
 
@@ -28,12 +28,12 @@ export const metadata: Metadata = {
 };
 
 export default async function AccountsPage() {
-  const testnet = await getTestnetAccount();
+  const { account: testnet, portfolio } = await getAccountPortfolio();
   return (
     <>
       <PageHeader
         action={<AccountRefresh />}
-        description="Balances, orders, and fills reported by your connected Binance Spot Testnet account."
+        description="Asset holdings and allocation in your connected Binance Spot Testnet account, valued in USDT."
         title="Accounts"
       />
 
@@ -59,84 +59,62 @@ export default async function AccountsPage() {
         </CardHeader>
         {testnet.status === "connected" ? (
           <CardContent className="space-y-6">
-            <AccountBalances balances={testnet.snapshot.balances} />
-            <div className="overflow-x-auto">
-              <h2 className="mb-3 text-sm font-medium">
-                Open orders · BTC/USDT and ETH/USDT
-              </h2>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Market / side</TableHead>
-                    <TableHead>Client ID</TableHead>
-                    <TableHead>Price</TableHead>
-                    <TableHead>Filled / quantity</TableHead>
-                    <TableHead>Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {testnet.snapshot.orders.map((order) => (
-                    <TableRow key={`${order.symbol}-${order.orderId}`}>
-                      <TableCell>
-                        {order.symbol} {order.side}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">
-                        {order.clientOrderId}
-                      </TableCell>
-                      <TableCell className="font-mono">{order.price}</TableCell>
-                      <TableCell className="font-mono">
-                        {order.executedQty} / {order.origQty}
-                      </TableCell>
-                      <TableCell>{order.status}</TableCell>
-                    </TableRow>
-                  ))}
-                  {testnet.snapshot.orders.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={5}>No open orders.</TableCell>
-                    </TableRow>
-                  ) : null}
-                </TableBody>
-              </Table>
-            </div>
-            <div className="overflow-x-auto">
-              <h2 className="mb-3 text-sm font-medium">
-                Recent fills · latest 50 across BTC/USDT and ETH/USDT
-              </h2>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Market / side</TableHead>
-                    <TableHead>Quantity</TableHead>
-                    <TableHead>Price</TableHead>
-                    <TableHead>Fee</TableHead>
-                    <TableHead>Time</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {testnet.snapshot.fills.map((fill) => (
-                    <TableRow key={`${fill.symbol}-${fill.id}`}>
-                      <TableCell>
-                        {fill.symbol} {fill.isBuyer ? "BUY" : "SELL"}
-                      </TableCell>
-                      <TableCell className="font-mono">{fill.qty}</TableCell>
-                      <TableCell className="font-mono">{fill.price}</TableCell>
-                      <TableCell>
-                        {fill.commission} {fill.commissionAsset}
-                      </TableCell>
-                      <TableCell>{new Date(fill.time).toISOString()}</TableCell>
-                    </TableRow>
-                  ))}
-                  {testnet.snapshot.fills.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={5}>No recent fills.</TableCell>
-                    </TableRow>
-                  ) : null}
-                </TableBody>
-              </Table>
-            </div>
+            {portfolio.status === "connected" ? (
+              <ValuedHoldings portfolio={portfolio.portfolio} />
+            ) : (
+              <>
+                <Alert>
+                  <TriangleAlert className="text-amber-600 dark:text-amber-400" />
+                  <AlertTitle>USDT prices are unavailable</AlertTitle>
+                  <AlertDescription>
+                    Values and allocation will appear when prices load.{" "}
+                    {portfolio.message}
+                  </AlertDescription>
+                </Alert>
+                <Holdings
+                  holdings={
+                    valuePortfolio(testnet.snapshot.balances, []).holdings
+                  }
+                />
+              </>
+            )}
           </CardContent>
         ) : null}
       </Card>
+    </>
+  );
+}
+
+function ValuedHoldings({ portfolio }: { portfolio: Portfolio }) {
+  const slices = allocationSlices(portfolio);
+  return (
+    <>
+      <section aria-labelledby="allocation-heading">
+        <h2 className="mb-3 text-sm font-medium" id="allocation-heading">
+          Allocation
+        </h2>
+        {slices.length > 0 ? (
+          <AllocationChart slices={slices} total={portfolio.total} />
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            No priced balances to allocate.
+          </p>
+        )}
+      </section>
+      {portfolio.unpriced.length > 0 ? (
+        <Alert>
+          <TriangleAlert className="text-amber-600 dark:text-amber-400" />
+          <AlertTitle>
+            Left out of net worth and allocation:{" "}
+            {portfolio.unpriced.join(", ")}
+          </AlertTitle>
+          <AlertDescription>
+            These assets have no USDT market, inverse market, or market with
+            BTC, ETH or BNB, so they are not priced.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      <Holdings holdings={portfolio.holdings} />
     </>
   );
 }
