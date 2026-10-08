@@ -99,6 +99,8 @@ Dashboard orders and CLI orders are the customer's own instructions, not AI prop
 
 Nothing retries a submission. A crash between steps 2 and 4 leaves the intent `submitting` with its job due, which is how reconciliation (#42) finds it. A consumer of `order_intent.reconcile` jobs looks the order up by client order ID, never resubmits it, and completes the job once the outcome is known.
 
+Each protected entry (ADR 0004, from the rules work in #44) is one order intent. Its holding deadline is a `holding_deadlines` row keyed by `order_intent_id`, one per entry, so a position can hold several.
+
 `exchange_orders` keeps what Binance last reported for each order: the entry, and each exit once Binance sizes it after the entry fills. Placements, status checks and cancels update it. Cancels are audited as `order.cancelled`.
 
 Before PostgreSQL, intents were files in `.testnet-orders/`. The worker refuses to start or place CLI orders while that directory holds any. `pnpm exchange import-journal` copies them in for the dev customer, keeping each outcome; an unconfirmed one becomes `unknown`. Delete the directory afterwards.
