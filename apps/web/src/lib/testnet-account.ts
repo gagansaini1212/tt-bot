@@ -10,6 +10,9 @@ export type TestnetAccountState =
 
 // The web app sends the worker's bearer token to this URL, so it must stay on this machine.
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+const MAX_SNAPSHOT_AGE_MS = 30_000;
+// Covers the Date header's one-second resolution and small clock adjustments.
+const MAX_SNAPSHOT_LEAD_MS = 5_000;
 
 export function parseWorkerUrl(value: string): URL | undefined {
   const url = URL.parse(value);
@@ -25,6 +28,24 @@ export function parseWorkerUrl(value: string): URL | undefined {
   )
     return undefined;
   return url;
+}
+
+/**
+ * Measures the snapshot's age on the worker's clock, read from its response Date header,
+ * so a difference between this machine's clock and the worker's does not matter.
+ * Falls back to this machine's clock if the header is missing.
+ */
+export function snapshotFreshness(
+  capturedAt: string,
+  workerDate: string | null,
+  now: number,
+): "fresh" | "stale" | "future" {
+  const workerNow = Date.parse(workerDate ?? "");
+  const age =
+    (Number.isNaN(workerNow) ? now : workerNow) - Date.parse(capturedAt);
+  if (age > MAX_SNAPSHOT_AGE_MS) return "stale";
+  if (age < -MAX_SNAPSHOT_LEAD_MS) return "future";
+  return "fresh";
 }
 
 export async function getTestnetAccount(): Promise<TestnetAccountState> {
@@ -67,8 +88,23 @@ export async function getTestnetAccount(): Promise<TestnetAccountState> {
     if (data.status !== "connected")
       throw new Error("Unexpected worker response");
     const snapshot = testnetSnapshotSchema.parse(data.snapshot);
-    const age = Date.now() - Date.parse(snapshot.capturedAt);
-    if (age > 30_000 || age < -5_000) throw new Error("Stale snapshot");
+    const freshness = snapshotFreshness(
+      snapshot.capturedAt,
+      response.headers.get("date"),
+      Date.now(),
+    );
+    if (freshness === "stale")
+      return {
+        status: "unavailable",
+        message:
+          "The execution worker is running, but its account snapshot is more than 30 seconds old. Check the worker's connection to Binance Spot Testnet, then refresh.",
+      };
+    if (freshness === "future")
+      return {
+        status: "unavailable",
+        message:
+          "The execution worker is running, but its account snapshot is dated in the future. Check the system clock on the machine running the worker, then refresh.",
+      };
     return { status: "connected", snapshot };
   } catch {
     return {
