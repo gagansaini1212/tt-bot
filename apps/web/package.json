@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "check": "tsc --noEmit",
+    "check": "next typegen && tsc --noEmit",
     "start": "next start",
     "lint": "eslint",
     "test": "tsx --conditions=react-server --test \"src/**/*.test.ts\""
