@@ -10,6 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Strategies" };
 
@@ -30,7 +31,7 @@ export default function StrategiesPage() {
             holding deadlines still need to be implemented.
           </CardDescription>
           <Link
-            className={`${buttonVariants({ variant: "outline" })} mt-4 w-fit`}
+            className={cn(buttonVariants({ variant: "outline" }), "mt-4 w-fit")}
             href="/accounts"
           >
             View exchange account
