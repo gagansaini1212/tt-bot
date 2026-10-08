@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  checks:
+    name: Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Installs the pnpm version from package.json's packageManager field.
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm format:check
+
+      # `pnpm build` without `eve build`. eve fetches AI Gateway's public model
+      # catalog (no credentials) to look up the agent model's context window, so
+      # the agent build needs network beyond the package install. CI skips it;
+      # build the agent locally with `pnpm build:agent`.
+      - name: pnpm -r build (skips eve build)
+        run: pnpm -r --if-present build
+
+      - run: pnpm check
+
+      - run: pnpm test
+
+      - run: pnpm --filter @crypto-trading/web lint

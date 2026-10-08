@@ -45,11 +45,14 @@ The assistant needs a model connection before it can answer. Run `pnpm dev:agent
 ## Verify
 
 ```bash
+pnpm format:check
 pnpm check
 pnpm test
 pnpm --filter @crypto-trading/web lint
 pnpm build
 ```
+
+CI runs the same checks on pull requests and pushes to `main`, except `eve build`, which fetches AI Gateway's model catalog.
 
 ## Repository layout
 
