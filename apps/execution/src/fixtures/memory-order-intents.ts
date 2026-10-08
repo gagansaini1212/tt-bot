@@ -1,7 +1,9 @@
+import Decimal from "decimal.js";
 import { protectedLeg, type TestnetOrder } from "@crypto-trading/exchanges";
 import type { AccountScope } from "../accounts";
 import {
   clientOrderIdOf,
+  SETTLES_FROM,
   type OrderIntent,
   type OrderIntentStore,
   type Settlement,
@@ -41,11 +43,8 @@ export class MemoryOrderIntents implements OrderIntentStore {
   ) {
     const intent = this.#owned(scope, clientOrderId);
     if (!intent) return;
-    const from =
-      settlement.status === "acknowledged"
-        ? ["submitting", "unknown"]
-        : ["submitting"];
-    if (from.includes(intent.status)) intent.status = settlement.status;
+    if (SETTLES_FROM[settlement.status].includes(intent.status))
+      intent.status = settlement.status;
     if (settlement.status === "acknowledged" && settlement.orders)
       await this.recordOrders(scope, settlement.orders);
   }
@@ -74,7 +73,7 @@ export class MemoryOrderIntents implements OrderIntentStore {
   ) {
     for (const order of orders) {
       if (event) this.cancelled.push(order);
-      if (!/[1-9]/.test(order.origQty)) continue;
+      if (new Decimal(order.origQty).isZero()) continue;
       const intent =
         protectedLeg(order.clientOrderId)?.listClientOrderId ??
         order.clientOrderId;

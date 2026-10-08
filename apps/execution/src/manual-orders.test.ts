@@ -356,3 +356,13 @@ test("an order whose limits cannot be read is not sent", async () => {
   assert.match(outcome.message, /nothing was sent/);
   assert.equal(f.calls.place, 0);
 });
+
+test("an unexpected error after sending leaves the outcome unknown", async () => {
+  const f = desk();
+  f.exchange.placeProtectedEntry = async () => {
+    throw new TypeError("unparseable response");
+  };
+  await assert.rejects(f.desk.place(limit("ct_odd")), /unparseable/);
+  assert.equal(f.intent("ct_odd")?.status, "unknown");
+  assert.equal((await f.desk.place(limit("ct_odd"))).status, "duplicate");
+});

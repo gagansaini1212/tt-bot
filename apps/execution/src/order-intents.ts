@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   withCustomerScope,
   type Database,
+  type JSONValue,
   type Transaction,
 } from "@crypto-trading/database";
 import {
@@ -107,7 +108,8 @@ export interface OrderIntentStore {
   ): Promise<void>;
 }
 
-const SETTLES_FROM: Record<Settlement["status"], OrderIntentStatus[]> = {
+/** The statuses each settlement may replace. */
+export const SETTLES_FROM: Record<Settlement["status"], OrderIntentStatus[]> = {
   acknowledged: ["submitting", "unknown"],
   rejected: ["submitting"],
   unknown: ["submitting"],
@@ -305,7 +307,7 @@ function audit(
   }: {
     actor: "customer" | "execution_worker" | "system";
     subjectType?: string;
-    payload: Record<string, unknown>;
+    payload: Record<string, JSONValue>;
   },
 ) {
   return tx`
@@ -315,7 +317,7 @@ function audit(
       ${scope.customerId}, ${actor},
       ${actor === "customer" ? scope.customerId : "execution-worker"},
       ${eventType}, ${subjectType}, ${subjectId},
-      ${tx.json({ exchangeAccountId: scope.exchangeAccountId, ...payload } as never)}
+      ${tx.json({ exchangeAccountId: scope.exchangeAccountId, ...payload })}
     )
   `;
 }

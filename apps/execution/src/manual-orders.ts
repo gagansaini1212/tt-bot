@@ -289,7 +289,10 @@ export class ManualOrderDesk {
             "Binance rejected the order. Nothing was placed.",
           );
         }
-        if (!(error instanceof BinanceTestnetError)) throw error;
+        if (!(error instanceof BinanceTestnetError)) {
+          await this.#settle(scope, id, { status: "unknown" });
+          throw error;
+        }
         // Never resubmit. Look the order up by its client ID instead.
         list = await this.#find(id).catch(() => undefined);
       }
@@ -327,6 +330,21 @@ export class ManualOrderDesk {
     } catch {
       console.error(
         `Could not record Binance's answer for ${listClientOrderId}. Its intent stays due for reconciliation.`,
+      );
+    }
+  }
+
+  /** Keeps Binance's report of each order. A failure leaves only a log line. */
+  async #recordOrders(
+    scope: AccountScope,
+    orders: TestnetOrder[],
+    event?: "order.cancelled",
+  ) {
+    try {
+      await this.#intents.recordOrders(scope, orders, event);
+    } catch {
+      console.error(
+        `Could not record Binance's report of ${orders.map((order) => order.clientOrderId).join(", ")}.`,
       );
     }
   }
@@ -448,7 +466,7 @@ export class ManualOrderDesk {
         entry.instrument,
         clientOrderId,
       );
-      await this.#intents.recordOrders(scope, [read]).catch(() => {});
+      await this.#recordOrders(scope, [read]);
       return read;
     };
     const base = { listClientOrderId: entry.listClientOrderId };
@@ -574,9 +592,7 @@ export class ManualOrderDesk {
         );
       }
       this.#onChange();
-      await this.#intents
-        .recordOrders(scope, cancelled, "order.cancelled")
-        .catch(() => {});
+      await this.#recordOrders(scope, cancelled, "order.cancelled");
       return {
         status: "cancelled",
         unprotectedQuantity,

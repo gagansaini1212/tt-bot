@@ -29,10 +29,8 @@ export const TESTNET_EXCHANGE_ACCOUNT_ID = DEV_EXCHANGE_ACCOUNT_ID;
  * refused. Before the first lookup it checks that row-level security applies
  * to the worker's database role at all.
  */
-export function accountResolver(
-  database: Database,
-  exchangeAccountId = TESTNET_EXCHANGE_ACCOUNT_ID,
-): AccountResolver {
+export function accountResolver(database: Database): AccountResolver {
+  const exchangeAccountId = TESTNET_EXCHANGE_ACCOUNT_ID;
   let secured: Promise<void> | undefined;
   let lastLogged: string | undefined;
   return async (customerId) => {
@@ -56,7 +54,7 @@ export function accountResolver(
       return account ? { customerId, exchangeAccountId } : undefined;
     } catch (error) {
       // Refreshing pages retry every few seconds, so say it once.
-      const message = `PostgreSQL is unavailable to the execution worker: ${error instanceof Error ? error.message : "unknown error"}`;
+      const message = `The execution worker cannot use PostgreSQL: ${error instanceof Error ? error.message : "unknown error"}`;
       if (message !== lastLogged) console.error(message);
       lastLogged = message;
       throw error;

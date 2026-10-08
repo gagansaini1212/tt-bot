@@ -5,6 +5,8 @@ export { DEV_CUSTOMER_ID, DEV_EXCHANGE_ACCOUNT_ID } from "./dev-seed";
 
 export type Database = Sql<Record<string, never>>;
 export type Transaction = postgres.TransactionSql<Record<string, never>>;
+/** What `transaction.json()` accepts. */
+export type JSONValue = postgres.JSONValue;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
