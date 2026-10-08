@@ -31,6 +31,10 @@ const rules: SymbolRules = {
   minNotional: "5.00000000",
   maxNotional: "9000000.00000000",
 };
+const account = {
+  customerId: "0b8f9a62-3f5e-4c1d-8a7b-1c2d3e4f5a01",
+  exchangeAccountId: "0b8f9a62-3f5e-4c1d-8a7b-1c2d3e4f5a02",
+};
 const config = {
   allowedInstruments: ["BTC-USDT" as const],
   allocation: "300",
@@ -43,7 +47,7 @@ function ticket(
 ): ManualOrderTicket {
   return {
     capturedAt: "2027-01-15T08:00:00.000Z",
-    policy: manualTestnetPolicy(config, exposure),
+    policy: manualTestnetPolicy(config, exposure, account),
     maxOrderNotional: config.maxOrderNotional,
     marketSlippage: config.marketSlippage,
     freeUsdt: "1000",
@@ -86,10 +90,13 @@ test("a limit entry inside every limit passes all checks as a resting GTC order"
 });
 
 test("account limits come from authorizeTradeProposal and its explicit policy", () => {
-  const policy = manualTestnetPolicy(config, {
-    committedCapital: "0",
-    reservedBudget: "0",
-  });
+  const policy = manualTestnetPolicy(
+    config,
+    { committedCapital: "0", reservedBudget: "0" },
+    account,
+  );
+  assert.equal(policy.customerId, account.customerId);
+  assert.equal(policy.exchangeAccountId, account.exchangeAccountId);
   assert.equal(policy.tradingMode, "simulation");
   assert.equal(policy.liveTradingEnabled, false);
   assert.equal(policy.maxLeverage, 1);

@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import Decimal from "decimal.js";
-import { z } from "zod";
 import {
   binanceSymbol,
   BinanceTestnetError,
@@ -25,8 +24,14 @@ import {
   type TestnetInstrument,
   type TestnetOrder,
   type TestnetOrderList,
+  type TestnetOrderListReport,
 } from "@crypto-trading/exchanges";
-import type { OrderJournal } from "./order-journal";
+import type { AccountScope } from "./accounts";
+import {
+  UNCONFIRMED_GRACE_MS,
+  type OrderIntentStore,
+  type Settlement,
+} from "./order-intents";
 
 export type ManualOrderExchange = Pick<
   BinanceSpotTestnet,
@@ -100,22 +105,22 @@ export function loadManualTradingConfig(
   };
 }
 
-const UNCONFIRMED_GRACE_MS = 60_000;
 // Binance's code for an order or order list that does not exist.
 const NO_SUCH_ORDER = -2013;
-const journalEntrySchema = z.object({ entry: z.object({ price: z.string() }) });
 const RULES_TTL_MS = 5 * 60_000;
 
 /**
  * Places, looks up and cancels dashboard orders. The browser's preview is
  * advisory: every placement re-runs the account limits, the per-order cap and
  * Binance's filters against fresh account data. Placements and cancels run
- * one at a time, so two orders cannot both claim the same allocation.
+ * one at a time, so two orders cannot both claim the same allocation. Each
+ * call acts for the customer who owns `scope`'s exchange account, and keeps
+ * its order intents in that customer's scope.
  */
 export class ManualOrderDesk {
   readonly #exchange: ManualOrderExchange;
   readonly #config: ManualTradingConfig;
-  readonly #journal: OrderJournal;
+  readonly #intents: OrderIntentStore;
   readonly #now: () => Date;
   readonly #onChange: () => void;
   #rules?: { fetchedAt: number; value: SymbolRules[] };
@@ -124,14 +129,14 @@ export class ManualOrderDesk {
   constructor(options: {
     exchange: ManualOrderExchange;
     config: ManualTradingConfig;
-    journal: OrderJournal;
+    intents: OrderIntentStore;
     now?: () => Date;
     // Called after anything that may have changed the account.
     onChange?: () => void;
   }) {
     this.#exchange = options.exchange;
     this.#config = options.config;
-    this.#journal = options.journal;
+    this.#intents = options.intents;
     this.#now = options.now ?? (() => new Date());
     this.#onChange = options.onChange ?? (() => {});
   }
@@ -153,7 +158,7 @@ export class ManualOrderDesk {
   }
 
   /** Fresh account limits, balances and market rules for an order. */
-  async ticket(): Promise<ManualOrderTicket> {
+  async ticket(scope: AccountScope): Promise<ManualOrderTicket> {
     const [account, orders, rules, asks] = await Promise.all([
       this.#exchange.getAccount(),
       Promise.all(
@@ -176,19 +181,17 @@ export class ManualOrderDesk {
         ),
       ).then((entries) => new Map(entries)),
     ]);
-    const entryPrices = new Map<string, string>();
-    for (const order of orders) {
-      const leg = protectedLeg(order.clientOrderId);
-      if (!leg || entryPrices.has(leg.listClientOrderId)) continue;
-      const record = journalEntrySchema.safeParse(
-        await this.#journal.read(leg.listClientOrderId),
-      );
-      if (record.success)
-        entryPrices.set(leg.listClientOrderId, record.data.entry.price);
-    }
+    const entryPrices = await this.#intents.entryPrices(scope, [
+      ...new Set(
+        orders.flatMap(
+          (order) => protectedLeg(order.clientOrderId)?.listClientOrderId ?? [],
+        ),
+      ),
+    ]);
     const policy = manualTestnetPolicy(
       this.#config,
       manualExposure(orders, (id) => entryPrices.get(id)),
+      scope,
     );
     return {
       capturedAt: this.#now().toISOString(),
@@ -207,7 +210,7 @@ export class ManualOrderDesk {
     };
   }
 
-  place(raw: unknown): Promise<ManualOrderOutcome> {
+  place(scope: AccountScope, raw: unknown): Promise<ManualOrderOutcome> {
     const parsed = manualOrderRequestSchema.safeParse(raw);
     if (!parsed.success)
       return Promise.resolve({
@@ -220,8 +223,15 @@ export class ManualOrderDesk {
     return this.#exclusive(async () => {
       let ticket: ManualOrderTicket;
       try {
-        ticket = await this.ticket();
+        ticket = await this.ticket(scope);
       } catch (error) {
+        // Such as the database failing while it reads entry prices.
+        if (!(error instanceof BinanceTestnetError))
+          return {
+            status: "rejected",
+            message:
+              "The worker could not check this order, so nothing was sent. Check the execution worker and try again.",
+          };
         return failure(error, "Binance rejected the account lookup.");
       }
       const plan = planManualOrder(request, ticket, this.#now(), {
@@ -240,20 +250,28 @@ export class ManualOrderDesk {
       } catch (error) {
         return failure(error, "Binance rejected the entry. Nothing was sent.");
       }
-      const intent = {
-        kind: "protected_entry",
-        entry,
-        status: "submission_pending",
-        createdAt: this.#now().toISOString(),
-      };
-      if (!(await this.#journal.reserve(id, intent)))
+      let recorded: boolean;
+      try {
+        recorded = await this.#intents.record(
+          scope,
+          { kind: "protected_entry", entry },
+          "dashboard",
+        );
+      } catch {
+        return {
+          status: "rejected",
+          message:
+            "The order could not be saved, so nothing was sent. Check the execution worker's database and try again.",
+        };
+      }
+      if (!recorded)
         return {
           status: "duplicate",
           listClientOrderId: id,
           message:
             "This order ID was used before, so it was not sent again. Check its status before placing another order.",
         };
-      let list: TestnetOrderList | undefined;
+      let list: TestnetOrderList | TestnetOrderListReport | undefined;
       try {
         list = await this.#exchange.placeProtectedEntry(entry);
       } catch (error) {
@@ -262,9 +280,10 @@ export class ManualOrderDesk {
           error instanceof BinanceTestnetError &&
           (error.kind === "rejected" || error.kind === "rate_limited")
         ) {
-          await this.#journal
-            .update(id, { ...intent, status: "rejected" })
-            .catch(() => {});
+          await this.#settle(scope, id, {
+            status: "rejected",
+            reason: error.message,
+          });
           return failure(
             error,
             "Binance rejected the order. Nothing was placed.",
@@ -275,44 +294,62 @@ export class ManualOrderDesk {
         list = await this.#find(id).catch(() => undefined);
       }
       this.#onChange();
-      if (!list)
+      if (!list) {
+        await this.#settle(scope, id, { status: "unknown" });
         return {
           status: "unknown",
           listClientOrderId: id,
           message:
             "Binance did not confirm the order, so it may or may not have been placed. Check its status before placing another order.",
         };
-      // The intent already blocks this ID, so a failed update is safe.
-      await this.#journal
-        .update(id, {
-          ...intent,
-          status: "acknowledged",
-          orderListId: list.orderListId,
-        })
-        .catch(() => {});
-      return this.#describe(entry);
+      }
+      await this.#settle(scope, id, {
+        status: "acknowledged",
+        orderListId: list.orderListId,
+        orders: "orderReports" in list ? list.orderReports : undefined,
+      });
+      return this.#describe(scope, entry);
     });
   }
 
+  /**
+   * Records Binance's answer. The saved intent already blocks its client ID,
+   * so a failure here cannot lead to a second submission; an unsettled intent
+   * stays due for reconciliation.
+   */
+  async #settle(
+    scope: AccountScope,
+    listClientOrderId: string,
+    settlement: Settlement,
+  ) {
+    try {
+      await this.#intents.settle(scope, listClientOrderId, settlement);
+    } catch {
+      console.error(
+        `Could not record Binance's answer for ${listClientOrderId}. Its intent stays due for reconciliation.`,
+      );
+    }
+  }
+
   /** Looks an order up by the client ID it was submitted with. */
-  async status(listClientOrderId: unknown): Promise<ManualOrderOutcome> {
+  async status(
+    scope: AccountScope,
+    listClientOrderId: unknown,
+  ): Promise<ManualOrderOutcome> {
     const id = listClientOrderIdSchema.safeParse(listClientOrderId);
     if (!id.success)
       return { status: "invalid", message: "The order ID is invalid." };
     // Waits for a placement still in flight, so it cannot report that order
     // as missing while it is being sent.
-    return this.#exclusive(() => this.#status(id.data));
+    return this.#exclusive(() => this.#status(scope, id.data));
   }
 
-  async #status(listClientOrderId: string): Promise<ManualOrderOutcome> {
-    const record = z
-      .object({
-        entry: protectedEntrySchema,
-        status: z.string(),
-        createdAt: z.iso.datetime(),
-      })
-      .safeParse(await this.#journal.read(listClientOrderId));
-    if (!record.success)
+  async #status(
+    scope: AccountScope,
+    listClientOrderId: string,
+  ): Promise<ManualOrderOutcome> {
+    const intent = await this.#intents.find(scope, listClientOrderId);
+    if (intent?.order.kind !== "protected_entry")
       return {
         status: "not_found",
         listClientOrderId,
@@ -331,11 +368,12 @@ export class ManualOrderDesk {
     }
     // Binance can still be executing a submission it did not confirm, so a
     // recent one is not called missing yet.
+    const unconfirmed =
+      intent.status === "submitting" || intent.status === "unknown";
     if (
       !list &&
-      record.data.status === "submission_pending" &&
-      this.#now().getTime() - Date.parse(record.data.createdAt) <
-        UNCONFIRMED_GRACE_MS
+      unconfirmed &&
+      this.#now().getTime() - intent.createdAt.getTime() < UNCONFIRMED_GRACE_MS
     )
       return {
         status: "unknown",
@@ -343,6 +381,8 @@ export class ManualOrderDesk {
         message:
           "Binance has no record of this order yet. Check again in a minute before placing another order.",
       };
+    // The intent stays as it is: its ID remains used, and only a
+    // reconciliation may decide that an unknown outcome was a failure.
     if (!list)
       return {
         status: "not_found",
@@ -350,7 +390,12 @@ export class ManualOrderDesk {
         message:
           "Binance has no order with this ID, so it was not placed. You can place a new order.",
       };
-    return this.#describe(record.data.entry);
+    if (unconfirmed)
+      await this.#settle(scope, listClientOrderId, {
+        status: "acknowledged",
+        orderListId: list.orderListId,
+      });
+    return this.#describe(scope, intent.order.entry);
   }
 
   async #find(listClientOrderId: string) {
@@ -374,9 +419,12 @@ export class ManualOrderDesk {
    * after Binance accepted the order, so a failed read must never look like a
    * failed placement.
    */
-  async #describe(entry: ProtectedEntry): Promise<ManualOrderOutcome> {
+  async #describe(
+    scope: AccountScope,
+    entry: ProtectedEntry,
+  ): Promise<ManualOrderOutcome> {
     try {
-      return await this.#read(entry);
+      return await this.#read(scope, entry);
     } catch {
       return {
         listClientOrderId: entry.listClientOrderId,
@@ -387,11 +435,22 @@ export class ManualOrderDesk {
     }
   }
 
-  async #read(entry: ProtectedEntry): Promise<ManualOrderOutcome> {
+  async #read(
+    scope: AccountScope,
+    entry: ProtectedEntry,
+  ): Promise<ManualOrderOutcome> {
     const legs = protectedLegIds(entry.listClientOrderId);
     const amount = (value: string) => new Decimal(value).toFixed();
-    const order = (clientOrderId: string) =>
-      this.#exchange.getOrder(entry.instrument, clientOrderId);
+    // Keeps each leg's latest state. The order is on Binance either way, so
+    // a failed write must not hide that.
+    const order = async (clientOrderId: string) => {
+      const read = await this.#exchange.getOrder(
+        entry.instrument,
+        clientOrderId,
+      );
+      await this.#intents.recordOrders(scope, [read]).catch(() => {});
+      return read;
+    };
     const base = { listClientOrderId: entry.listClientOrderId };
     const working = await order(legs.entry);
     if (working.status === "NEW")
@@ -458,7 +517,7 @@ export class ManualOrderDesk {
     };
   }
 
-  cancel(raw: unknown): Promise<ManualOrderOutcome> {
+  cancel(scope: AccountScope, raw: unknown): Promise<ManualOrderOutcome> {
     const parsed = manualCancelRequestSchema.safeParse(raw);
     if (!parsed.success)
       return Promise.resolve({
@@ -490,17 +549,22 @@ export class ManualOrderDesk {
           unprotectedQuantity,
           message: `Cancelling this order list leaves ${unprotectedQuantity} without a take profit or stop loss. Confirm to cancel anyway.`,
         };
+      let cancelled: TestnetOrder[];
       try {
-        if (target.orderListId >= 0)
-          await this.#exchange.cancelOrderList(
-            request.instrument,
-            target.orderListId,
-          );
-        else
-          await this.#exchange.cancelOrderById(
-            request.instrument,
-            target.orderId,
-          );
+        cancelled =
+          target.orderListId >= 0
+            ? (
+                await this.#exchange.cancelOrderList(
+                  request.instrument,
+                  target.orderListId,
+                )
+              ).orderReports
+            : [
+                await this.#exchange.cancelOrderById(
+                  request.instrument,
+                  target.orderId,
+                ),
+              ];
       } catch (error) {
         this.#onChange();
         return failure(
@@ -510,6 +574,9 @@ export class ManualOrderDesk {
         );
       }
       this.#onChange();
+      await this.#intents
+        .recordOrders(scope, cancelled, "order.cancelled")
+        .catch(() => {});
       return {
         status: "cancelled",
         unprotectedQuantity,

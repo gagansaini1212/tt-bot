@@ -7,7 +7,7 @@ import {
 import { z } from "zod";
 import { handler } from "../http";
 import { loadManualTradingConfig, ManualOrderDesk } from "../manual-orders";
-import { OrderJournal } from "../order-journal";
+import type { OrderIntentStore } from "../order-intents";
 
 /**
  * Dashboard orders: a ticket for the preview, placement, lookup by client ID
@@ -18,13 +18,14 @@ export function orders({
   env,
   now,
   onChange,
+  intents,
 }: {
   env: NodeJS.ProcessEnv;
   now: () => number;
   onChange: () => void;
+  intents: OrderIntentStore;
 }) {
   const loaded = loadManualTradingConfig(env);
-  const journal = new OrderJournal(env.TESTNET_ORDER_JOURNAL_DIR);
   let desk: ManualOrderDesk | undefined;
   // The exchange is the same for every request; the desk keeps its queue.
   const deskFor = (exchange: BinanceSpotTestnet) => {
@@ -32,7 +33,7 @@ export function orders({
     desk ??= new ManualOrderDesk({
       exchange,
       config: loaded.config,
-      journal,
+      intents,
       now: () => new Date(now()),
       onChange,
     });
@@ -43,42 +44,44 @@ export function orders({
   return {
     ticket: handler({
       query: z.strictObject({}),
-      async handle({ exchange }) {
+      async handle({ exchange, account }) {
         const desk = deskFor(exchange);
         return desk
-          ? { status: "connected", ticket: await desk.ticket() }
+          ? { status: "connected", ticket: await desk.ticket(account) }
           : { status: "connected", disabled: disabledMessage };
       },
     }),
     place: handler({
       query: z.strictObject({}),
       body: manualOrderRequestSchema,
-      async handle({ exchange, body }) {
+      async handle({ exchange, body, account }) {
         const desk = deskFor(exchange);
         return {
           status: "connected",
-          outcome: desk ? await desk.place(body) : disabled,
+          outcome: desk ? await desk.place(account, body) : disabled,
         };
       },
     }),
     status: handler({
       query: z.strictObject({ listClientOrderId: listClientOrderIdSchema }),
-      async handle({ exchange, query }) {
+      async handle({ exchange, query, account }) {
         const desk = deskFor(exchange);
         return {
           status: "connected",
-          outcome: desk ? await desk.status(query.listClientOrderId) : disabled,
+          outcome: desk
+            ? await desk.status(account, query.listClientOrderId)
+            : disabled,
         };
       },
     }),
     cancel: handler({
       query: z.strictObject({}),
       body: manualCancelRequestSchema,
-      async handle({ exchange, body }) {
+      async handle({ exchange, body, account }) {
         const desk = deskFor(exchange);
         return {
           status: "connected",
-          outcome: desk ? await desk.cancel(body) : disabled,
+          outcome: desk ? await desk.cancel(account, body) : disabled,
         };
       },
     }),

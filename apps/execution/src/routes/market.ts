@@ -11,7 +11,7 @@ import {
 } from "@crypto-trading/exchanges";
 import { z } from "zod";
 import { createCache } from "../cache";
-import { handler } from "../http";
+import { publicHandler } from "../http";
 
 export const DEFAULT_KLINE_LIMIT = 500;
 
@@ -30,7 +30,7 @@ function limit(max: number) {
  */
 export function tickers(now: () => number) {
   const cache = createCache<TestnetTicker[]>(5_000, now);
-  return handler({
+  return publicHandler({
     query: z.strictObject({
       symbols: z
         .string()
@@ -54,7 +54,7 @@ export function tickers(now: () => number) {
 /** The latest `limit` candles, oldest first, cached for up to 5 seconds. */
 export function klines(now: () => number) {
   const cache = createCache<TestnetKline[]>(5_000, now);
-  return handler({
+  return publicHandler({
     query: z.strictObject({
       instrument: testnetInstrumentSchema,
       interval: klineIntervalSchema,
@@ -75,7 +75,7 @@ export function klines(now: () => number) {
 /** The best `limit` bids and asks, cached for up to 1 second. */
 export function depth(now: () => number) {
   const cache = createCache<TestnetDepth>(1_000, now);
-  return handler({
+  return publicHandler({
     query: z.strictObject({
       instrument: testnetInstrumentSchema,
       limit: limit(MAX_DEPTH_LIMIT),

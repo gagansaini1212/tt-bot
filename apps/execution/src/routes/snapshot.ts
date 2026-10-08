@@ -8,8 +8,9 @@ export function createSnapshotCache(now: () => number) {
 }
 
 /**
- * Balances, open orders and recent fills, cached for up to 10 seconds. Order
- * routes clear the cache, so a placement or cancel shows on the next read.
+ * The account's balances, open orders and recent fills, served only to the
+ * customer who owns it. Cached for up to 10 seconds; order routes clear the
+ * cache, so a placement or cancel shows on the next read.
  */
 export function snapshot(cache: ReturnType<typeof createSnapshotCache>) {
   return handler({

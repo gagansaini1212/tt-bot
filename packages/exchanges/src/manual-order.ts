@@ -84,11 +84,9 @@ export const manualOrderOutcomeSchema = z.object({
 });
 export type ManualOrderOutcome = z.infer<typeof manualOrderOutcomeSchema>;
 
-// Fixed identifiers for the single local manual-trading scope. They grant
-// nothing: every limit comes from the worker's configuration.
-export const MANUAL_TESTNET_SCOPE = {
-  customerId: "6d1f3c52-8b7e-4a51-9a0d-2f4e8c1b7a01",
-  exchangeAccountId: "6d1f3c52-8b7e-4a51-9a0d-2f4e8c1b7a02",
+// Manual orders belong to no strategy, so they share this fixed one. It
+// grants nothing: every limit comes from the worker's configuration.
+export const MANUAL_TESTNET_STRATEGY = {
   strategyId: "6d1f3c52-8b7e-4a51-9a0d-2f4e8c1b7a03",
   strategyVersion: 1,
 } as const;
@@ -103,12 +101,16 @@ export const manualTradingConfigSchema = z.object({
 });
 export type ManualTradingConfig = z.infer<typeof manualTradingConfigSchema>;
 
+/** The limits for `account`'s manual orders. */
 export function manualTestnetPolicy(
   config: ManualTradingConfig,
   exposure: { committedCapital: string; reservedBudget: string },
+  account: { customerId: string; exchangeAccountId: string },
 ): ExecutionPolicy {
   return executionPolicySchema.parse({
-    ...MANUAL_TESTNET_SCOPE,
+    customerId: account.customerId,
+    exchangeAccountId: account.exchangeAccountId,
+    ...MANUAL_TESTNET_STRATEGY,
     // Testnet funds are virtual, so this is simulated trading. Live trading
     // stays disabled.
     tradingMode: "simulation",

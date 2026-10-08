@@ -2,16 +2,46 @@ import { createServer, type RequestListener, type Server } from "node:http";
 import { readFile } from "node:fs/promises";
 import Decimal from "decimal.js";
 import {
+  createDatabase,
+  DEV_CUSTOMER_ID,
+  type Database,
+} from "@crypto-trading/database";
+import {
   BinanceSpotTestnet,
+  BinanceTestnetError,
   limitOrderSchema,
   testnetInstrumentSchema,
+  type TestnetOrder,
 } from "@crypto-trading/exchanges";
 import { authorizeTradeProposal } from "@crypto-trading/domain";
+import { accountResolver } from "./accounts";
 import { createRequestListener, safeError } from "./http";
-import { OrderJournal } from "./order-journal";
+import { assertNoJournal, importJournal } from "./legacy-journal";
+import { PostgresOrderIntents, type Settlement } from "./order-intents";
 import { createRoutes } from "./routes";
 
 export { authorizeTradeProposal };
+
+// Order intents and exchange accounts are in PostgreSQL.
+let database: Database | undefined;
+function openDatabase() {
+  if (!process.env.DATABASE_URL)
+    throw new Error(
+      "Set DATABASE_URL in .env to the execution worker's database role. See .env.example and docs/database.md.",
+    );
+  database ??= createDatabase(process.env.DATABASE_URL);
+  return database;
+}
+
+/** CLI commands act for the dev customer, who owns the testnet account. */
+async function cliScope() {
+  const scope = await accountResolver(openDatabase())(DEV_CUSTOMER_ID);
+  if (!scope)
+    throw new Error(
+      "The dev customer's testnet exchange account is missing. Run pnpm db:seed.",
+    );
+  return scope;
+}
 
 async function main() {
   if (
@@ -31,7 +61,7 @@ async function main() {
   const [command = "serve", ...args] = process.argv.slice(2);
   if (command === "help") {
     console.info(
-      "Commands: serve, check, balances, orders, fills, order <instrument> <client-id>, test-order|place-order <instrument> <BUY|SELL> <quantity> <price> <client-id>, cancel <instrument> <client-id>",
+      "Commands: serve, check, balances, orders, fills, order <instrument> <client-id>, test-order|place-order <instrument> <BUY|SELL> <quantity> <price> <client-id>, cancel <instrument> <client-id>, import-journal",
     );
     return;
   }
@@ -71,10 +101,13 @@ async function main() {
     const port = Number(process.env.EXECUTION_PORT ?? "4001");
     if (!Number.isInteger(port) || port < 1024 || port > 65535)
       throw new Error("EXECUTION_PORT must be between 1024 and 65535.");
+    const db = openDatabase();
+    await assertNoJournal(process.env);
     const handle = createRequestListener({
       token,
       exchange,
-      routes: createRoutes(),
+      accounts: accountResolver(db),
+      routes: createRoutes({ intents: new PostgresOrderIntents(db) }),
     });
     const servers = [await listen(handle, port, "127.0.0.1")];
     // `localhost` usually resolves to [::1] first, so hold it too: no other local
@@ -94,9 +127,26 @@ async function main() {
     const shutdown = () =>
       Promise.all(
         servers.map((server) => new Promise((closed) => server.close(closed))),
-      ).then(() => process.exit(0));
+      )
+        .then(() => db.end({ timeout: 5 }))
+        .then(() => process.exit(0));
     process.once("SIGINT", shutdown);
     process.once("SIGTERM", shutdown);
+    return;
+  }
+  if (command === "import-journal") {
+    if (args.length) throw new Error("Usage: import-journal");
+    const { directory, found, imported } = await importJournal(
+      process.env,
+      new PostgresOrderIntents(openDatabase()),
+      await cliScope(),
+    );
+    console.info(
+      found
+        ? `Imported ${imported} of the ${found} order intents in ${directory}; the others were already in the database. Check them, then delete that directory.`
+        : `${directory} holds no order intents.`,
+    );
+    await database?.end();
     return;
   }
   if (!exchange)
@@ -167,28 +217,45 @@ async function main() {
         break;
       }
       // Record intent before sending. Never submit this ID twice, even after restart.
-      const journal = new OrderJournal();
-      const intent = {
-        order,
-        status: "submission_pending",
-        createdAt: new Date().toISOString(),
-      };
-      if (!(await journal.reserve(order.clientOrderId, intent)))
+      await assertNoJournal(process.env);
+      const intents = new PostgresOrderIntents(openDatabase());
+      const scope = await cliScope();
+      const id = order.clientOrderId;
+      if (!(await intents.record(scope, { kind: "limit_order", order }, "cli")))
         throw new Error(
           "Could not record a new order intent. If this client ID was used already, query it with the order command before taking further action.",
         );
-      result = await exchange.placeLimitOrder(order);
-      await journal.update(order.clientOrderId, {
-        order,
-        status: "acknowledged",
-        result,
-      });
+      // The intent already blocks the ID, so a failed write only leaves it
+      // due for reconciliation.
+      const settle = (settlement: Settlement) =>
+        intents
+          .settle(scope, id, settlement)
+          .catch(() =>
+            console.error(`Could not record Binance's answer for ${id}.`),
+          );
+      let placed: TestnetOrder;
+      try {
+        placed = await exchange.placeLimitOrder(order);
+      } catch (error) {
+        const refused =
+          error instanceof BinanceTestnetError &&
+          (error.kind === "rejected" || error.kind === "rate_limited");
+        await settle(
+          refused
+            ? { status: "rejected", reason: error.message }
+            : { status: "unknown" },
+        );
+        throw error;
+      }
+      await settle({ status: "acknowledged", orders: [placed] });
+      result = placed;
       break;
     }
     default:
       throw new Error("Unknown execution command. Run pnpm exchange help.");
   }
   console.info(JSON.stringify(result, null, 2));
+  await database?.end();
 }
 
 function listen(handle: RequestListener, port: number, host: string) {
@@ -202,7 +269,7 @@ function listen(handle: RequestListener, port: number, host: string) {
   });
 }
 
-main().catch((error: unknown) => {
+main().catch(async (error: unknown) => {
   // Only our controlled messages are safe to print; validation/transport errors may contain inputs.
   console.error(
     error instanceof Error && error.constructor === Error
@@ -210,4 +277,5 @@ main().catch((error: unknown) => {
       : safeError(error),
   );
   process.exitCode = 1;
+  await database?.end();
 });

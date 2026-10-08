@@ -1,17 +1,23 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { once } from "node:events";
 import { test, type TestContext } from "node:test";
 import { z } from "zod";
 import { BinanceSpotTestnet } from "@crypto-trading/exchanges";
+import type { AccountResolver } from "./accounts";
+import { MemoryOrderIntents } from "./fixtures/memory-order-intents";
 import { createRequestListener, handler, route, type Route } from "./http";
 import { createRoutes } from "./routes";
 
 const token = "http-test-token-at-least-32-characters";
+// The customer who owns the worker's exchange account.
+const owner = {
+  customerId: "5a3b2c1d-0e9f-4a8b-9c7d-6e5f4a3b2c01",
+  exchangeAccountId: "5a3b2c1d-0e9f-4a8b-9c7d-6e5f4a3b2c02",
+};
+const ownerOnly: AccountResolver = async (customerId) =>
+  customerId === owner.customerId ? owner : undefined;
 const ticker = (symbol: string) => ({
   symbol,
   priceChange: "-1.50000000",
@@ -91,14 +97,22 @@ async function serve(
   {
     exchange,
     routes,
-  }: { exchange?: BinanceSpotTestnet; routes?: Route[] } = {},
+    accounts = ownerOnly,
+  }: {
+    exchange?: BinanceSpotTestnet;
+    routes?: Route[];
+    accounts?: AccountResolver;
+  } = {},
 ) {
   let now = 1_800_000_000_000;
   const server = createServer(
     createRequestListener({
       token,
       exchange,
-      routes: routes ?? createRoutes(() => now),
+      accounts,
+      routes:
+        routes ??
+        createRoutes({ intents: new MemoryOrderIntents(), now: () => now }),
     }),
   );
   server.listen(0, "127.0.0.1");
@@ -111,7 +125,11 @@ async function serve(
   const call = (path: string, init: RequestInit = {}) =>
     fetch(`http://127.0.0.1:${port}${path}`, {
       ...init,
-      headers: { Authorization: `Bearer ${token}`, ...init.headers },
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Customer-Id": owner.customerId,
+        ...init.headers,
+      },
     });
   return {
     call,
@@ -336,10 +354,62 @@ test("without an exchange, valid requests report not_configured", async (t) => {
   for (const path of paths)
     assert.deepEqual(await json(path), {
       status: "not_configured",
+      reason: "exchange",
       message:
         "Configure Binance Spot Testnet in the execution service to connect your virtual account.",
     });
   assert.equal((await call("/market/depth?limit=5")).status, 400);
+});
+
+test("customer routes serve only the customer who owns the exchange account", async (t) => {
+  const fake = binance();
+  const { call } = await serve(t, { exchange: fake.exchange });
+  const customerRoutes = ["/snapshot", "/orders/ticket"];
+  for (const path of customerRoutes) {
+    for (const customer of [
+      "",
+      "not-a-uuid",
+      `${owner.customerId}, ${owner.customerId}`,
+    ]) {
+      const response = await call(path, {
+        headers: { "X-Customer-Id": customer },
+      });
+      assert.equal(response.status, 400, `${path} ${customer}`);
+      assert.deepEqual(await response.json(), {
+        status: "invalid_request",
+        message: "Check the customer.",
+      });
+    }
+    const stranger = await call(path, {
+      headers: { "X-Customer-Id": "5a3b2c1d-0e9f-4a8b-9c7d-6e5f4a3b2cff" },
+    });
+    assert.equal(stranger.status, 200);
+    assert.equal((await stranger.json()).reason, "exchange_account");
+  }
+  assert.equal(fake.calls.length, 0);
+  // Market data is public: it needs no customer.
+  const market = await call("/market/tickers", {
+    headers: { "X-Customer-Id": "" },
+  });
+  assert.equal((await market.json()).status, "connected");
+
+  const offline = await serve(t, {
+    exchange: fake.exchange,
+    accounts: async () => {
+      throw new Error("connect ECONNREFUSED");
+    },
+  });
+  for (const path of customerRoutes)
+    assert.deepEqual(await offline.json(path), {
+      status: "not_configured",
+      reason: "database",
+      message:
+        "The execution service cannot use its database. Check its output, then retry.",
+    });
+  assert.equal(
+    fake.calls.filter((url) => url.pathname !== "/api/v3/ticker/24hr").length,
+    0,
+  );
 });
 
 test("exchange failures return 503 with a safe message and are not cached", async (t) => {
@@ -430,7 +500,7 @@ test("order routes stay off until their limits are configured", async (t) => {
   const fake = binance();
   const { call, json } = await serve(t, {
     exchange: fake.exchange,
-    routes: createRoutes(Date.now, {}),
+    routes: createRoutes({ intents: new MemoryOrderIntents(), env: {} }),
   });
   const ticket = await json("/orders/ticket");
   assert.equal(ticket.status, "connected");
@@ -474,8 +544,6 @@ test("order routes take validated POST bodies and refuse other methods", async (
 });
 
 test("a placement runs the worker's checks, clears the snapshot cache and is never sent twice", async (t) => {
-  const journal = await mkdtemp(join(tmpdir(), "http-orders-"));
-  t.after(() => rm(journal, { recursive: true, force: true }));
   let placed = false;
   const list = {
     orderListId: 7,
@@ -566,14 +634,18 @@ test("a placement runs the worker's checks, clears the snapshot cache and is nev
   });
   const { call, json } = await serve(t, {
     exchange: fake.exchange,
-    routes: createRoutes(Date.now, {
-      TESTNET_MANUAL_INSTRUMENTS: "BTC-USDT",
-      TESTNET_MANUAL_ALLOCATION_USDT: "300",
-      TESTNET_MAX_ORDER_NOTIONAL_USDT: "100",
-      TESTNET_ORDER_JOURNAL_DIR: journal,
+    routes: createRoutes({
+      intents: new MemoryOrderIntents(),
+      env: {
+        TESTNET_MANUAL_INSTRUMENTS: "BTC-USDT",
+        TESTNET_MANUAL_ALLOCATION_USDT: "300",
+        TESTNET_MAX_ORDER_NOTIONAL_USDT: "100",
+      },
     }),
   });
   const ticket = await json("/orders/ticket");
+  assert.equal(ticket.ticket.policy.customerId, owner.customerId);
+  assert.equal(ticket.ticket.policy.exchangeAccountId, owner.exchangeAccountId);
   assert.equal(ticket.ticket.policy.tradingMode, "simulation");
   assert.equal(ticket.ticket.policy.liveTradingEnabled, false);
   assert.equal(ticket.ticket.markets[0].bestAsk, "60000.00");
