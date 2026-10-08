@@ -144,14 +144,17 @@ export function assessEntry(observation: EntryObservation): EntryAssessment {
   if (carried) {
     const state = carried === "protection_failed" ? "unprotected" : "exiting";
     if (listOpen)
-      return result(state, "Cancelling what is left of the order list.", {
-        cancelList: true,
-      });
+      return result(
+        state,
+        "The worker is cancelling what is left of its order list, then sells at market.",
+        { cancelList: true },
+      );
     if (filled.isZero())
       return result("not_filled", "Cancelled before anything filled.");
     if (held.isZero()) return result("closed", "Everything it held is sold.");
-    if (selling) return result(state, "Selling at market.");
-    return result(state, "Selling at market.", { sell: held.toFixed() });
+    const sellingNow = "The worker is selling it at market.";
+    if (selling) return result(state, sellingNow);
+    return result(state, sellingNow, { sell: held.toFixed() });
   }
 
   if (isOpen(entry)) {

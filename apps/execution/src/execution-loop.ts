@@ -504,7 +504,11 @@ export class ExecutionLoop {
       {
         ...this.#update(assessment, facts.firstFillAt),
         closeBlocked: sale?.kind === "blocked",
-        detail: [assessment.finding, sale?.note].filter(Boolean).join(" "),
+        // A sale that stopped or cannot happen replaces "selling".
+        detail:
+          sale && sale.kind !== "sent" && sale.kind !== "waiting"
+            ? sale.note
+            : [assessment.finding, sale?.note].filter(Boolean).join(" "),
       },
       this.#settled(scope, tracked, assessment, sale),
     );
