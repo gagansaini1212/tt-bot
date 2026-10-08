@@ -740,6 +740,20 @@ test("symbol rules come from exchangeInfo without signing", async () => {
   );
   const [restricted] = await withoutOpo.exchange.getSymbolRules();
   assert.equal(restricted.protectedEntryAllowed, false);
+  // Without MAX_NUM_ALGO_ORDERS, the stop-order limit is unknown.
+  assert.equal(btc.maxStopOrders, undefined);
+  const withAlgo = setup(() =>
+    Response.json(
+      exchangeInfo({
+        filters: [
+          ...exchangeInfo().symbols[0].filters,
+          { filterType: "MAX_NUM_ALGO_ORDERS", maxNumAlgoOrders: 5 },
+        ],
+      }),
+    ),
+  );
+  const [limited] = await withAlgo.exchange.getSymbolRules();
+  assert.equal(limited.maxStopOrders, 5);
 });
 
 test("rejections carry Binance's reason only when it is a documented message", async () => {

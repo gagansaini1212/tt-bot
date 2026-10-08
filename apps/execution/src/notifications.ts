@@ -16,6 +16,12 @@ import type {
  * - handed_over, dust_left, order_missing, stop_limit_failed (warning).
  * - position_closed, holding_deadline_reached, stop_limit_sent, exit_started
  *   (info).
+ * - loss_limit_reached, drawdown_reached, kill_switch (critical): a strategy
+ *   reached a loss limit, the portfolio its daily drawdown limit, or the
+ *   customer used the kill switch.
+ * - strategy_waiting (warning): a strategy cannot be measured, so it opens
+ *   no entries.
+ * - strategy_completed, proposal_awaiting_approval (info).
  */
 export type NotificationKind =
   | "protection_failed"
@@ -29,7 +35,13 @@ export type NotificationKind =
   | "position_closed"
   | "holding_deadline_reached"
   | "stop_limit_sent"
-  | "exit_started";
+  | "exit_started"
+  | "loss_limit_reached"
+  | "drawdown_reached"
+  | "kill_switch"
+  | "strategy_waiting"
+  | "strategy_completed"
+  | "proposal_awaiting_approval";
 
 export type NewNotification = {
   kind: NotificationKind;

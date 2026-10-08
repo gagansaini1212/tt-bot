@@ -20,6 +20,12 @@ import {
   privateKeyType,
   savedOrEnvironmentExchanges,
 } from "./exchange-credentials";
+import {
+  EveSignalSource,
+  parseEveHost,
+  RecordedSignalSource,
+  type SignalSource,
+} from "./ai-signals";
 import { createRequestListener, safeError } from "./http";
 import { ExecutionLoop } from "./execution-loop";
 import { assertNoJournal, importJournal } from "./legacy-journal";
@@ -35,7 +41,9 @@ import {
   withinPlatformMaximums,
 } from "./risk-limits";
 import { createWorker } from "./routes";
+import { serializer } from "./manual-orders";
 import { SecretBox } from "./secret-box";
+import { StrategyRunner } from "./strategy-runner";
 import { PostgresTradeProposals } from "./trade-proposals";
 
 export { authorizeTradeProposal };
@@ -154,10 +162,24 @@ async function main() {
     const exchanges = exchangeSource(db);
     const risk = new PostgresRiskLimits(db);
     const webhooks = new NotificationWebhooks({ database: db, box });
+    const proposals = new PostgresTradeProposals(db);
+    // Dashboard placements and strategies' entries go out one at a time.
+    const exclusive = serializer();
+    let accountChanged: (() => void) | undefined;
+    const strategies = new StrategyRunner({
+      database: db,
+      proposals,
+      intents,
+      signals: signalSource(process.env),
+      onChange: () => accountChanged?.(),
+      exclusive,
+    });
     let loop: ExecutionLoop | undefined;
     const worker = createWorker({
       intents,
-      proposals: new PostgresTradeProposals(db),
+      proposals,
+      strategies,
+      exclusive,
       risk,
       reader: { state: (scope) => loop!.state(scope) },
       settings: {
@@ -178,9 +200,11 @@ async function main() {
         },
       },
     });
+    accountChanged = worker.accountChanged;
     // Watches every customer's orders, independently of any request or AI
     // call (ADR 0002), with each account's own keys: an account without keys
-    // the worker can use is skipped. It also delivers alerts to webhooks.
+    // the worker can use is skipped. It runs their strategies, and delivers
+    // alerts to webhooks.
     loop = new ExecutionLoop({
       database: db,
       clients: async (scope) => {
@@ -195,6 +219,7 @@ async function main() {
       accounts,
       intents,
       webhooks,
+      strategies,
       onChange: worker.accountChanged,
     });
     const handle = createRequestListener({
@@ -220,6 +245,7 @@ async function main() {
     console.info(
       `Execution service on http://127.0.0.1:${port}${ipv6 ? ` and http://[::1]:${port}` : ""}. Provider: ${provider}. Execution loop running.`,
     );
+    console.info(strategies.aiSource.description);
     if (!box)
       console.info(
         "CREDENTIALS_MASTER_KEY is not set, so keys and webhooks cannot be saved in Settings.",
@@ -384,6 +410,22 @@ async function main() {
   }
   console.info(JSON.stringify(result, null, 2));
   await database?.end();
+}
+
+/**
+ * Where AI-managed strategies' decisions come from: the eve assistant at
+ * STRATEGY_AI_EVE_URL once a model is configured for it, or else a recorded
+ * fixture, labelled as one on every decision.
+ */
+function signalSource(env: NodeJS.ProcessEnv): SignalSource {
+  const url = env.STRATEGY_AI_EVE_URL?.trim();
+  if (!url) return new RecordedSignalSource();
+  const host = parseEveHost(url);
+  if (!host)
+    throw new Error(
+      "STRATEGY_AI_EVE_URL must point to the eve assistant on this machine, such as http://127.0.0.1:2000. Leave it empty to replay the recorded fixture.",
+    );
+  return new EveSignalSource({ host });
 }
 
 function listen(handle: RequestListener, port: number, host: string) {

@@ -10,7 +10,8 @@
     "./manual-order": "./src/manual-order.ts",
     "./order-rules": "./src/order-rules.ts",
     "./settings": "./src/settings.ts",
-    "./spot-history-cache": "./src/spot-history-cache.ts"
+    "./spot-history-cache": "./src/spot-history-cache.ts",
+    "./strategies": "./src/strategies.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -50,6 +50,17 @@ export function closeOrderId(listClientOrderId: string, attempt: number) {
   return `${listClientOrderIdSchema.parse(listClientOrderId)}_c${attempt}`;
 }
 
+/**
+ * A strategy's protected entries have list client order IDs that start with
+ * this, so dashboard limits can leave them out: they count against their
+ * strategy's allocation instead.
+ */
+export const STRATEGY_LIST_PREFIX = "ct_sg";
+
+export function isStrategyListId(listClientOrderId: string) {
+  return listClientOrderId.startsWith(STRATEGY_LIST_PREFIX);
+}
+
 /** Recognises the legs of a protected entry placed by this application. */
 export function protectedLeg(
   clientOrderId: string,
@@ -101,6 +112,10 @@ export const symbolRulesSchema = z.object({
   stepSize: decimal,
   minNotional: decimal,
   maxNotional: decimal,
+  // Binance's MAX_NUM_ALGO_ORDERS: the open stop orders an account may hold
+  // on the symbol. Each protected entry's stop loss is one. Unset when
+  // Binance does not report it.
+  maxStopOrders: z.int().positive().optional(),
 });
 export type SymbolRules = z.infer<typeof symbolRulesSchema>;
 

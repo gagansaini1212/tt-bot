@@ -8,6 +8,9 @@ import { depth, klines, tickers } from "./market";
 import { deskProvider, orders } from "./orders";
 import { settings, type SettingsDependencies } from "./settings";
 import { createSnapshotCache, snapshot } from "./snapshot";
+import { strategies as strategyRoutes } from "./strategies";
+import type { StrategyRunner } from "../strategy-runner";
+import type { Serializer } from "../manual-orders";
 
 /**
  * The worker's HTTP endpoints and the dashboard order desks they share with
@@ -15,8 +18,10 @@ import { createSnapshotCache, snapshot } from "./snapshot";
  * here: `handler` for a customer's exchange account, `accountHandler` or
  * `customerHandler` for their data without Binance, and `publicHandler` for
  * market data. Each call creates fresh caches; `now` is their clock. Without
- * `settings`, the Settings routes are left out, and without `proposals`, the
- * AI decision routes.
+ * `settings`, the Settings routes are left out, without `proposals`, the
+ * AI decision routes, and without `strategies`, the strategy routes.
+ * Dashboard placements and a strategy runner made with `exclusive` run one
+ * at a time.
  */
 export function createWorker({
   intents,
@@ -24,6 +29,8 @@ export function createWorker({
   risk,
   reader,
   settings: settingsDependencies,
+  strategies,
+  exclusive,
   now = Date.now,
   env = process.env,
 }: {
@@ -32,6 +39,11 @@ export function createWorker({
   risk: Pick<RiskLimitStore, "current" | "dailyRiskUsed">;
   reader?: ExecutionReader;
   settings?: SettingsDependencies;
+  strategies?: Pick<
+    StrategyRunner,
+    "state" | "resumeProblem" | "store" | "approve"
+  >;
+  exclusive?: Serializer;
   now?: () => number;
   env?: NodeJS.ProcessEnv;
 }) {
@@ -43,6 +55,7 @@ export function createWorker({
     intents,
     proposals,
     risk,
+    exclusive,
   });
   const desk = orders(desks);
   const routes: Route[] = [
@@ -58,13 +71,31 @@ export function createWorker({
     route("POST", "/orders/triggers/cancel", desk.cancelTrigger),
   ];
   if (proposals) {
-    const ai = decisions({ proposals, now, ...desks });
+    const ai = decisions({ proposals, now, ...desks, strategies });
     routes.push(
       route("POST", "/decisions", ai.record),
       route("GET", "/decisions", ai.list),
       route("GET", "/proposals", ai.proposal),
       route("POST", "/proposals/approve", ai.approve),
       route("POST", "/proposals/reject", ai.reject),
+    );
+  }
+  if (strategies) {
+    const strategy = strategyRoutes(strategies);
+    routes.push(
+      route("GET", "/strategies", strategy.list),
+      route("POST", "/strategies", strategy.create),
+      route("POST", "/strategies/versions", strategy.newVersion),
+      route("POST", "/strategies/pause", strategy.pause),
+      route("POST", "/strategies/resume", strategy.resume),
+      route("POST", "/strategies/close-all", strategy.closeAll),
+      route("POST", "/strategies/kill-switch", strategy.killSwitch),
+      route("GET", "/settings/portfolio-limits", strategy.portfolioLimits),
+      route(
+        "POST",
+        "/settings/portfolio-limits",
+        strategy.changePortfolioLimits,
+      ),
     );
   }
   if (settingsDependencies) {

@@ -35,6 +35,7 @@ export const rules = (instrument: TestnetInstrument): SymbolRules => ({
   stepSize: "0.00001",
   minNotional: "5",
   maxNotional: "9000000",
+  maxStopOrders: 5,
 });
 const symbol = (instrument: TestnetInstrument) => instrument.replace("-", "");
 

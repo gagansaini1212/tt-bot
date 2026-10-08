@@ -351,7 +351,7 @@ describe("AI decisions in PostgreSQL", { skip: databaseTestsSkipped }, () => {
     );
   });
 
-  test("a strategy's proposal is listed but cannot be approved or rejected here", async () => {
+  test("a strategy's proposal is listed, and the customer may reject it but not approve it here", async () => {
     const strategyId = randomUUID();
     const id = randomUUID();
     await withCustomerScope(database.app, mine.customerId, async (tx) => {
@@ -386,13 +386,14 @@ describe("AI decisions in PostgreSQL", { skip: databaseTestsSkipped }, () => {
     assert.equal(listed?.model, null);
     assert.equal(listed?.proposal?.strategyId, strategyId);
     assert.equal(listed?.proposal?.strategyVersion, 1);
+    // Its strategy's limits decide an approval, not the dashboard's.
     assert.equal(
       await proposals.approve(mine, id, await order(id), new Date()),
       false,
     );
     assert.equal(
       await proposals.reject(mine, id, { by: "customer" }, new Date()),
-      false,
+      true,
     );
     // A proposal names both its strategy and version, or neither.
     await assert.rejects(

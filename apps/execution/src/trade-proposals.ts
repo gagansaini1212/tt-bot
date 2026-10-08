@@ -11,6 +11,7 @@ import {
   MANUAL_TESTNET_STRATEGY,
   protectedEntrySchema,
   protectedLegIds,
+  STRATEGY_LIST_PREFIX,
   type AiDecisionRequest,
   type DecisionView,
   type EntryReconciliation,
@@ -68,11 +69,13 @@ export interface TradeProposalStore {
   /**
    * Records an AI decision, and its proposal as a draft. A request with an
    * idempotency key recorded before changes nothing and returns that decision.
+   * An AI-managed strategy's decisions name its strategy and version.
    */
   record(
     scope: AccountScope,
     request: AiDecisionRequest,
     now: Date,
+    strategy?: { strategyId: string; strategyVersion: number },
   ): Promise<DecisionView>;
   /** The latest decisions, newest first, with their proposals. */
   decisions(
@@ -90,8 +93,8 @@ export interface TradeProposalStore {
     proposalId: string,
   ): Promise<SavedProposal | undefined>;
   /**
-   * Rejects an assistant's draft. Resolves false if it was not one: a
-   * strategy's proposals are decided by its own rules.
+   * Rejects a draft: the assistant's, or an AI-managed strategy's that waits
+   * for the customer. Resolves false if it is not a draft any more.
    */
   reject(
     scope: AccountScope,
@@ -190,6 +193,16 @@ export function proposalStatus(
 export function proposalClientOrderId(proposalId: string) {
   const bytes = Buffer.from(proposalId.replaceAll("-", ""), "hex");
   return `ct_ai${bytes.toString("base64url")}`;
+}
+
+/**
+ * The client ID of the order list that carries out one of a strategy's
+ * protected entries, from its proposal, like `proposalClientOrderId`. Its
+ * prefix keeps it out of the dashboard's own limits.
+ */
+export function strategyEntryClientOrderId(proposalId: string) {
+  const bytes = Buffer.from(proposalId.replaceAll("-", ""), "hex");
+  return `${STRATEGY_LIST_PREFIX}${bytes.toString("base64url")}`;
 }
 
 /**
@@ -489,7 +502,12 @@ export class PostgresTradeProposals implements TradeProposalStore {
     return withCustomerScope(this.#database, scope.customerId, work);
   }
 
-  record(scope: AccountScope, request: AiDecisionRequest, now: Date) {
+  record(
+    scope: AccountScope,
+    request: AiDecisionRequest,
+    now: Date,
+    strategy?: { strategyId: string; strategyVersion: number },
+  ) {
     return this.#scoped(scope, async (tx) => {
       // A replayed tool call can arrive while the first is still saving it.
       // This waits for that transaction, so the lookup below finds its row.
@@ -505,13 +523,15 @@ export class PostgresTradeProposals implements TradeProposalStore {
           const { proposal } = request;
           await tx`
             insert into trade_proposals (
-              id, customer_id, exchange_account_id, source_snapshot_id,
+              id, customer_id, exchange_account_id, strategy_id,
+              strategy_version, source_snapshot_id,
               instrument, market_kind, direction, quantity, entry_price,
               stop_loss_price, take_profit_price, leverage, entry_expires_at,
               rationale, status, created_at
             )
             values (
               ${proposalId}, ${scope.customerId}, ${scope.exchangeAccountId},
+              ${strategy?.strategyId ?? null}, ${strategy?.strategyVersion ?? null},
               ${request.sourceSnapshotId}, ${proposal.instrument},
               ${proposal.marketKind}, ${proposal.direction},
               ${proposal.quantity}::numeric, ${proposal.entryPrice}::numeric,
@@ -524,13 +544,13 @@ export class PostgresTradeProposals implements TradeProposalStore {
         }
         await tx`
           insert into ai_decisions (
-            id, customer_id, exchange_account_id, kind, proposal_id, instrument,
-            model, prompt_version, source_snapshot_id, rationale,
-            idempotency_key, created_at
+            id, customer_id, exchange_account_id, strategy_id, kind,
+            proposal_id, instrument, model, prompt_version, source_snapshot_id,
+            rationale, idempotency_key, created_at
           )
           values (
             ${id}, ${scope.customerId}, ${scope.exchangeAccountId},
-            ${request.kind}, ${proposalId},
+            ${strategy?.strategyId ?? null}, ${request.kind}, ${proposalId},
             ${request.kind === "no_trade" ? request.instrument : null},
             ${request.model}, ${request.promptVersion},
             ${request.sourceSnapshotId}, ${request.rationale},
@@ -544,6 +564,7 @@ export class PostgresTradeProposals implements TradeProposalStore {
           payload: {
             kind: request.kind,
             proposalId,
+            strategyId: strategy?.strategyId ?? null,
             promptVersion: request.promptVersion,
             sourceSnapshotId: request.sourceSnapshotId,
           },
@@ -642,7 +663,6 @@ export class PostgresTradeProposals implements TradeProposalStore {
         where id = ${proposalId}
           and exchange_account_id = ${scope.exchangeAccountId}
           and status = 'draft'
-          and strategy_id is null
         returning id
       `;
       if (changed)

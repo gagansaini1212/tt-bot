@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { AccountScope } from "../accounts";
 import { accountHandler, handler, RequestError } from "../http";
 import type { ManualOrderDesk } from "../manual-orders";
+import type { StrategyRunner } from "../strategy-runner";
 import type { TradeProposalStore } from "../trade-proposals";
 
 // How many decisions the Activity page lists.
@@ -23,11 +24,14 @@ export function decisions({
   now,
   deskFor,
   disabledMessage,
+  strategies,
 }: {
   proposals: TradeProposalStore;
   now: () => number;
   deskFor: (exchange: BinanceSpotTestnet) => ManualOrderDesk | undefined;
   disabledMessage: string;
+  // Approves an AI-managed strategy's proposals under its own limits.
+  strategies?: Pick<StrategyRunner, "approve">;
 }) {
   const disabled = { status: "rejected" as const, message: disabledMessage };
   const clock = () => new Date(now());
@@ -86,10 +90,21 @@ export function decisions({
       query: z.strictObject({}),
       body: z.strictObject({ proposalId: z.uuid() }),
       async handle({ exchange, body, account }) {
+        // A strategy's proposal is checked against the strategy, not the
+        // dashboard's limits.
+        const saved = await proposals.find(account, body.proposalId);
         const desk = deskFor(exchange);
-        const outcome = desk
-          ? await desk.approve(account, body.proposalId)
-          : disabled;
+        const outcome = saved?.strategyId
+          ? strategies
+            ? await strategies.approve(account, exchange, body.proposalId)
+            : {
+                status: "rejected" as const,
+                message:
+                  "This worker does not run strategies. Nothing was sent.",
+              }
+          : desk
+            ? await desk.approve(account, body.proposalId)
+            : disabled;
         return {
           status: "connected",
           outcome,
@@ -114,12 +129,7 @@ export function decisions({
             proposal: null,
           };
         let result;
-        if (proposal.strategyId !== null)
-          result = answer(
-            false,
-            "This proposal belongs to a strategy, whose own rules decide it.",
-          );
-        else if (
+        if (
           proposal.status === "draft" &&
           proposal.entryExpiresAt.getTime() <= at.getTime()
         ) {

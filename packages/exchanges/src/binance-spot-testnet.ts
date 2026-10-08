@@ -806,6 +806,10 @@ export function symbolRules(
         .object({ minNotional: decimal })
         .transform((value) => ({ ...value, maxNotional: "0" })),
     );
+  const algo = filter(
+    "MAX_NUM_ALGO_ORDERS",
+    z.object({ maxNumAlgoOrders: z.int().positive() }),
+  );
   if (!price || !lot) throw new BinanceTestnetError("unavailable");
   return symbolRulesSchema.parse({
     instrument,
@@ -821,6 +825,7 @@ export function symbolRules(
     ...lot,
     minNotional: notional?.minNotional ?? "0",
     maxNotional: notional?.maxNotional ?? "0",
+    maxStopOrders: algo?.maxNumAlgoOrders,
   });
 }
 

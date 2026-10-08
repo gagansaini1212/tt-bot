@@ -20,6 +20,8 @@ import {
   type TestnetOrder,
 } from "@crypto-trading/exchanges";
 import type { AccountResolver, AccountScope } from "./accounts";
+import { PassReads, type ExecutionExchange } from "./pass-reads";
+import type { StrategyRunner } from "./strategy-runner";
 import {
   assessEntry,
   CANCEL_ONLY_REASONS,
@@ -65,19 +67,7 @@ import {
   type OutboxJob,
 } from "./outbox";
 
-/** What the loop asks Binance. */
-export type ExecutionExchange = Pick<
-  BinanceSpotTestnet,
-  | "getAccount"
-  | "getOpenOrders"
-  | "getOrder"
-  | "getOrderList"
-  | "getOrderFills"
-  | "getLastPrice"
-  | "getSymbolRules"
-  | "cancelOrderList"
-  | "placeMarketSell"
->;
+export type { ExecutionExchange } from "./pass-reads";
 
 /** Sends a stop-limit entry whose stop price traded; see ManualOrderDesk. */
 export type TriggerDesk = Pick<ManualOrderDesk, "submitTrigger">;
@@ -114,7 +104,9 @@ const NOTIFICATIONS_SHOWN_MS = 7 * 24 * 60 * 60_000;
  * 3. starts the exit of entries past their holding deadline;
  * 4. reconciles every open protected entry with Binance, keeping its orders
  *    and fills, and sells quantity no stop loss protects;
- * 5. marks exits still held after their deadline overdue.
+ * 5. marks exits still held after their deadline overdue;
+ * 6. runs the customer's strategies, if it has a StrategyRunner: measures
+ *    their loss limits and plans, checks and sends their next entries.
  *
  * Everything it acts on is in PostgreSQL, so a restarted worker carries on
  * where it stopped. Two workers can run at once: an advisory lock gives each
@@ -137,6 +129,7 @@ export class ExecutionLoop {
   readonly #pause: StrategyPauser;
   readonly #log: (message: string) => void;
   readonly #lockCustomers: boolean;
+  readonly #strategies?: Pick<StrategyRunner, "run">;
   readonly #lastPass = new Map<string, Date>();
   #rules?: { fetchedAt: number; value: Promise<SymbolRules[]> };
   #running?: Promise<void>;
@@ -165,6 +158,8 @@ export class ExecutionLoop {
       log?: (message: string) => void;
       // Tests turn this off to prove each action is guarded on its own.
       lockCustomers?: boolean;
+      // Runs each customer's strategies after their entries are reconciled.
+      strategies?: Pick<StrategyRunner, "run">;
     },
   ) {
     this.#database = options.database;
@@ -182,6 +177,7 @@ export class ExecutionLoop {
     this.#pause = options.pauseStrategy ?? pauseStrategyInDatabase;
     this.#log = options.log ?? ((message) => console.error(message));
     this.#lockCustomers = options.lockCustomers ?? true;
+    this.#strategies = options.strategies;
   }
 
   get store() {
@@ -371,6 +367,14 @@ export class ExecutionLoop {
       }
     }
     await this.#store.markOverdueExits(scope, this.#now(), exitOverdue);
+    if (this.#strategies)
+      try {
+        await this.#strategies.run(scope, reads);
+      } catch (error) {
+        this.#warn(
+          `Could not run the customer's strategies: ${describe(error)}`,
+        );
+      }
   }
 
   /**
@@ -1057,57 +1061,6 @@ export class ExecutionLoop {
 type Sale =
   | { kind: "sent"; close: CloseState; rateLimited: boolean; note: string }
   | { kind: "dust" | "gone" | "waiting" | "blocked"; note: string };
-
-/** What a pass reads from Binance once, however many entries need it. */
-class PassReads {
-  // The client for the account this pass is checking.
-  readonly exchange: ExecutionExchange;
-  readonly #open = new Map<
-    TestnetInstrument,
-    Promise<Map<string, TestnetOrder>>
-  >();
-  readonly #prices = new Map<TestnetInstrument, Promise<string>>();
-  #account?: ReturnType<ExecutionExchange["getAccount"]>;
-
-  constructor(exchange: ExecutionExchange) {
-    this.exchange = exchange;
-  }
-
-  openOrders(instrument: TestnetInstrument) {
-    let orders = this.#open.get(instrument);
-    if (!orders) {
-      orders = this.exchange
-        .getOpenOrders(instrument)
-        .then(
-          (list) => new Map(list.map((order) => [order.clientOrderId, order])),
-        );
-      this.#open.set(instrument, orders);
-    }
-    return orders;
-  }
-
-  lastPrice(instrument: TestnetInstrument) {
-    let price = this.#prices.get(instrument);
-    if (!price) {
-      price = this.exchange.getLastPrice(instrument);
-      this.#prices.set(instrument, price);
-    }
-    return price;
-  }
-
-  async balance(asset: string) {
-    this.#account ??= this.exchange.getAccount();
-    const found = (await this.#account).balances.find(
-      (balance) => balance.asset === asset,
-    );
-    return { free: found?.free ?? "0", locked: found?.locked ?? "0" };
-  }
-
-  /** A sale changes the balance, so read it again before the next. */
-  forgetBalance() {
-    this.#account = undefined;
-  }
-}
 
 function toLeg(order: TestnetOrder): LegState {
   return {

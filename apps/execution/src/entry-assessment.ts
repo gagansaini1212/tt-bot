@@ -48,9 +48,13 @@ const OPEN = new Set(["NEW", "PARTIALLY_FILLED", "PENDING_NEW"]);
  * Exit reasons that stop an entry only until it has filled completely, as a
  * pause does: it cancels pending entries and keeps the exits of filled ones.
  * A partly filled entry is cancelled and what it bought is sold, because
- * Binance cannot protect it.
+ * Binance cannot protect it. A strategy's entry past its entry expiry is
+ * stopped the same way.
  */
-export const CANCEL_ONLY_REASONS: readonly string[] = ["pause"];
+export const CANCEL_ONLY_REASONS: readonly string[] = [
+  "pause",
+  "entry_expired",
+];
 
 /**
  * Binance places an OPOCO list's exits just after its entry fills. Until

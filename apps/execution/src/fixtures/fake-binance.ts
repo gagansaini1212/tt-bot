@@ -39,6 +39,9 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
   readonly balances = new Map<string, { free: Decimal; locked: Decimal }>([
     ["USDT", { free: new Decimal(1000), locked: new Decimal(0) }],
   ]);
+  // Hourly candle opens, by instrument and open time. Others open at the
+  // current price.
+  readonly hourOpens = new Map<string, string>();
   readonly calls: Partial<Record<Method, number>> = {};
   /** What market sells do. */
   sellBehaviour:
@@ -122,6 +125,11 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
 
   setPrice(instrument: TestnetInstrument, price: string) {
     this.prices.set(instrument, price);
+  }
+
+  /** Sets the open of the hourly candle starting at `at`. */
+  setHourOpen(instrument: TestnetInstrument, at: Date, price: string) {
+    this.hourOpens.set(`${instrument}@${at.getTime()}`, price);
   }
 
   /**
@@ -285,6 +293,33 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
   getSymbolRules = async () => {
     this.#call("getSymbolRules");
     return [rules("BTC-USDT"), rules("ETH-USDT")];
+  };
+
+  getKlines = async (
+    instrument: TestnetInstrument,
+    _interval: string,
+    limit = 500,
+  ) => {
+    this.#call("getKlines");
+    const hour = 60 * 60 * 1000;
+    const latest = Math.floor(this.#clock().getTime() / hour) * hour;
+    return Array.from({ length: limit }, (_, index) => {
+      const openTime = latest - (limit - 1 - index) * hour;
+      const price =
+        this.hourOpens.get(`${instrument}@${openTime}`) ??
+        this.prices.get(instrument)!;
+      return {
+        openTime,
+        open: price,
+        high: price,
+        low: price,
+        close: price,
+        volume: "1",
+        closeTime: openTime + hour - 1,
+        quoteVolume: price,
+        trades: 1,
+      };
+    });
   };
 
   getDepth = async (instrument: TestnetInstrument) => {

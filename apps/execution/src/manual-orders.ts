@@ -171,6 +171,7 @@ export class ManualOrderDesk {
   readonly #now: () => Date;
   readonly #onChange: () => void;
   readonly #exclusive: Serializer;
+  readonly #sender: ProtectedEntrySender;
   #rules?: { fetchedAt: number; value: SymbolRules[] };
 
   constructor(options: {
@@ -195,6 +196,11 @@ export class ManualOrderDesk {
     this.#now = options.now ?? (() => new Date());
     this.#onChange = options.onChange ?? (() => {});
     this.#exclusive = options.exclusive ?? serializer();
+    this.#sender = new ProtectedEntrySender({
+      exchange: options.exchange,
+      intents: options.intents,
+      onChange: this.#onChange,
+    });
   }
 
   async #symbolRules() {
@@ -354,7 +360,7 @@ export class ManualOrderDesk {
           message:
             "This order ID was used before, so it was not sent again. Check its status before placing another order.",
         };
-      return this.#send(scope, entry);
+      return this.#sender.send(scope, entry);
     });
   }
 
@@ -468,7 +474,7 @@ export class ManualOrderDesk {
           message: status === "draft" ? DECIDED.expired : DECIDED[status],
         };
       }
-      return this.#send(scope, entry);
+      return this.#sender.send(scope, entry);
     });
   }
 
@@ -570,7 +576,7 @@ export class ManualOrderDesk {
       }
       if (!plan.passed) {
         const failed = plan.checks.filter((check) => !check.passed);
-        await this.#settle(scope, listClientOrderId, {
+        await this.#sender.settle(scope, listClientOrderId, {
           status: "rejected",
           reason: failed.map((check) => check.detail).join(" "),
         });
@@ -582,7 +588,7 @@ export class ManualOrderDesk {
           checks: plan.checks,
         };
       }
-      return this.#send(scope, entry);
+      return this.#sender.send(scope, entry);
     });
   }
 
@@ -614,89 +620,6 @@ export class ManualOrderDesk {
           "This stop-limit entry is no longer held. If its stop price traded, it is on Binance now: refresh and cancel it from the Open orders table.",
       };
     });
-  }
-
-  /** Sends a saved entry and records Binance's answer. */
-  async #send(
-    scope: AccountScope,
-    entry: ProtectedEntry,
-  ): Promise<ManualOrderOutcome> {
-    const id = entry.listClientOrderId;
-    let list: TestnetOrderList | TestnetOrderListReport | undefined;
-    try {
-      list = await this.#exchange.placeProtectedEntry(entry);
-    } catch (error) {
-      // Binance refused the request outright, so nothing was placed.
-      if (
-        error instanceof BinanceTestnetError &&
-        (error.kind === "rejected" || error.kind === "rate_limited")
-      ) {
-        await this.#settle(scope, id, {
-          status: "rejected",
-          reason: error.message,
-        });
-        return failure(
-          error,
-          "Binance rejected the order. Nothing was placed.",
-        );
-      }
-      if (!(error instanceof BinanceTestnetError)) {
-        await this.#settle(scope, id, { status: "unknown" });
-        throw error;
-      }
-      // Never resubmit. Look the order up by its client ID instead.
-      list = await this.#find(id).catch(() => undefined);
-    }
-    this.#onChange();
-    if (!list) {
-      await this.#settle(scope, id, { status: "unknown" });
-      return {
-        status: "unknown",
-        listClientOrderId: id,
-        message:
-          "Binance did not confirm the order, so it may or may not have been placed. Check its status before placing another order.",
-      };
-    }
-    await this.#settle(scope, id, {
-      status: "acknowledged",
-      orderListId: list.orderListId,
-      orders: "orderReports" in list ? list.orderReports : undefined,
-    });
-    return this.#describe(scope, entry);
-  }
-
-  /**
-   * Records Binance's answer. The saved intent already blocks its client ID,
-   * so a failure here cannot lead to a second submission; an unsettled intent
-   * stays due for reconciliation.
-   */
-  async #settle(
-    scope: AccountScope,
-    listClientOrderId: string,
-    settlement: Settlement,
-  ) {
-    try {
-      await this.#intents.settle(scope, listClientOrderId, settlement);
-    } catch {
-      console.error(
-        `Could not record Binance's answer for ${listClientOrderId}. Its intent stays due for reconciliation.`,
-      );
-    }
-  }
-
-  /** Keeps Binance's report of each order. A failure leaves only a log line. */
-  async #recordOrders(
-    scope: AccountScope,
-    orders: TestnetOrder[],
-    event?: "order.cancelled",
-  ) {
-    try {
-      await this.#intents.recordOrders(scope, orders, event);
-    } catch {
-      console.error(
-        `Could not record Binance's report of ${orders.map((order) => order.clientOrderId).join(", ")}.`,
-      );
-    }
   }
 
   /** Looks an order up by the client ID it was submitted with. */
@@ -734,7 +657,7 @@ export class ManualOrderDesk {
       };
     let list: TestnetOrderList | undefined;
     try {
-      list = await this.#find(listClientOrderId);
+      list = await this.#sender.find(listClientOrderId);
     } catch {
       return {
         status: "unknown",
@@ -768,130 +691,11 @@ export class ManualOrderDesk {
           "Binance has no order with this ID, so it was not placed. You can place a new order.",
       };
     if (unconfirmed)
-      await this.#settle(scope, listClientOrderId, {
+      await this.#sender.settle(scope, listClientOrderId, {
         status: "acknowledged",
         orderListId: list.orderListId,
       });
-    return this.#describe(scope, intent.order.entry);
-  }
-
-  async #find(listClientOrderId: string) {
-    try {
-      return await this.#exchange.getOrderList(listClientOrderId);
-    } catch (error) {
-      // Only "does not exist" proves Binance has no such list. Any other
-      // rejection, such as a signature or clock error, leaves it unknown.
-      if (
-        error instanceof BinanceTestnetError &&
-        error.kind === "rejected" &&
-        error.code === NO_SUCH_ORDER
-      )
-        return undefined;
-      throw error;
-    }
-  }
-
-  /**
-   * Reports the entry's state and confirms its exits on the exchange. It runs
-   * after Binance accepted the order, so a failed read must never look like a
-   * failed placement.
-   */
-  async #describe(
-    scope: AccountScope,
-    entry: ProtectedEntry,
-  ): Promise<ManualOrderOutcome> {
-    try {
-      return await this.#read(scope, entry);
-    } catch {
-      return {
-        listClientOrderId: entry.listClientOrderId,
-        status: "unverified",
-        message:
-          "Binance accepted the order, but its status could not be read. Check the Open orders table before placing another order.",
-      };
-    }
-  }
-
-  async #read(
-    scope: AccountScope,
-    entry: ProtectedEntry,
-  ): Promise<ManualOrderOutcome> {
-    const legs = protectedLegIds(entry.listClientOrderId);
-    const amount = (value: string) => new Decimal(value).toFixed();
-    // Keeps each leg's latest state. The order is on Binance either way, so
-    // a failed write must not hide that.
-    const order = async (clientOrderId: string) => {
-      const read = await this.#exchange.getOrder(
-        entry.instrument,
-        clientOrderId,
-      );
-      await this.#recordOrders(scope, [read]);
-      return read;
-    };
-    const base = { listClientOrderId: entry.listClientOrderId };
-    const working = await order(legs.entry);
-    if (working.status === "NEW")
-      return {
-        ...base,
-        status: "working",
-        message:
-          "The entry is on the book. Binance places the take profit and stop loss when it fills completely.",
-      };
-    if (working.status === "PARTIALLY_FILLED")
-      return {
-        ...base,
-        status: "working",
-        unprotectedQuantity: amount(working.executedQty),
-        message: `The entry has partly filled. The ${amount(working.executedQty)} bought so far has no exits until the entry fills completely.`,
-      };
-    if (working.status !== "FILLED")
-      return {
-        ...base,
-        status: "not_filled",
-        message:
-          entry.timeInForce === "FOK"
-            ? `Nothing was bought: the order could not fill completely at or below ${entry.price}.`
-            : `The entry was ${working.status.toLowerCase().replace(/_/g, " ")} before it filled, so nothing is held.`,
-      };
-    // An entry that fills at once can report its exits before Binance
-    // places them, so read them again.
-    let exits = await Promise.all([
-      order(legs.takeProfit),
-      order(legs.stopLoss),
-    ]);
-    if (exits.some((exit) => exit.status === "PENDING_NEW"))
-      exits = await Promise.all([order(legs.takeProfit), order(legs.stopLoss)]);
-    if (exits.every((exit) => exit.status === "NEW"))
-      return {
-        ...base,
-        status: "protected",
-        message: `Bought ${amount(working.executedQty)}. The take profit at ${entry.takeProfitPrice} and stop loss at ${entry.stopLossPrice} are on Binance.`,
-      };
-    if (exits.some((exit) => exit.status === "FILLED"))
-      return {
-        ...base,
-        status: "closed",
-        message:
-          "The entry filled and one of its exits has already closed the position.",
-      };
-    if (
-      exits.some(
-        (exit) =>
-          exit.status === "PENDING_NEW" || exit.status === "PARTIALLY_FILLED",
-      )
-    )
-      return {
-        ...base,
-        status: "unverified",
-        unprotectedQuantity: amount(working.executedQty),
-        message: `Bought ${amount(working.executedQty)}, but Binance has not confirmed both exits yet. Check the Open orders table now.`,
-      };
-    return {
-      ...base,
-      status: "protection_failed",
-      unprotectedQuantity: amount(working.executedQty),
-      message: `Bought ${amount(working.executedQty)}, but Binance did not place the take profit and stop loss (${exits.map((exit) => exit.status).join(", ")}). This position has no exits. Sell it now, for example with pnpm exchange place-order, or set exits yourself.`,
-    };
+    return this.#sender.describe(scope, intent.order.entry);
   }
 
   cancel(scope: AccountScope, raw: unknown): Promise<ManualOrderOutcome> {
@@ -970,7 +774,7 @@ export class ManualOrderDesk {
         );
       }
       this.#onChange();
-      await this.#recordOrders(scope, cancelled, "order.cancelled");
+      await this.#sender.recordOrders(scope, cancelled, "order.cancelled");
       return {
         status: "cancelled",
         unprotectedQuantity,
@@ -982,6 +786,238 @@ export class ManualOrderDesk {
             : "Cancelled the order.",
       };
     });
+  }
+}
+
+/**
+ * Sends saved protected entries to Binance and records its answer: the
+ * journal half of every placement, shared by dashboard orders, approved
+ * proposals and strategies. Save the intent before `send`: the saved intent
+ * blocks its client ID, so nothing here can lead to a second submission, and
+ * an unknown outcome stays due for reconciliation.
+ */
+export class ProtectedEntrySender {
+  readonly #exchange: Pick<
+    ManualOrderExchange,
+    "placeProtectedEntry" | "getOrderList" | "getOrder"
+  >;
+  readonly #intents: Pick<OrderIntentStore, "settle" | "recordOrders">;
+  readonly #onChange: () => void;
+
+  constructor(options: {
+    exchange: Pick<
+      ManualOrderExchange,
+      "placeProtectedEntry" | "getOrderList" | "getOrder"
+    >;
+    intents: Pick<OrderIntentStore, "settle" | "recordOrders">;
+    onChange?: () => void;
+  }) {
+    this.#exchange = options.exchange;
+    this.#intents = options.intents;
+    this.#onChange = options.onChange ?? (() => {});
+  }
+
+  /** Sends a saved entry and records Binance's answer. */
+  async send(
+    scope: AccountScope,
+    entry: ProtectedEntry,
+  ): Promise<ManualOrderOutcome> {
+    const id = entry.listClientOrderId;
+    let list: TestnetOrderList | TestnetOrderListReport | undefined;
+    try {
+      list = await this.#exchange.placeProtectedEntry(entry);
+    } catch (error) {
+      // Binance refused the request outright, so nothing was placed.
+      if (
+        error instanceof BinanceTestnetError &&
+        (error.kind === "rejected" || error.kind === "rate_limited")
+      ) {
+        await this.settle(scope, id, {
+          status: "rejected",
+          reason: error.message,
+        });
+        return failure(
+          error,
+          "Binance rejected the order. Nothing was placed.",
+        );
+      }
+      if (!(error instanceof BinanceTestnetError)) {
+        await this.settle(scope, id, { status: "unknown" });
+        throw error;
+      }
+      // Never resubmit. Look the order up by its client ID instead.
+      list = await this.find(id).catch(() => undefined);
+    }
+    this.#onChange();
+    if (!list) {
+      await this.settle(scope, id, { status: "unknown" });
+      return {
+        status: "unknown",
+        listClientOrderId: id,
+        message:
+          "Binance did not confirm the order, so it may or may not have been placed. Check its status before placing another order.",
+      };
+    }
+    await this.settle(scope, id, {
+      status: "acknowledged",
+      orderListId: list.orderListId,
+      orders: "orderReports" in list ? list.orderReports : undefined,
+    });
+    return this.describe(scope, entry);
+  }
+
+  /**
+   * Records Binance's answer. The saved intent already blocks its client ID,
+   * so a failure here cannot lead to a second submission; an unsettled intent
+   * stays due for reconciliation.
+   */
+  async settle(
+    scope: AccountScope,
+    listClientOrderId: string,
+    settlement: Settlement,
+  ) {
+    try {
+      await this.#intents.settle(scope, listClientOrderId, settlement);
+    } catch {
+      console.error(
+        `Could not record Binance's answer for ${listClientOrderId}. Its intent stays due for reconciliation.`,
+      );
+    }
+  }
+
+  /** Keeps Binance's report of each order. A failure leaves only a log line. */
+  async recordOrders(
+    scope: AccountScope,
+    orders: TestnetOrder[],
+    event?: "order.cancelled",
+  ) {
+    try {
+      await this.#intents.recordOrders(scope, orders, event);
+    } catch {
+      console.error(
+        `Could not record Binance's report of ${orders.map((order) => order.clientOrderId).join(", ")}.`,
+      );
+    }
+  }
+
+  /** Looks an order list up by its client ID; undefined if Binance has none. */
+  async find(listClientOrderId: string) {
+    try {
+      return await this.#exchange.getOrderList(listClientOrderId);
+    } catch (error) {
+      // Only "does not exist" proves Binance has no such list. Any other
+      // rejection, such as a signature or clock error, leaves it unknown.
+      if (
+        error instanceof BinanceTestnetError &&
+        error.kind === "rejected" &&
+        error.code === NO_SUCH_ORDER
+      )
+        return undefined;
+      throw error;
+    }
+  }
+
+  /**
+   * Reports the entry's state and confirms its exits on the exchange. It runs
+   * after Binance accepted the order, so a failed read must never look like a
+   * failed placement.
+   */
+  async describe(
+    scope: AccountScope,
+    entry: ProtectedEntry,
+  ): Promise<ManualOrderOutcome> {
+    try {
+      return await this.#read(scope, entry);
+    } catch {
+      return {
+        listClientOrderId: entry.listClientOrderId,
+        status: "unverified",
+        message:
+          "Binance accepted the order, but its status could not be read. Check the Open orders table before placing another order.",
+      };
+    }
+  }
+
+  async #read(
+    scope: AccountScope,
+    entry: ProtectedEntry,
+  ): Promise<ManualOrderOutcome> {
+    const legs = protectedLegIds(entry.listClientOrderId);
+    const amount = (value: string) => new Decimal(value).toFixed();
+    // Keeps each leg's latest state. The order is on Binance either way, so
+    // a failed write must not hide that.
+    const order = async (clientOrderId: string) => {
+      const read = await this.#exchange.getOrder(
+        entry.instrument,
+        clientOrderId,
+      );
+      await this.recordOrders(scope, [read]);
+      return read;
+    };
+    const base = { listClientOrderId: entry.listClientOrderId };
+    const working = await order(legs.entry);
+    if (working.status === "NEW")
+      return {
+        ...base,
+        status: "working",
+        message:
+          "The entry is on the book. Binance places the take profit and stop loss when it fills completely.",
+      };
+    if (working.status === "PARTIALLY_FILLED")
+      return {
+        ...base,
+        status: "working",
+        unprotectedQuantity: amount(working.executedQty),
+        message: `The entry has partly filled. The ${amount(working.executedQty)} bought so far has no exits until the entry fills completely.`,
+      };
+    if (working.status !== "FILLED")
+      return {
+        ...base,
+        status: "not_filled",
+        message:
+          entry.timeInForce === "FOK"
+            ? `Nothing was bought: the order could not fill completely at or below ${entry.price}.`
+            : `The entry was ${working.status.toLowerCase().replace(/_/g, " ")} before it filled, so nothing is held.`,
+      };
+    // An entry that fills at once can report its exits before Binance
+    // places them, so read them again.
+    let exits = await Promise.all([
+      order(legs.takeProfit),
+      order(legs.stopLoss),
+    ]);
+    if (exits.some((exit) => exit.status === "PENDING_NEW"))
+      exits = await Promise.all([order(legs.takeProfit), order(legs.stopLoss)]);
+    if (exits.every((exit) => exit.status === "NEW"))
+      return {
+        ...base,
+        status: "protected",
+        message: `Bought ${amount(working.executedQty)}. The take profit at ${entry.takeProfitPrice} and stop loss at ${entry.stopLossPrice} are on Binance.`,
+      };
+    if (exits.some((exit) => exit.status === "FILLED"))
+      return {
+        ...base,
+        status: "closed",
+        message:
+          "The entry filled and one of its exits has already closed the position.",
+      };
+    if (
+      exits.some(
+        (exit) =>
+          exit.status === "PENDING_NEW" || exit.status === "PARTIALLY_FILLED",
+      )
+    )
+      return {
+        ...base,
+        status: "unverified",
+        unprotectedQuantity: amount(working.executedQty),
+        message: `Bought ${amount(working.executedQty)}, but Binance has not confirmed both exits yet. Check the Open orders table now.`,
+      };
+    return {
+      ...base,
+      status: "protection_failed",
+      unprotectedQuantity: amount(working.executedQty),
+      message: `Bought ${amount(working.executedQty)}, but Binance did not place the take profit and stop loss (${exits.map((exit) => exit.status).join(", ")}). This position has no exits. Sell it now, for example with pnpm exchange place-order, or set exits yourself.`,
+    };
   }
 }
 

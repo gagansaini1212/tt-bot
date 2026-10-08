@@ -11,6 +11,7 @@ import {
 import type { TestnetOrder } from "./binance-spot-testnet";
 import {
   floorToStep,
+  isStrategyListId,
   listClientOrderIdSchema,
   protectedEntryFilterIssues,
   protectedLeg,
@@ -31,8 +32,10 @@ const orderFields = {
   stopLossPrice: amount,
   takeProfitPrice: amount,
   // Chosen by the browser once per order, so a repeated request cannot
-  // place a second order.
-  listClientOrderId: listClientOrderIdSchema,
+  // place a second order. Strategies' IDs are reserved for them.
+  listClientOrderId: listClientOrderIdSchema.refine(
+    (id) => !isStrategyListId(id),
+  ),
 };
 /**
  * A buy from the order drawer. Spot is long only, so there is no side. A
@@ -201,7 +204,8 @@ export function manualTestnetPolicy(
  * Capital the manual allocation has tied up, read from the exchange's open
  * orders. Open buys reserve their unfilled value, and any filled part is a
  * position. A list's open exits hold a position worth its entry, read from the
- * order journal. Holdings with no open order are outside the allocation.
+ * order journal. Holdings with no open order are outside the allocation, and
+ * so are a strategy's entries, which its own allocation covers.
  */
 export function manualExposure(
   orders: TestnetOrder[],
@@ -211,6 +215,8 @@ export function manualExposure(
   let committed = new Decimal(0);
   const exits = new Map<string, TestnetOrder[]>();
   for (const order of orders) {
+    const list = protectedLeg(order.clientOrderId)?.listClientOrderId;
+    if (list && isStrategyListId(list)) continue;
     if (order.side === "BUY") {
       const price = Decimal.max(order.price, order.stopPrice ?? "0");
       const filled = new Decimal(order.executedQty);

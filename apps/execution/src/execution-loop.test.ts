@@ -220,9 +220,13 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
           'AI', 'active', 1)
       `;
       await tx`
-        insert into strategy_versions (customer_id, strategy_id, version, rules)
+        insert into strategy_versions (
+          customer_id, strategy_id, version, rules, proposal_approval,
+          analysis_interval_minutes
+        )
         values (${scope.customerId}, ${strategyId}, 1,
-          ${tx.json({ kind: "ai_managed", holdingPeriodSeconds })})
+          ${tx.json({ kind: "ai_managed", holdingPeriodSeconds })},
+          'required', 60)
       `;
       await tx`
         insert into trade_proposals (

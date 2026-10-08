@@ -58,6 +58,7 @@ export interface RiskLimitStore {
    * trigger. Orders nothing was placed for (refused, or cancelled while
    * held), and orders cancelled or expired before anything filled, are left
    * out. Others count in full, whether or not they filled or have closed.
+   * A strategy's entries are left out: its own loss limits bound them.
    */
   dailyRiskUsed(
     scope: AccountScope,
@@ -288,6 +289,10 @@ export class PostgresRiskLimits implements RiskLimitStore {
           and i.created_at >= ${since}
           and i.status not in ('rejected', 'cancelled')
           and i.idempotency_key <> coalesce(${excluding ?? null}::text, '')
+          and not exists (
+            select from trade_proposals p
+            where p.id = i.proposal_id and p.strategy_id is not null
+          )
           and not exists (
             select from exchange_orders o
             where o.order_intent_id = i.id

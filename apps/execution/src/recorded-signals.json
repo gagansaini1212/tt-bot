@@ -1,0 +1,33 @@
+{
+  "id": "recorded-signals-2026-10",
+  "title": "Recorded decisions for AI-managed strategies",
+  "provenance": "Hand-written for this repository so AI-managed strategies run without a model: a cycle of trade proposals priced relative to the market at the time, and decisions not to trade. No model produced them, and they say nothing about how the AI trades.",
+  "decisions": [
+    {
+      "kind": "trade_proposal",
+      "entryBelowPercent": "0.3",
+      "stopLossPercent": "1.5",
+      "takeProfitPercent": "2",
+      "positionPercent": "40",
+      "expiresAfterMinutes": 60,
+      "rationale": "A resting buy just below the last price, with a stop 1.5% under the entry and a target 2% above it."
+    },
+    {
+      "kind": "no_trade",
+      "rationale": "No clear edge at this hour, so no entry."
+    },
+    {
+      "kind": "trade_proposal",
+      "entryBelowPercent": "0.5",
+      "stopLossPercent": "1",
+      "takeProfitPercent": "1.5",
+      "positionPercent": "25",
+      "expiresAfterMinutes": 120,
+      "rationale": "A smaller buy further below the market, with a tighter stop and target."
+    },
+    {
+      "kind": "no_trade",
+      "rationale": "The strategy already holds entries in this market; waiting for them to exit."
+    }
+  ]
+}

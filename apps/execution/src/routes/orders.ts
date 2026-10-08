@@ -12,6 +12,7 @@ import {
   ManualOrderDesk,
   RiskLimitsNotSet,
   serializer,
+  type Serializer,
 } from "../manual-orders";
 import type { OrderIntentStore } from "../order-intents";
 import type { RiskLimitStore } from "../risk-limits";
@@ -30,6 +31,7 @@ export function deskProvider({
   intents,
   proposals,
   risk,
+  exclusive = serializer(),
 }: {
   env: NodeJS.ProcessEnv;
   now: () => number;
@@ -37,10 +39,11 @@ export function deskProvider({
   intents: OrderIntentStore;
   proposals?: TradeProposalStore;
   risk: Pick<RiskLimitStore, "current" | "dailyRiskUsed">;
+  // Shared with the strategy runner, so its placements wait for these.
+  exclusive?: Serializer;
 }) {
   const loaded = loadManualTradingConfig(env);
   const desks = new WeakMap<BinanceSpotTestnet, ManualOrderDesk>();
-  const exclusive = serializer();
   return {
     disabledMessage: loaded.ok ? "" : loaded.message,
     deskFor(exchange: BinanceSpotTestnet) {

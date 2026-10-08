@@ -118,8 +118,11 @@ export const pauseStrategyInDatabase: StrategyPauser = async (
   strategyId,
   reason,
 ) => {
+  // The worker's next pass cancels the strategy's pending entries.
   const [paused] = await tx<{ id: string }[]>`
-    update strategies set status = 'paused'
+    update strategies set status = 'paused',
+      pause_reason = 'protection_failed', paused_at = now(),
+      exit_request = coalesce(exit_request, 'pause'), updated_at = now()
     where id = ${strategyId} and status in ('simulation', 'active')
     returning id
   `;
@@ -558,22 +561,54 @@ export function stopStrategyEntries(
   strategyId: string,
   reason: string,
 ): Promise<string[]> {
+  return withCustomerScope(database, scope.customerId, (tx) =>
+    requestStrategyExits(tx, scope, strategyId, reason),
+  );
+}
+
+/**
+ * `stopStrategyEntries` in `tx`. With `unrequested`, only entries that have
+ * no exit request yet, or only a pause when `reason` is stronger, are
+ * stopped, so it can run on every pass without repeating itself.
+ */
+export async function requestStrategyExits(
+  tx: Transaction,
+  scope: AccountScope,
+  strategyId: string,
+  reason: string,
+  { unrequested = false }: { unrequested?: boolean } = {},
+): Promise<string[]> {
   checkReason(reason);
-  return withCustomerScope(database, scope.customerId, async (tx) => {
-    const entries = await tx<{ id: string }[]>`
-      select i.id from order_intents i
-      join trade_proposals p on p.id = i.proposal_id
-      left join entry_reconciliations r on r.order_intent_id = i.id
-      where p.strategy_id = ${strategyId} and i.status = 'acknowledged'
-        and p.exchange_account_id = ${scope.exchangeAccountId}
-        and (r.state is null or r.state not in ${tx(terminal)})
-      order by i.created_at, i.id
-    `;
-    const stopped: string[] = [];
-    for (const { id } of entries)
-      if (await requestExit(tx, scope, id, reason)) stopped.push(id);
-    return stopped;
-  });
+  const replaceable = cancelOnly.includes(reason) ? [] : cancelOnly;
+  const entries = await tx<{ id: string }[]>`
+    select i.id from order_intents i
+    join trade_proposals p on p.id = i.proposal_id
+    left join entry_reconciliations r on r.order_intent_id = i.id
+    where p.strategy_id = ${strategyId} and i.status = 'acknowledged'
+      and p.exchange_account_id = ${scope.exchangeAccountId}
+      and (r.state is null or r.state not in ${tx(terminal)})
+      and (
+        not ${unrequested}
+        or r.exit_reason is null
+        or r.exit_reason in ${tx(replaceable.length ? replaceable : [""])}
+      )
+    order by i.created_at, i.id
+  `;
+  const stopped: string[] = [];
+  for (const { id } of entries)
+    if (await requestExit(tx, scope, id, reason)) stopped.push(id);
+  return stopped;
+}
+
+/** `requestEntryExit` in `tx`, for an entry already known to be on the account. */
+export function requestExitIn(
+  tx: Transaction,
+  scope: AccountScope,
+  orderIntentId: string,
+  reason: string,
+) {
+  checkReason(reason);
+  return requestExit(tx, scope, orderIntentId, reason);
 }
 
 function checkReason(reason: string) {

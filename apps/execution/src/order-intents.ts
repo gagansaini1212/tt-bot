@@ -82,7 +82,12 @@ export type Settlement =
   | { status: "rejected" | "unknown"; reason?: string };
 
 export type IntentSource =
-  "dashboard" | "cli" | "journal_import" | "worker" | "assistant_proposal";
+  | "dashboard"
+  | "cli"
+  | "journal_import"
+  | "worker"
+  | "assistant_proposal"
+  | "strategy";
 
 /**
  * Binance can still be executing a submission it did not confirm, so an
@@ -539,7 +544,7 @@ function queueReconcile(
 function actorFor(source: IntentSource) {
   return source === "journal_import"
     ? ("system" as const)
-    : source === "worker"
+    : source === "worker" || source === "strategy"
       ? ("execution_worker" as const)
       : ("customer" as const);
 }

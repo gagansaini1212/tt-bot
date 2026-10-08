@@ -19,6 +19,7 @@ import {
   protectedEntryFilterIssues,
   protectedLeg,
   protectedLegIds,
+  STRATEGY_LIST_PREFIX,
   type SymbolRules,
 } from "./order-rules.js";
 
@@ -392,6 +393,38 @@ test("exposure reserves open entries and commits positions held by open exits", 
       reservedBudget: "0",
       committedCapital: "63",
     },
+  );
+});
+
+test("a strategy's entries count against its own allocation, not the dashboard's", () => {
+  const strategy = protectedLegIds(`${STRATEGY_LIST_PREFIX}abc`);
+  assert.deepEqual(
+    manualExposure(
+      [
+        { ...entryLeg, clientOrderId: strategy.entry, orderListId: 9 },
+        {
+          ...stopLoss,
+          clientOrderId: strategy.stopLoss,
+          orderListId: 9,
+          status: "NEW",
+        },
+      ],
+      () => "60000",
+    ),
+    { reservedBudget: "0", committedCapital: "0" },
+  );
+  // And the dashboard cannot use a strategy's client order IDs.
+  assert.equal(
+    manualOrderRequestSchema.safeParse({
+      type: "limit",
+      instrument: "BTC-USDT",
+      quantity: "0.001",
+      price: "60000",
+      takeProfitPrice: "63000",
+      stopLossPrice: "58000",
+      listClientOrderId: `${STRATEGY_LIST_PREFIX}abc`,
+    }).success,
+    false,
   );
 });
 
