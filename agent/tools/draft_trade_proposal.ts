@@ -1,3 +1,4 @@
+import type { SessionAuthContext } from "eve/context";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
@@ -25,18 +26,33 @@ export default defineTool({
     rationale: z.string().trim().min(1).max(2_000),
   }),
   execute(input, ctx) {
-    const customerId = ctx.session.auth.current?.principalId;
-    if (!customerId) {
-      throw new Error(
-        "An authenticated customer is required to draft a proposal.",
-      );
-    }
-
     return {
       ...input,
-      customerId,
+      customerId: customerIdFor(ctx.session.auth.current),
       status: "draft" as const,
       notice: "Independent execution checks are still required.",
     };
   },
 });
+
+/**
+ * Resolves the customer from the caller's route-auth principal. Signed-in
+ * customers arrive as `user` principals. eve's `localDev()` admits requests as
+ * a synthetic `local-dev` principal only while the process is a local
+ * development server, so that principal stands in for the local customer.
+ * Anonymous, service, and runtime callers are not customers.
+ */
+function customerIdFor(caller: SessionAuthContext | null): string {
+  const isLocalDeveloper =
+    caller?.authenticator === "local-dev" &&
+    caller.principalType === "local-dev";
+  if (caller && (caller.principalType === "user" || isLocalDeveloper)) {
+    return caller.principalId;
+  }
+
+  throw new Error(
+    caller
+      ? `An authenticated customer is required to draft a proposal. The caller is authenticated as "${caller.principalType}", not as a customer.`
+      : "An authenticated customer is required to draft a proposal.",
+  );
+}
