@@ -1,12 +1,19 @@
 import { createHmac, createPrivateKey, sign } from "node:crypto";
 import { z } from "zod";
+import {
+  positiveDecimal,
+  protectedEntrySchema,
+  protectedLegIds,
+  symbolRulesSchema,
+  testnetInstrumentSchema,
+  type ProtectedEntry,
+  type SymbolRules,
+  type TestnetInstrument,
+} from "./order-rules";
 
 // Deliberately fixed: this adapter cannot be configured to send real orders.
 export const BINANCE_SPOT_TESTNET_URL = "https://testnet.binance.vision";
-export const testnetInstrumentSchema = z.enum(["BTC-USDT", "ETH-USDT"]);
-export type TestnetInstrument = z.infer<typeof testnetInstrumentSchema>;
 const decimal = z.string().regex(/^\d+(\.\d+)?$/);
-const positiveDecimal = decimal.refine((value) => /[1-9]/.test(value));
 const id = z.number().int().nonnegative().refine(Number.isSafeInteger);
 
 export const balanceSchema = z.object({
@@ -29,6 +36,29 @@ export const orderSchema = z.object({
   status: z.string(),
   type: z.string(),
   side: z.enum(["BUY", "SELL"]),
+  // -1 unless the order belongs to an order list, such as an OCO.
+  orderListId: z
+    .number()
+    .int()
+    .min(-1)
+    .refine(Number.isSafeInteger)
+    .default(-1),
+  // Set for stop-loss and take-profit orders, which trigger at this price.
+  stopPrice: decimal.optional(),
+});
+export const orderListSchema = z.object({
+  orderListId: id,
+  contingencyType: z.string(),
+  listStatusType: z.string(),
+  listOrderStatus: z.string(),
+  listClientOrderId: z.string(),
+  symbol: z.string(),
+  orders: z.array(
+    z.object({ symbol: z.string(), orderId: id, clientOrderId: z.string() }),
+  ),
+});
+const orderListReportSchema = orderListSchema.extend({
+  orderReports: z.array(orderSchema),
 });
 export const fillSchema = z.object({
   symbol: z.string(),
@@ -52,6 +82,8 @@ export const limitOrderSchema = z.object({
 });
 export type TestnetLimitOrder = z.infer<typeof limitOrderSchema>;
 export type TestnetOrder = z.infer<typeof orderSchema>;
+export type TestnetOrderList = z.infer<typeof orderListSchema>;
+export type TestnetOrderListReport = z.infer<typeof orderListReportSchema>;
 export type TestnetFill = z.infer<typeof fillSchema>;
 export const testnetSnapshotSchema = z.object({
   provider: z.literal("binance-spot-testnet"),
@@ -59,6 +91,10 @@ export const testnetSnapshotSchema = z.object({
   canTrade: z.boolean(),
   balances: z.array(balanceSchema),
   orders: z.array(orderSchema),
+  // Open order lists on BTC/USDT and ETH/USDT, and the legs Binance holds
+  // back until the list's entry fills, which may be missing from `orders`.
+  orderLists: z.array(orderListSchema).default([]),
+  pendingOrders: z.array(orderSchema).default([]),
   fills: z.array(fillSchema),
 });
 export type TestnetSnapshot = z.infer<typeof testnetSnapshotSchema>;
@@ -196,17 +232,40 @@ export interface SpotTestnetExchange {
   ): Promise<TestnetDepth>;
 }
 
+// Rejection reasons from Binance's error documentation. Other messages are
+// dropped: a proxy or a changed API could echo request details.
+const documentedRejections = new Set([
+  "Account has insufficient balance for requested action.",
+  "Duplicate order sent.",
+  "Market is closed.",
+  "OPO orders are not supported for this symbol.",
+  "Order would immediately match and take.",
+  "Order would trigger immediately.",
+  "The relationship of the prices for the orders is not correct.",
+  "This account may not place or cancel orders.",
+  "Unknown order sent.",
+  "Unsupported order combination",
+]);
+function documentedRejection(message: unknown) {
+  if (typeof message !== "string") return undefined;
+  return documentedRejections.has(message) ||
+    /^Filter failure: [A-Z_]{1,40}$/.test(message)
+    ? message
+    : undefined;
+}
+
 export class BinanceTestnetError extends Error {
   constructor(
     public readonly kind:
       "rejected" | "unavailable" | "rate_limited" | "unknown_outcome",
     public readonly code?: number,
     public readonly retryAfterSeconds?: number,
+    public readonly reason?: string,
   ) {
     super(
       kind === "unknown_outcome"
         ? "Binance testnet outcome is unknown. Query the client order ID before taking further action."
-        : `Binance testnet request ${kind}${code === undefined ? "" : ` (code ${code})`}.`,
+        : `Binance testnet request ${kind}${code === undefined ? "" : ` (code ${code})`}.${reason ? ` ${reason}` : ""}`,
     );
     this.name = "BinanceTestnetError";
   }
@@ -364,13 +423,18 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
       const unknown =
         mutation &&
         (response.status >= 500 || code === -1006 || code === -1007);
+      const kind = unknown
+        ? "unknown_outcome"
+        : response.status >= 500
+          ? "unavailable"
+          : "rejected";
       throw new BinanceTestnetError(
-        unknown
-          ? "unknown_outcome"
-          : response.status >= 500
-            ? "unavailable"
-            : "rejected",
+        kind,
         code,
+        undefined,
+        kind === "rejected" && error.success
+          ? documentedRejection(error.data.msg)
+          : undefined,
       );
     }
     const parsed = schema.safeParse(body);
@@ -480,26 +544,226 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
       false,
     );
   }
+  async getOrderById(instrument: TestnetInstrument, orderId: number) {
+    return this.#request(
+      "GET",
+      "/api/v3/order",
+      { symbol: symbol(instrument), orderId: String(id.parse(orderId)) },
+      orderSchema,
+    );
+  }
+  async cancelOrderById(instrument: TestnetInstrument, orderId: number) {
+    return this.#request(
+      "DELETE",
+      "/api/v3/order",
+      { symbol: symbol(instrument), orderId: String(id.parse(orderId)) },
+      orderSchema,
+    );
+  }
+  /** Validates the entry leg without placing it. Binance has no test endpoint for order lists. */
+  async testProtectedEntry(entry: ProtectedEntry) {
+    const order = protectedEntrySchema.parse(entry);
+    await this.#request(
+      "POST",
+      "/api/v3/order/test",
+      {
+        symbol: symbol(order.instrument),
+        side: "BUY",
+        type: "LIMIT",
+        timeInForce: order.timeInForce,
+        quantity: order.quantity,
+        price: order.price,
+        newClientOrderId: protectedLegIds(order.listClientOrderId).entry,
+      },
+      z.object({}),
+    );
+  }
+  /**
+   * Places the entry and its exits as one OPOCO order list. Binance places the
+   * take profit and stop loss itself once the entry fills completely, sized
+   * from the quantity received after fees.
+   */
+  async placeProtectedEntry(entry: ProtectedEntry) {
+    const order = protectedEntrySchema.parse(entry);
+    const legs = protectedLegIds(order.listClientOrderId);
+    return this.#request(
+      "POST",
+      "/api/v3/orderList/opoco",
+      {
+        symbol: symbol(order.instrument),
+        listClientOrderId: order.listClientOrderId,
+        newOrderRespType: "RESULT",
+        workingType: "LIMIT",
+        workingSide: "BUY",
+        workingClientOrderId: legs.entry,
+        workingPrice: order.price,
+        workingQuantity: order.quantity,
+        workingTimeInForce: order.timeInForce,
+        pendingSide: "SELL",
+        pendingAboveType: "LIMIT_MAKER",
+        pendingAboveClientOrderId: legs.takeProfit,
+        pendingAbovePrice: order.takeProfitPrice,
+        // A stop-market exit still sells if the price gaps through the stop.
+        pendingBelowType: "STOP_LOSS",
+        pendingBelowClientOrderId: legs.stopLoss,
+        pendingBelowStopPrice: order.stopLossPrice,
+      },
+      orderListReportSchema,
+    );
+  }
+  async getOrderList(listClientOrderId: string) {
+    return this.#request(
+      "GET",
+      "/api/v3/orderList",
+      {
+        origClientOrderId: z
+          .string()
+          .regex(/^ct_[A-Za-z0-9_-]{1,33}$/)
+          .parse(listClientOrderId),
+      },
+      orderListSchema,
+    );
+  }
+  getOpenOrderLists() {
+    return this.#request(
+      "GET",
+      "/api/v3/openOrderList",
+      {},
+      z.array(orderListSchema),
+    );
+  }
+  /** Binance cancels every order in a list when any one of them is cancelled. */
+  async cancelOrderList(instrument: TestnetInstrument, orderListId: number) {
+    return this.#request(
+      "DELETE",
+      "/api/v3/orderList",
+      {
+        symbol: symbol(instrument),
+        orderListId: String(id.parse(orderListId)),
+      },
+      orderListReportSchema,
+    );
+  }
+  async getSymbolRules(): Promise<SymbolRules[]> {
+    const { symbols } = await this.#request(
+      "GET",
+      "/api/v3/exchangeInfo",
+      { symbols: JSON.stringify(testnetInstrumentSchema.options.map(symbol)) },
+      exchangeInfoSchema,
+      false,
+    );
+    return testnetInstrumentSchema.options.map((instrument) => {
+      const info = symbols.find((entry) => entry.symbol === symbol(instrument));
+      if (!info) throw new BinanceTestnetError("unavailable");
+      return symbolRules(instrument, info);
+    });
+  }
   async getSnapshot(): Promise<TestnetSnapshot> {
-    const [account, btcOrders, ethOrders, btcFills, ethFills] =
+    const [account, btcOrders, ethOrders, btcFills, ethFills, lists] =
       await Promise.all([
         this.getAccount(),
         this.getOpenOrders("BTC-USDT"),
         this.getOpenOrders("ETH-USDT"),
         this.getFills("BTC-USDT"),
         this.getFills("ETH-USDT"),
+        this.getOpenOrderLists(),
       ]);
+    const orders = [...btcOrders, ...ethOrders];
+    const orderLists = lists.filter((list) => instrumentOf(list.symbol));
+    // Binance documents no rule for whether openOrders includes the legs it
+    // holds back until an entry fills, so look up any that are missing.
+    const open = new Set(
+      orders.map((order) => `${order.symbol}:${order.orderId}`),
+    );
+    const pendingOrders = (
+      await Promise.all(
+        orderLists.flatMap((list) =>
+          list.orders
+            .filter((leg) => !open.has(`${leg.symbol}:${leg.orderId}`))
+            .map((leg) =>
+              this.getOrderById(instrumentOf(list.symbol)!, leg.orderId),
+            ),
+        ),
+      )
+    ).filter((order) => order.status === "PENDING_NEW");
     return {
       provider: "binance-spot-testnet",
       capturedAt: new Date(this.#now()).toISOString(),
       canTrade: account.canTrade,
       balances: account.balances,
-      orders: [...btcOrders, ...ethOrders],
+      orders,
+      orderLists,
+      pendingOrders,
       fills: [...btcFills, ...ethFills]
         .sort((a, b) => b.time - a.time)
         .slice(0, 50),
     };
   }
+}
+
+const exchangeInfoSchema = z.object({
+  symbols: z.array(
+    z.object({
+      symbol: z.string(),
+      status: z.string(),
+      orderTypes: z.array(z.string()),
+      ocoAllowed: z.boolean(),
+      otoAllowed: z.boolean(),
+      opoAllowed: z.boolean().default(false),
+      filters: z.array(z.looseObject({ filterType: z.string() })),
+    }),
+  ),
+});
+
+function symbolRules(
+  instrument: TestnetInstrument,
+  info: z.infer<typeof exchangeInfoSchema>["symbols"][number],
+): SymbolRules {
+  const filter = <T extends z.ZodType>(type: string, schema: T) => {
+    const found = info.filters.find((entry) => entry.filterType === type);
+    return found ? schema.parse(found) : undefined;
+  };
+  const price = filter(
+    "PRICE_FILTER",
+    z.object({ minPrice: decimal, maxPrice: decimal, tickSize: decimal }),
+  );
+  const lot = filter(
+    "LOT_SIZE",
+    z.object({ minQty: decimal, maxQty: decimal, stepSize: decimal }),
+  );
+  const notional =
+    filter(
+      "NOTIONAL",
+      z.object({ minNotional: decimal, maxNotional: decimal }),
+    ) ??
+    filter(
+      "MIN_NOTIONAL",
+      z
+        .object({ minNotional: decimal })
+        .transform((value) => ({ ...value, maxNotional: "0" })),
+    );
+  if (!price || !lot) throw new BinanceTestnetError("unavailable");
+  return symbolRulesSchema.parse({
+    instrument,
+    trading: info.status === "TRADING",
+    protectedEntryAllowed:
+      info.ocoAllowed &&
+      info.otoAllowed &&
+      info.opoAllowed &&
+      ["LIMIT", "LIMIT_MAKER", "STOP_LOSS"].every((type) =>
+        info.orderTypes.includes(type),
+      ),
+    ...price,
+    ...lot,
+    minNotional: notional?.minNotional ?? "0",
+    maxNotional: notional?.maxNotional ?? "0",
+  });
+}
+
+function instrumentOf(binanceSymbol: string) {
+  return testnetInstrumentSchema.options.find(
+    (instrument) => symbol(instrument) === binanceSymbol,
+  );
 }
 
 function symbol(instrument: TestnetInstrument) {

@@ -7,6 +7,7 @@ import {
   type KlineInterval,
   type TestnetLimitOrder,
 } from "./binance-spot-testnet.js";
+import type { ProtectedEntry } from "./order-rules.js";
 
 const order: TestnetLimitOrder = {
   instrument: "BTC-USDT",
@@ -298,7 +299,11 @@ test("snapshot combines both supported instruments, shares clock sync and retain
   const { exchange, requests } = setup((url) => {
     if (url.pathname === "/api/v3/account")
       return Response.json({ canTrade: true, balances: [] });
-    if (url.pathname === "/api/v3/openOrders") return Response.json([]);
+    if (
+      url.pathname === "/api/v3/openOrders" ||
+      url.pathname === "/api/v3/openOrderList"
+    )
+      return Response.json([]);
     return Response.json([
       {
         symbol: url.searchParams.get("symbol"),
@@ -458,6 +463,285 @@ test("malformed market data is reported as unavailable", async () => {
       request,
       (error: unknown) =>
         error instanceof BinanceTestnetError && error.kind === "unavailable",
+    );
+  }
+});
+
+const entry: ProtectedEntry = {
+  instrument: "BTC-USDT",
+  quantity: "0.001",
+  price: "60000",
+  timeInForce: "GTC",
+  takeProfitPrice: "63000",
+  stopLossPrice: "58000",
+  listClientOrderId: "ct_list_001",
+};
+const listResponse = {
+  orderListId: 7,
+  contingencyType: "OTO",
+  listStatusType: "EXEC_STARTED",
+  listOrderStatus: "EXECUTING",
+  listClientOrderId: entry.listClientOrderId,
+  transactionTime: 1_800_000_000_000,
+  symbol: "BTCUSDT",
+  orders: [
+    { symbol: "BTCUSDT", orderId: 21, clientOrderId: "ct_list_001_en" },
+    { symbol: "BTCUSDT", orderId: 22, clientOrderId: "ct_list_001_sl" },
+    { symbol: "BTCUSDT", orderId: 23, clientOrderId: "ct_list_001_tp" },
+  ],
+};
+const leg = (
+  orderId: number,
+  clientOrderId: string,
+  fields: Record<string, string>,
+) => ({
+  symbol: "BTCUSDT",
+  orderId,
+  orderListId: 7,
+  clientOrderId,
+  origQty: "0.001",
+  executedQty: "0",
+  cummulativeQuoteQty: "0",
+  status: "PENDING_NEW",
+  side: "SELL",
+  ...fields,
+});
+const listReports = [
+  leg(21, "ct_list_001_en", {
+    type: "LIMIT",
+    side: "BUY",
+    price: "60000",
+    status: "NEW",
+  }),
+  leg(22, "ct_list_001_sl", {
+    type: "STOP_LOSS",
+    price: "0",
+    stopPrice: "58000",
+    origQty: "0",
+  }),
+  leg(23, "ct_list_001_tp", {
+    type: "LIMIT_MAKER",
+    price: "63000",
+    origQty: "0",
+  }),
+];
+
+test("a protected entry is one OPOCO list whose exits Binance sizes after the fill", async () => {
+  const { exchange, requests } = setup(() =>
+    Response.json({ ...listResponse, orderReports: listReports }),
+  );
+  await assert.rejects(
+    exchange.placeProtectedEntry({ ...entry, stopLossPrice: "60000" }),
+  );
+  await assert.rejects(
+    exchange.placeProtectedEntry({ ...entry, takeProfitPrice: "59000" }),
+  );
+  assert.equal(requests.length, 0);
+  const placed = await exchange.placeProtectedEntry(entry);
+  assert.equal(placed.orderReports[1].stopPrice, "58000");
+  const { url, init } = requests[1];
+  assert.equal(url.pathname, "/api/v3/orderList/opoco");
+  assert.equal(init.method, "POST");
+  const params = new URLSearchParams(String(init.body));
+  assert.deepEqual(
+    Object.fromEntries(
+      [...params].filter(
+        ([key]) => !["timestamp", "recvWindow", "signature"].includes(key),
+      ),
+    ),
+    {
+      symbol: "BTCUSDT",
+      listClientOrderId: "ct_list_001",
+      newOrderRespType: "RESULT",
+      workingType: "LIMIT",
+      workingSide: "BUY",
+      workingClientOrderId: "ct_list_001_en",
+      workingPrice: "60000",
+      workingQuantity: "0.001",
+      workingTimeInForce: "GTC",
+      pendingSide: "SELL",
+      pendingAboveType: "LIMIT_MAKER",
+      pendingAboveClientOrderId: "ct_list_001_tp",
+      pendingAbovePrice: "63000",
+      pendingBelowType: "STOP_LOSS",
+      pendingBelowClientOrderId: "ct_list_001_sl",
+      pendingBelowStopPrice: "58000",
+    },
+  );
+});
+
+test("the entry leg is validated by Binance without being placed", async () => {
+  const { exchange, requests } = setup(() => Response.json({}));
+  await exchange.testProtectedEntry({ ...entry, timeInForce: "FOK" });
+  const params = new URLSearchParams(String(requests[1].init.body));
+  assert.equal(requests[1].url.pathname, "/api/v3/order/test");
+  assert.equal(params.get("type"), "LIMIT");
+  assert.equal(params.get("side"), "BUY");
+  assert.equal(params.get("timeInForce"), "FOK");
+  assert.equal(params.get("newClientOrderId"), "ct_list_001_en");
+});
+
+test("order lists are looked up by client ID and cancelled by list ID", async () => {
+  const { exchange, requests } = setup((url, init) =>
+    url.pathname === "/api/v3/orderList" && init.method === "DELETE"
+      ? Response.json({
+          ...listResponse,
+          listOrderStatus: "ALL_DONE",
+          orderReports: listReports.map((report) => ({
+            ...report,
+            status: "CANCELED",
+          })),
+        })
+      : url.pathname === "/api/v3/order"
+        ? Response.json({ ...orderResponse, status: "CANCELED" })
+        : Response.json(listResponse),
+  );
+  assert.equal(
+    (await exchange.getOrderList("ct_list_001")).orders[0].clientOrderId,
+    "ct_list_001_en",
+  );
+  assert.equal(
+    requests[1].url.searchParams.get("origClientOrderId"),
+    "ct_list_001",
+  );
+  const cancelled = await exchange.cancelOrderList("BTC-USDT", 7);
+  assert.ok(
+    cancelled.orderReports.every((report) => report.status === "CANCELED"),
+  );
+  const listCancel = new URLSearchParams(String(requests[2].init.body));
+  assert.equal(requests[2].init.method, "DELETE");
+  assert.equal(listCancel.get("orderListId"), "7");
+  assert.equal(listCancel.get("symbol"), "BTCUSDT");
+  await exchange.cancelOrderById("ETH-USDT", 12);
+  const orderCancel = new URLSearchParams(String(requests[3].init.body));
+  assert.equal(requests[3].url.pathname, "/api/v3/order");
+  assert.equal(orderCancel.get("orderId"), "12");
+  assert.equal(orderCancel.get("symbol"), "ETHUSDT");
+  await assert.rejects(exchange.getOrderList("not-ours"));
+  await assert.rejects(exchange.cancelOrderList("BTC-USDT", -1));
+});
+
+test("snapshot groups order lists and looks up legs Binance holds back", async () => {
+  const { exchange, requests } = setup((url) => {
+    if (url.pathname === "/api/v3/account")
+      return Response.json({ canTrade: true, balances: [] });
+    if (url.pathname === "/api/v3/openOrders")
+      return Response.json(
+        url.searchParams.get("symbol") === "BTCUSDT" ? [listReports[0]] : [],
+      );
+    if (url.pathname === "/api/v3/openOrderList")
+      return Response.json([
+        listResponse,
+        { ...listResponse, orderListId: 9, symbol: "BNBUSDT" },
+      ]);
+    if (url.pathname === "/api/v3/order")
+      return Response.json(
+        listReports.find(
+          (report) =>
+            String(report.orderId) === url.searchParams.get("orderId"),
+        ),
+      );
+    return Response.json([]);
+  });
+  const snapshot = await exchange.getSnapshot();
+  assert.equal(snapshot.orders[0].orderListId, 7);
+  assert.deepEqual(
+    snapshot.orderLists.map((list) => list.orderListId),
+    [7],
+  );
+  assert.deepEqual(
+    snapshot.pendingOrders.map((order) => order.clientOrderId),
+    ["ct_list_001_sl", "ct_list_001_tp"],
+  );
+  assert.deepEqual(
+    requests
+      .filter(({ url }) => url.pathname === "/api/v3/order")
+      .map(({ url }) => url.searchParams.get("orderId")),
+    ["22", "23"],
+  );
+});
+
+const exchangeInfo = (overrides: Record<string, unknown> = {}) => ({
+  symbols: ["BTCUSDT", "ETHUSDT"].map((symbol) => ({
+    symbol,
+    status: "TRADING",
+    orderTypes: [
+      "LIMIT",
+      "LIMIT_MAKER",
+      "MARKET",
+      "STOP_LOSS",
+      "STOP_LOSS_LIMIT",
+    ],
+    ocoAllowed: true,
+    otoAllowed: true,
+    opoAllowed: true,
+    filters: [
+      {
+        filterType: "PRICE_FILTER",
+        minPrice: "0.01000000",
+        maxPrice: "1000000.00000000",
+        tickSize: "0.01000000",
+      },
+      {
+        filterType: "LOT_SIZE",
+        minQty: "0.00001000",
+        maxQty: "9000.00000000",
+        stepSize: "0.00001000",
+      },
+      {
+        filterType: "NOTIONAL",
+        minNotional: "5.00000000",
+        applyMinToMarket: true,
+        maxNotional: "9000000.00000000",
+        applyMaxToMarket: false,
+        avgPriceMins: 5,
+      },
+    ],
+    ...overrides,
+  })),
+});
+
+test("symbol rules come from exchangeInfo without signing", async () => {
+  const { exchange, requests } = setup(() => Response.json(exchangeInfo()));
+  const [btc, eth] = await exchange.getSymbolRules();
+  assert.equal(btc.instrument, "BTC-USDT");
+  assert.equal(eth.instrument, "ETH-USDT");
+  assert.equal(btc.protectedEntryAllowed, true);
+  assert.equal(btc.tickSize, "0.01000000");
+  assert.equal(btc.minNotional, "5.00000000");
+  const { url, init } = requests[0];
+  assert.equal(url.pathname, "/api/v3/exchangeInfo");
+  assert.equal(url.searchParams.get("symbols"), '["BTCUSDT","ETHUSDT"]');
+  assert.equal(url.searchParams.get("signature"), null);
+  assert.deepEqual(init.headers, {});
+  const withoutOpo = setup(() =>
+    Response.json(exchangeInfo({ opoAllowed: false })),
+  );
+  const [restricted] = await withoutOpo.exchange.getSymbolRules();
+  assert.equal(restricted.protectedEntryAllowed, false);
+});
+
+test("rejections carry Binance's reason only when it is a documented message", async () => {
+  for (const [msg, reason] of [
+    ["Filter failure: NOTIONAL", "Filter failure: NOTIONAL"],
+    [
+      "Account has insufficient balance for requested action.",
+      "Account has insufficient balance for requested action.",
+    ],
+    ["private-secret in signature", undefined],
+  ] as const) {
+    const { exchange } = setup(() =>
+      Response.json({ code: -2010, msg }, { status: 400 }),
+    );
+    await assert.rejects(
+      exchange.placeProtectedEntry(entry),
+      (error: unknown) => {
+        assert.ok(error instanceof BinanceTestnetError);
+        assert.equal(error.kind, "rejected");
+        assert.equal(error.reason, reason);
+        assert.doesNotMatch(error.message, /private-secret/);
+        return true;
+      },
     );
   }
 });

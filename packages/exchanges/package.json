@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./manual-order": "./src/manual-order.ts",
+    "./order-rules": "./src/order-rules.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
@@ -12,6 +14,8 @@
     "test": "tsx --test src/**/*.test.ts"
   },
   "dependencies": {
+    "@crypto-trading/domain": "workspace:*",
+    "decimal.js": "^10.6.0",
     "zod": "^4.1.8"
   },
   "devDependencies": {

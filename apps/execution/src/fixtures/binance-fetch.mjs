@@ -58,6 +58,7 @@ globalThis.fetch = async (input, init = {}) => {
     ]);
   if (
     url.pathname === "/api/v3/openOrders" ||
+    url.pathname === "/api/v3/openOrderList" ||
     url.pathname === "/api/v3/myTrades"
   )
     return Response.json([]);
