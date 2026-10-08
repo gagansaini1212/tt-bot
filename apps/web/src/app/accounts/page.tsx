@@ -24,7 +24,7 @@ import { getTestnetAccount } from "@/lib/testnet-account";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Accounts · Northstar Trading",
+  title: "Accounts",
 };
 
 export default async function AccountsPage() {
@@ -34,7 +34,6 @@ export default async function AccountsPage() {
       <PageHeader
         action={<AccountRefresh />}
         description="Balances, orders, and fills reported by your connected Binance Spot Testnet account."
-        eyebrow="Portfolio control"
         title="Accounts"
       />
 

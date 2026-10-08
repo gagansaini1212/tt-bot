@@ -11,7 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
-export const metadata: Metadata = { title: "Strategies · Northstar Trading" };
+export const metadata: Metadata = { title: "Strategies" };
 
 export default function StrategiesPage() {
   return (
@@ -19,7 +19,6 @@ export default function StrategiesPage() {
       <PageHeader
         action={<Badge variant="outline">Not implemented</Badge>}
         description="Automated strategy configuration and management are not available yet."
-        eyebrow="Execution policy"
         title="Strategies"
       />
       <Card className="mt-6">

@@ -9,6 +9,7 @@ import {
 
 import { AccountRefresh } from "@/components/account-refresh";
 import { AssistantPanel } from "@/components/assistant-panel";
+import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -33,28 +34,24 @@ export function TestnetOverview({ account }: { account: TestnetAccountState }) {
   const connected = account.status === "connected";
   return (
     <>
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
-            Testnet workspace
-          </p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight">
-            Account overview
-          </h1>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge className="h-8 px-3" variant="outline">
-            Binance Spot Testnet
-          </Badge>
-          <AccountRefresh />
-          <Link
-            className={buttonVariants({ variant: "outline", size: "sm" })}
-            href="/accounts"
-          >
-            View account
-          </Link>
-        </div>
-      </header>
+      <PageHeader
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge className="h-8 px-3" variant="outline">
+              Binance Spot Testnet
+            </Badge>
+            <AccountRefresh />
+            <Link
+              className={buttonVariants({ variant: "outline", size: "sm" })}
+              href="/accounts"
+            >
+              View account
+            </Link>
+          </div>
+        }
+        description="Virtual balances, open orders, and recent fills from your Binance Spot Testnet exchange account."
+        title="Overview"
+      />
 
       <Alert className="mt-6">
         <ShieldCheck className="size-4" />

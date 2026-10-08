@@ -95,10 +95,10 @@ export function DashboardShell({ children }: { children: ReactNode }) {
             </span>
             <span>
               <span className="block text-sm font-semibold tracking-tight">
-                Northstar
+                Crypto Trading Agent
               </span>
               <span className="block text-xs text-muted-foreground">
-                Trading control
+                Testnet workspace
               </span>
             </span>
           </Link>

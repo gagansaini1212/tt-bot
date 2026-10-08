@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/card";
 import { getTestnetAccount } from "@/lib/testnet-account";
 
-export const metadata: Metadata = { title: "Settings · Northstar Trading" };
+export const metadata: Metadata = { title: "Settings" };
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {
@@ -63,7 +63,6 @@ export default async function SettingsPage() {
       <PageHeader
         action={<AccountRefresh />}
         description="Current exchange connection and application capabilities."
-        eyebrow="Workspace configuration"
         title="Settings"
       />
       <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2">

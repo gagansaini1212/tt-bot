@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/table";
 import { getTestnetAccount } from "@/lib/testnet-account";
 
-export const metadata: Metadata = { title: "Activity · Northstar Trading" };
+export const metadata: Metadata = { title: "Activity" };
 export const dynamic = "force-dynamic";
 
 export default async function ActivityPage() {
@@ -29,7 +29,6 @@ export default async function ActivityPage() {
       <PageHeader
         action={<AccountRefresh />}
         description="Recent exchange fills for BTC/USDT and ETH/USDT, reported directly by Binance Spot Testnet."
-        eyebrow="Exchange history"
         title="Activity"
       />
       <Card className="mt-6">

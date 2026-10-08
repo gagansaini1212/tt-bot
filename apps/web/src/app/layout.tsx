@@ -17,7 +17,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Northstar Trading",
+  title: {
+    default: "Crypto Trading Agent",
+    template: "%s · Crypto Trading Agent",
+  },
   description: "Binance Spot Testnet account monitoring and trading analysis.",
 };
 
