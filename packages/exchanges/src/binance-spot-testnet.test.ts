@@ -506,6 +506,10 @@ const leg = (
   side: "SELL",
   ...fields,
 });
+function withoutQuantity(report: Record<string, unknown>) {
+  const { origQty: _, ...rest } = report;
+  return rest;
+}
 const listReports = [
   leg(21, "ct_list_001_en", {
     type: "LIMIT",
@@ -513,17 +517,17 @@ const listReports = [
     price: "60000",
     status: "NEW",
   }),
-  leg(22, "ct_list_001_sl", {
-    type: "STOP_LOSS",
-    price: "0",
-    stopPrice: "58000",
-    origQty: "0",
-  }),
-  leg(23, "ct_list_001_tp", {
-    type: "LIMIT_MAKER",
-    price: "63000",
-    origQty: "0",
-  }),
+  // As documented, OPO exits have no origQty until their entry fills.
+  withoutQuantity(
+    leg(22, "ct_list_001_sl", {
+      type: "STOP_LOSS",
+      price: "0",
+      stopPrice: "58000",
+    }),
+  ),
+  withoutQuantity(
+    leg(23, "ct_list_001_tp", { type: "LIMIT_MAKER", price: "63000" }),
+  ),
 ];
 
 test("a protected entry is one OPOCO list whose exits Binance sizes after the fill", async () => {
@@ -539,6 +543,7 @@ test("a protected entry is one OPOCO list whose exits Binance sizes after the fi
   assert.equal(requests.length, 0);
   const placed = await exchange.placeProtectedEntry(entry);
   assert.equal(placed.orderReports[1].stopPrice, "58000");
+  assert.equal(placed.orderReports[1].origQty, "0");
   const { url, init } = requests[1];
   assert.equal(url.pathname, "/api/v3/orderList/opoco");
   assert.equal(init.method, "POST");

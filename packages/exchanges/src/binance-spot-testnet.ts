@@ -32,7 +32,8 @@ export const orderSchema = z.object({
   orderId: id,
   clientOrderId: z.string(),
   price: decimal,
-  origQty: decimal,
+  // Binance leaves this out of OPO exits until their entry fills.
+  origQty: decimal.default("0"),
   executedQty: decimal,
   cummulativeQuoteQty: decimal,
   status: z.string(),
