@@ -1,19 +1,17 @@
 import Decimal from "decimal.js";
 import { z } from "zod";
 
-const decimalString = z
-  .string()
-  .regex(/^(0|[1-9]\d*)(\.\d+)?$/, "Must be a non-negative decimal string");
-
-const positiveDecimalString = decimalString.refine(
-  (value) => new Decimal(value).greaterThan(0),
-  "Must be greater than zero",
-);
+import { decimalString, positiveDecimalString } from "./decimal";
+import { protectionIsValid } from "./protection";
 
 export const instrumentSchema = z.enum(["BTC-USDT", "ETH-USDT"]);
 export const marketKindSchema = z.enum(["spot", "perpetual"]);
 export const tradeDirectionSchema = z.enum(["long", "short"]);
 export const tradingModeSchema = z.enum(["simulation", "live"]);
+
+export type Instrument = z.infer<typeof instrumentSchema>;
+export type MarketKind = z.infer<typeof marketKindSchema>;
+export type TradeDirection = z.infer<typeof tradeDirectionSchema>;
 
 export const tradeProposalSchema = z.object({
   proposalId: z.uuid(),
@@ -46,13 +44,26 @@ export const executionPolicySchema = z.object({
   liveTradingEnabled: z.boolean(),
   allowedInstruments: z.array(instrumentSchema).min(1),
   allocation: positiveDecimalString,
+  // Summed across all of the strategy's protected entries: the capital of its
+  // open entries, and the reservations of its pending ones.
   committedCapital: decimalString,
   reservedBudget: decimalString,
+  // The largest position in one instrument, counting every protected entry the
+  // strategy holds in it.
   maxPositionNotional: positiveDecimalString,
   maxLeverage: z.int().positive(),
+  // Entry notional of the strategy's open and pending entries, per instrument.
+  positionNotionalByInstrument: z
+    .partialRecord(instrumentSchema, decimalString)
+    .default({}),
+  // Protected entries the strategy holds now, pending or open, and the most it
+  // may hold. Without a maximum, only capital limits the entries.
+  protectedEntries: z.int().nonnegative().default(0),
+  maxProtectedEntries: z.int().positive().optional(),
 });
 
 export type ExecutionPolicy = z.infer<typeof executionPolicySchema>;
+export type ExecutionPolicyInput = z.input<typeof executionPolicySchema>;
 
 export type AuthorizationRejection = {
   allowed: false;
@@ -66,6 +77,7 @@ export type AuthorizationRejection = {
     | "leverage_exceeded"
     | "invalid_protection"
     | "entry_expired"
+    | "entry_limit_exceeded"
     | "position_limit_exceeded"
     | "allocation_exceeded";
   reason: string;
@@ -90,7 +102,7 @@ function reject(
 
 export function authorizeTradeProposal(
   rawProposal: unknown,
-  rawPolicy: ExecutionPolicy,
+  rawPolicy: ExecutionPolicyInput,
   now: Date,
 ): AuthorizationResult {
   const parsedProposal = tradeProposalSchema.safeParse(rawProposal);
@@ -150,15 +162,14 @@ export function authorizeTradeProposal(
     );
   }
 
-  const entry = new Decimal(proposal.entryPrice);
-  const stop = new Decimal(proposal.stopLossPrice);
-  const target = new Decimal(proposal.takeProfitPrice);
-  const protectionIsValid =
-    proposal.direction === "long"
-      ? stop.lessThan(entry) && target.greaterThan(entry)
-      : stop.greaterThan(entry) && target.lessThan(entry);
-
-  if (!protectionIsValid) {
+  if (
+    !protectionIsValid(
+      proposal.direction,
+      proposal.entryPrice,
+      proposal.stopLossPrice,
+      proposal.takeProfitPrice,
+    )
+  ) {
     return reject(
       "invalid_protection",
       "The stop loss and take profit must be on the protective sides of the entry price.",
@@ -169,8 +180,24 @@ export function authorizeTradeProposal(
     return reject("entry_expired", "The entry instruction has expired.");
   }
 
-  const positionNotional = new Decimal(proposal.quantity).times(entry);
-  if (positionNotional.greaterThan(policy.maxPositionNotional)) {
+  if (
+    policy.maxProtectedEntries !== undefined &&
+    policy.protectedEntries >= policy.maxProtectedEntries
+  ) {
+    return reject(
+      "entry_limit_exceeded",
+      `The strategy already holds ${policy.protectedEntries} of its ${policy.maxProtectedEntries} protected entries.`,
+    );
+  }
+
+  const positionNotional = new Decimal(proposal.quantity).times(
+    proposal.entryPrice,
+  );
+  const heldNotional =
+    policy.positionNotionalByInstrument[proposal.instrument] ?? "0";
+  if (
+    positionNotional.plus(heldNotional).greaterThan(policy.maxPositionNotional)
+  ) {
     return reject(
       "position_limit_exceeded",
       "The proposed position exceeds the strategy position limit.",

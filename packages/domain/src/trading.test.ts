@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   authorizeTradeProposal,
-  type ExecutionPolicy,
+  type ExecutionPolicyInput,
   type TradeProposal,
 } from "./trading";
 
@@ -28,7 +28,7 @@ const proposal: TradeProposal = {
   sourceSnapshotId: "10000000-0000-4000-8000-000000000005",
 };
 
-const policy: ExecutionPolicy = {
+const policy: ExecutionPolicyInput = {
   customerId: proposal.customerId,
   exchangeAccountId: proposal.exchangeAccountId,
   strategyId: proposal.strategyId,
@@ -91,5 +91,141 @@ describe("authorizeTradeProposal", () => {
 
     assert.equal(result.allowed, false);
     if (!result.allowed) assert.equal(result.code, "live_trading_disabled");
+  });
+
+  it("rejects a malformed decimal instead of throwing", () => {
+    const result = authorizeTradeProposal(
+      { ...proposal, quantity: "0.01abc" },
+      policy,
+      now,
+    );
+
+    assert.equal(result.allowed, false);
+    if (!result.allowed) assert.equal(result.code, "invalid_proposal");
+  });
+
+  it("rejects a spot short", () => {
+    const result = authorizeTradeProposal(
+      {
+        ...proposal,
+        direction: "short",
+        stopLossPrice: "63000",
+        takeProfitPrice: "54000",
+      },
+      policy,
+      now,
+    );
+
+    assert.equal(result.allowed, false);
+    if (!result.allowed) assert.equal(result.code, "unsupported_spot_short");
+  });
+
+  it("rejects an entry that has already expired", () => {
+    const result = authorizeTradeProposal(
+      { ...proposal, entryExpiresAt: now.toISOString() },
+      policy,
+      now,
+    );
+
+    assert.equal(result.allowed, false);
+    if (!result.allowed) assert.equal(result.code, "entry_expired");
+  });
+});
+
+describe("authorizeTradeProposal with several protected entries", () => {
+  it("lets a strategy add an entry to a position it already holds", () => {
+    const result = authorizeTradeProposal(
+      proposal,
+      {
+        ...policy,
+        positionNotionalByInstrument: { "BTC-USDT": "150" },
+        protectedEntries: 2,
+        maxProtectedEntries: 3,
+      },
+      now,
+    );
+
+    assert.equal(result.allowed, true);
+    if (result.allowed) {
+      assert.equal(result.positionNotional, "600");
+      assert.equal(result.reservationAmount, "600");
+    }
+  });
+
+  it("counts the entries already held in the instrument against the position limit", () => {
+    const atLimit = authorizeTradeProposal(
+      proposal,
+      { ...policy, positionNotionalByInstrument: { "BTC-USDT": "150" } },
+      now,
+    );
+    const past = authorizeTradeProposal(
+      proposal,
+      { ...policy, positionNotionalByInstrument: { "BTC-USDT": "150.01" } },
+      now,
+    );
+
+    assert.equal(atLimit.allowed, true);
+    assert.equal(past.allowed, false);
+    if (!past.allowed) assert.equal(past.code, "position_limit_exceeded");
+  });
+
+  it("keeps each instrument's position separate", () => {
+    const result = authorizeTradeProposal(
+      proposal,
+      { ...policy, positionNotionalByInstrument: { "ETH-USDT": "750" } },
+      now,
+    );
+
+    assert.equal(result.allowed, true);
+  });
+
+  it("rejects an entry once the strategy holds its most protected entries", () => {
+    const result = authorizeTradeProposal(
+      proposal,
+      { ...policy, protectedEntries: 3, maxProtectedEntries: 3 },
+      now,
+    );
+
+    assert.equal(result.allowed, false);
+    if (!result.allowed) assert.equal(result.code, "entry_limit_exceeded");
+  });
+
+  it("caps capital across every open and pending entry at the allocation", () => {
+    // 100 committed and 200 reserved leave exactly 700 of 1000.
+    const fits = authorizeTradeProposal(
+      {
+        ...proposal,
+        quantity: "0.01",
+        entryPrice: "70000",
+        takeProfitPrice: "77000",
+      },
+      { ...policy, maxPositionNotional: "1000" },
+      now,
+    );
+    const over = authorizeTradeProposal(
+      {
+        ...proposal,
+        quantity: "0.01",
+        entryPrice: "70000.01",
+        takeProfitPrice: "77000",
+      },
+      { ...policy, maxPositionNotional: "1000" },
+      now,
+    );
+
+    assert.equal(fits.allowed, true);
+    assert.equal(over.allowed, false);
+    if (!over.allowed) assert.equal(over.code, "allocation_exceeded");
+  });
+
+  it("still rejects a paused strategy's entries", () => {
+    const result = authorizeTradeProposal(
+      proposal,
+      { ...policy, strategyStatus: "paused", maxProtectedEntries: 5 },
+      now,
+    );
+
+    assert.equal(result.allowed, false);
+    if (!result.allowed) assert.equal(result.code, "strategy_not_active");
   });
 });
