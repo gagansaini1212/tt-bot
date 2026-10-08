@@ -42,6 +42,9 @@ importers:
       decimal.js:
         specifier: ^10.6.0
         version: 10.6.0
+      zod:
+        specifier: ^4.1.8
+        version: 4.6.5
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -66,7 +69,7 @@ importers:
         version: 0.4.0
       eve:
         specifier: 0.68.0
-        version: 0.68.0(ai@7.0.122(zod@3.25.76))
+        version: 0.68.0(ai@7.0.122(zod@4.6.5))
       lucide-react:
         specifier: ^1.48.0
         version: 1.48.0(react@19.2.8)
@@ -100,6 +103,9 @@ importers:
       tw-animate-css:
         specifier: ^1.4.0
         version: 1.4.0
+      zod:
+        specifier: ^4.1.8
+        version: 4.6.5
     devDependencies:
       '@tailwindcss/postcss':
         specifier: ^4
@@ -4496,28 +4502,12 @@ packages:
 
 snapshots:
 
-  '@ai-sdk/gateway@4.0.100(zod@3.25.76)':
-    dependencies:
-      '@ai-sdk/provider': 4.0.19
-      '@ai-sdk/provider-utils': 5.0.51(zod@3.25.76)
-      '@vercel/oidc': 3.2.0
-      zod: 3.25.76
-
   '@ai-sdk/gateway@4.0.100(zod@4.6.5)':
     dependencies:
       '@ai-sdk/provider': 4.0.19
       '@ai-sdk/provider-utils': 5.0.51(zod@4.6.5)
       '@vercel/oidc': 3.2.0
       zod: 4.6.5
-
-  '@ai-sdk/provider-utils@5.0.51(zod@3.25.76)':
-    dependencies:
-      '@ai-sdk/provider': 4.0.19
-      '@standard-schema/spec': 1.1.0
-      '@workflow/serde': 4.1.0
-      eventsource-parser: 3.1.1
-      undici: 7.30.0
-      zod: 3.25.76
 
   '@ai-sdk/provider-utils@5.0.51(zod@4.6.5)':
     dependencies:
@@ -6242,13 +6232,6 @@ snapshots:
 
   acorn@8.18.0: {}
 
-  ai@7.0.122(zod@3.25.76):
-    dependencies:
-      '@ai-sdk/gateway': 4.0.100(zod@3.25.76)
-      '@ai-sdk/provider': 4.0.19
-      '@ai-sdk/provider-utils': 5.0.51(zod@3.25.76)
-      zod: 3.25.76
-
   ai@7.0.122(zod@4.6.5):
     dependencies:
       '@ai-sdk/gateway': 4.0.100(zod@4.6.5)
@@ -7047,12 +7030,6 @@ snapshots:
   esutils@2.0.3: {}
 
   etag@1.8.1: {}
-
-  eve@0.68.0(ai@7.0.122(zod@3.25.76)):
-    dependencies:
-      ai: 7.0.122(zod@3.25.76)
-      nitro: 3.0.260903-beta
-      undici: 8.9.0
 
   eve@0.68.0(ai@7.0.122(zod@4.6.5)):
     dependencies:
