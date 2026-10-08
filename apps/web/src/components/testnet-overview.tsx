@@ -30,7 +30,6 @@ import {
 } from "@/components/ui/table";
 import { WelcomeCard } from "@/components/welcome-card";
 import type { TestnetAccountState } from "@/lib/testnet-account";
-import { cn } from "@/lib/utils";
 
 export function TestnetOverview({ account }: { account: TestnetAccountState }) {
   const connected = account.status === "connected";
@@ -44,7 +43,7 @@ export function TestnetOverview({ account }: { account: TestnetAccountState }) {
             </Badge>
             <AccountRefresh />
             <Link
-              className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+              className={buttonVariants({ variant: "outline", size: "sm" })}
               href="/accounts"
             >
               View account

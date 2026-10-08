@@ -3,7 +3,7 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "cn";
 import { Slot } from "radix-ui";
 
-const buttonVariants = cva(
+const unmergedButtonVariants = cva(
   "group/button inline-flex shrink-0 items-center justify-center rounded-lg border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-all outline-none select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:aria-invalid:border-destructive/50 dark:aria-invalid:ring-destructive/40 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
   {
     variants: {
@@ -40,6 +40,16 @@ const buttonVariants = cva(
   },
 );
 
+/**
+ * cva() joins the base and variant classes without resolving conflicts, such
+ * as the base `border-transparent` and the outline variant's `border-border`,
+ * so the merge happens here for every caller, including links styled as
+ * buttons.
+ */
+function buttonVariants(props?: Parameters<typeof unmergedButtonVariants>[0]) {
+  return cn(unmergedButtonVariants(props));
+}
+
 function Button({
   className,
   variant = "default",
@@ -57,7 +67,7 @@ function Button({
       data-slot="button"
       data-variant={variant}
       data-size={size}
-      className={cn(buttonVariants({ variant, size, className }))}
+      className={buttonVariants({ variant, size, className })}
       {...props}
     />
   );
