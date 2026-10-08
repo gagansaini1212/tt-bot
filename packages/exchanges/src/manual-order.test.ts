@@ -190,8 +190,18 @@ test("a market entry is a fill-or-kill limit bounded by the configured slippage"
     failed(market, ticket({ markets: [{ rules, bestAsk: null }] })),
     ["price"],
   );
-  // The stop and target are checked against the bound, not the ask.
+  // The target is checked against the bound, the stop against the ask.
   assert.deepEqual(failed({ ...market, takeProfitPrice: "60200" }), ["limits"]);
+  assert.deepEqual(failed({ ...market, stopLossPrice: "60100" }), ["price"]);
+  // A limit above the ask fills at the ask too.
+  assert.deepEqual(
+    failed({ ...limit, price: "60500", stopLossPrice: "60000" }),
+    ["price"],
+  );
+  assert.deepEqual(
+    failed({ ...limit, price: "60500", stopLossPrice: "59999.99" }),
+    [],
+  );
 });
 
 test("requests accept only buys with both exits and a ct_ list ID", () => {

@@ -257,6 +257,20 @@ export function planManualOrder(
     stopLossPrice: request.stopLossPrice,
     listClientOrderId: request.listClientOrderId,
   };
+  // A marketable entry fills at the ask, below its limit. A stop loss at or
+  // above the fill price would trigger as soon as Binance placed it.
+  const stop = new Decimal(entry.stopLossPrice);
+  if (
+    market?.bestAsk &&
+    stop.lessThan(entry.price) &&
+    stop.greaterThanOrEqualTo(market.bestAsk)
+  )
+    checks.push({
+      name: "price",
+      label: "Stop loss",
+      passed: false,
+      detail: `The stop loss must be below the best ask of ${market.bestAsk}, where this entry would fill at once.`,
+    });
   const notional = new Decimal(entry.quantity).times(entry.price);
   const { policy } = ticket;
   const authorization = authorizeTradeProposal(
