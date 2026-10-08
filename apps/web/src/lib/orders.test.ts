@@ -37,6 +37,10 @@ test("an order is POSTed to the worker as JSON and its outcome returned", async 
   const [url, init] = fetch.mock.calls[0].arguments as [URL, RequestInit];
   assert.equal(url.pathname, "/orders");
   assert.equal(init.method, "POST");
+  assert.match(
+    (init.headers as Record<string, string>)["X-Customer-Id"],
+    /^[0-9a-f-]{36}$/,
+  );
   assert.deepEqual(JSON.parse(String(init.body)), request);
 });
 
@@ -63,6 +67,13 @@ test("when the worker may have received an order, its outcome is unknown and kee
 test("when the request was never sent, the order is reported as not placed", async () => {
   respond(() => Response.json({ status: "invalid_request" }, { status: 400 }));
   assert.equal((await submitOrder(request)).status, "rejected");
+  mock.restoreAll();
+  // The worker could not act for this customer, so it sent nothing.
+  for (const reason of ["database", "exchange_account"]) {
+    respond(() => Response.json({ status: "not_configured", reason }));
+    assert.equal((await submitOrder(request)).status, "rejected", reason);
+    mock.restoreAll();
+  }
   delete process.env.EXECUTION_API_TOKEN;
   const fetch = respond(() => Response.json({}));
   assert.equal((await submitOrder(request)).status, "rejected");

@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, mock, test } from "node:test";
 import { z } from "zod";
-import { callWorker, parseWorkerUrl } from "./worker-client";
+import { DEV_CUSTOMER_ID } from "@crypto-trading/database/dev-seed";
+import {
+  callWorker,
+  callWorkerForCustomer,
+  parseWorkerUrl,
+} from "./worker-client";
 
 test("worker URL accepts the loopback hosts", () => {
   for (const value of [
@@ -157,6 +162,26 @@ test("maps each failure to a user-facing state", async () => {
       "not_configured",
       "worker_not_configured",
     ],
+    [
+      () =>
+        Response.json({
+          status: "not_configured",
+          reason: "exchange_account",
+          message: "x",
+        }),
+      "not_configured",
+      "no_exchange_account",
+    ],
+    [
+      () =>
+        Response.json({
+          status: "not_configured",
+          reason: "database",
+          message: "x",
+        }),
+      "unavailable",
+      "database_unavailable",
+    ],
     [() => new Response("<html>"), "unavailable", "invalid_response"],
     [
       () => Response.json({ status: "connected", value: 1 }),
@@ -178,4 +203,16 @@ test("maps each failure to a user-facing state", async () => {
     assert.ok(result.message.length > 0);
     mock.restoreAll();
   }
+});
+
+test("customer calls tell the worker which customer they are for", async () => {
+  const fetch = respond(() =>
+    Response.json({ status: "connected", value: "" }),
+  );
+  await callWorkerForCustomer({ path: "/snapshot", schema });
+  const [, init] = fetch.mock.calls[0].arguments as [URL, RequestInit];
+  assert.deepEqual(init.headers, {
+    Authorization: `Bearer ${token}`,
+    "X-Customer-Id": DEV_CUSTOMER_ID,
+  });
 });

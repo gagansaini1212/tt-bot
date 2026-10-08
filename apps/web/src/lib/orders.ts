@@ -8,7 +8,7 @@ import {
   type ManualOrderTicket,
 } from "@crypto-trading/exchanges/manual-order";
 import { z } from "zod";
-import { callWorker, type WorkerFailure } from "./worker-client";
+import { callWorkerForCustomer, type WorkerFailure } from "./worker-client";
 
 export type OrderTicketState =
   | { status: "ready"; ticket: ManualOrderTicket }
@@ -17,7 +17,7 @@ export type OrderTicketState =
 const outcomeResponse = z.object({ outcome: manualOrderOutcomeSchema });
 
 export async function getOrderTicket(): Promise<OrderTicketState> {
-  const result = await callWorker({
+  const result = await callWorkerForCustomer({
     path: "/orders/ticket",
     schema: z.union([
       z.object({ ticket: manualOrderTicketSchema }),
@@ -34,8 +34,9 @@ export async function getOrderTicket(): Promise<OrderTicketState> {
 
 /**
  * A write's outcome when the worker did not confirm it. A missing token, an
- * invalid URL, a worker without credentials or a refused body mean the order
- * never reached Binance. After any other failure it may have.
+ * invalid URL, no signed-in customer, a worker that could not act for this
+ * customer or a refused body mean the order never reached Binance. After any
+ * other failure it may have.
  */
 function writeFailure(
   failure: WorkerFailure,
@@ -44,7 +45,10 @@ function writeFailure(
   const sent = ![
     "missing_token",
     "invalid_url",
+    "signed_out",
     "worker_not_configured",
+    "no_exchange_account",
+    "database_unavailable",
     "invalid_request",
   ].includes(failure.reason);
   return sent
@@ -61,7 +65,7 @@ function writeFailure(
 export async function submitOrder(
   request: ManualOrderRequest,
 ): Promise<ManualOrderOutcome> {
-  const result = await callWorker({
+  const result = await callWorkerForCustomer({
     method: "POST",
     path: "/orders",
     body: request,
@@ -75,7 +79,7 @@ export async function submitOrder(
 export async function getOrderStatus(
   listClientOrderId: string,
 ): Promise<ManualOrderOutcome> {
-  const result = await callWorker({
+  const result = await callWorkerForCustomer({
     path: "/orders/status",
     query: { listClientOrderId },
     schema: outcomeResponse,
@@ -92,7 +96,7 @@ export async function getOrderStatus(
 export async function cancelOrder(
   request: ManualCancelRequest,
 ): Promise<ManualOrderOutcome> {
-  const result = await callWorker({
+  const result = await callWorkerForCustomer({
     method: "POST",
     path: "/orders/cancel",
     body: request,

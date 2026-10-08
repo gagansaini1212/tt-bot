@@ -107,8 +107,10 @@ export function WelcomeCard() {
               <Code>pnpm dev</Code>.
             </li>
             <li>
-              Run <Code>pnpm exchange check</Code>, then start the execution
-              worker with <Code>pnpm dev:worker</Code>.
+              Set up PostgreSQL with <Code>pnpm db:up</Code>,{" "}
+              <Code>pnpm db:migrate</Code> and <Code>pnpm db:seed</Code>. Run{" "}
+              <Code>pnpm exchange check</Code>, then start the execution worker
+              with <Code>pnpm dev:worker</Code>.
             </li>
             <li>
               Place test limit orders with{" "}

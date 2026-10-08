@@ -1,5 +1,6 @@
 import "server-only";
 import type { z } from "zod";
+import { getCurrentCustomer } from "./current-customer";
 
 // The web app sends the worker's bearer token to this URL, so it must stay on this machine.
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
@@ -23,14 +24,19 @@ export function parseWorkerUrl(value: string): URL | undefined {
 }
 
 /**
- * Why a worker call failed. The request was not sent after `missing_token` or
- * `invalid_url`. After `unreachable`, `timeout` or `invalid_response`, a write
- * may have reached the worker, so its outcome is unknown.
+ * Why a worker call failed. The request was not sent after `missing_token`,
+ * `invalid_url` or `signed_out`. The worker did nothing after
+ * `worker_not_configured`, `no_exchange_account` or `database_unavailable`.
+ * After `unreachable`, `timeout` or `invalid_response`, a write may have
+ * reached the worker, so its outcome is unknown.
  */
 export type WorkerFailureReason =
   | "missing_token"
   | "invalid_url"
+  | "signed_out"
   | "worker_not_configured"
+  | "no_exchange_account"
+  | "database_unavailable"
   | "unreachable"
   | "timeout"
   | "invalid_request"
@@ -65,6 +71,8 @@ export type WorkerRequest<T> = {
   query?: Record<string, string | number | undefined>;
   /** Sent as JSON. */
   body?: unknown;
+  /** The customer the worker acts for. Set by `callWorkerForCustomer`. */
+  customerId?: string;
   /** Validates a connected response, such as `{ status: "connected", snapshot }`. */
   schema: z.ZodType<T>;
 };
@@ -80,10 +88,24 @@ const FAILURES: Record<WorkerFailureReason, Omit<WorkerFailure, "reason">> = {
     message:
       "EXECUTION_API_URL must point to the execution worker on this machine, such as http://127.0.0.1:4001. Use 127.0.0.1, localhost, or [::1] as the host.",
   },
+  signed_out: {
+    status: "not_configured",
+    message: "Sign in to see your exchange account.",
+  },
   worker_not_configured: {
     status: "not_configured",
     message:
       "Configure the Binance testnet provider and credentials in the execution worker, then restart it.",
+  },
+  no_exchange_account: {
+    status: "not_configured",
+    message:
+      "No Binance Spot Testnet exchange account is connected for you. Run pnpm db:seed to create the development account, then refresh.",
+  },
+  database_unavailable: {
+    status: "unavailable",
+    message:
+      "The execution worker cannot use its database. Start PostgreSQL with pnpm db:up if it is stopped, check the worker's output, then refresh.",
   },
   unreachable: {
     status: "unavailable",
@@ -130,6 +152,7 @@ export async function callWorker<T>({
   path,
   query = {},
   body,
+  customerId,
   schema,
 }: WorkerRequest<T>): Promise<WorkerResult<T>> {
   const token = process.env.EXECUTION_API_TOKEN;
@@ -148,6 +171,7 @@ export async function callWorker<T>({
       method,
       headers: {
         Authorization: `Bearer ${token}`,
+        ...(customerId === undefined ? {} : { "X-Customer-Id": customerId }),
         ...(body === undefined ? {} : { "Content-Type": "application/json" }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -166,11 +190,18 @@ export async function callWorker<T>({
   } catch (error) {
     return failure(isTimeout(error) ? "timeout" : "invalid_response");
   }
-  const status =
-    typeof data === "object" && data !== null && "status" in data
-      ? data.status
-      : undefined;
-  if (status === "not_configured") return failure("worker_not_configured");
+  const { status, reason } =
+    typeof data === "object" && data !== null
+      ? (data as { status?: unknown; reason?: unknown })
+      : {};
+  if (status === "not_configured")
+    return failure(
+      reason === "database"
+        ? "database_unavailable"
+        : reason === "exchange_account"
+          ? "no_exchange_account"
+          : "worker_not_configured",
+    );
   const parsed = schema.safeParse(data);
   if (status !== "connected" || !parsed.success)
     return failure("invalid_response");
@@ -179,4 +210,18 @@ export async function callWorker<T>({
     data: parsed.data,
     date: response.headers.get("date"),
   };
+}
+
+/**
+ * Calls a worker route that serves or changes a customer's data, for the
+ * current customer. The worker trusts the customer it is told, because only
+ * this server holds its token, and acts only if that customer owns the
+ * exchange account.
+ */
+export async function callWorkerForCustomer<T>(
+  request: Omit<WorkerRequest<T>, "customerId">,
+): Promise<WorkerResult<T>> {
+  const customer = await getCurrentCustomer();
+  if (!customer) return failure("signed_out");
+  return callWorker({ ...request, customerId: customer.id });
 }

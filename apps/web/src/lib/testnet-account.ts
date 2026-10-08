@@ -5,7 +5,7 @@ import {
 } from "@crypto-trading/exchanges";
 import { z } from "zod";
 import {
-  callWorker,
+  callWorkerForCustomer,
   type WorkerFailureReason,
   type WorkerState,
 } from "./worker-client";
@@ -49,7 +49,7 @@ export function snapshotFreshness(
 }
 
 export async function getTestnetAccount(): Promise<TestnetAccountState> {
-  const result = await callWorker({
+  const result = await callWorkerForCustomer({
     path: "/snapshot",
     schema: z.object({ snapshot: testnetSnapshotSchema }),
   });
