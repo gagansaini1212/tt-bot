@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils";
 // The Activity icon is reserved for live performance metrics.
 const navigation = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
+  { href: "/markets", label: "Markets", icon: ChartCandlestick },
   { href: "/accounts", label: "Accounts", icon: WalletCards },
   { href: "/strategies", label: "Strategies", icon: Workflow },
   { href: "/activity", label: "Activity", icon: History },

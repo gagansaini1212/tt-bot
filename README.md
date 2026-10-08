@@ -13,6 +13,7 @@ A Binance Spot Testnet trading application built with Next.js, eve, shadcn/ui, a
 - Row-level security policies for customer-owned records.
 - A local execution service with a Binance Spot Testnet adapter for balances, limit orders, cancellation, order lookup, recent fills, and public market data (24-hour tickers, candles, and order book depth).
 - A testnet Overview with net worth and its 24-hour change in USDT, balances, open orders, recent fills, and automatic refresh every ten seconds. Accounts shows holdings valued in USDT with their 24-hour change and each asset's share of net worth, and can hide zero and dust balances. Activity lists exchange fills. Settings shows the current account connection.
+- Markets for BTC/USDT and ETH/USDT: a candlestick chart (TradingView Lightweight Charts) marking your recent fills and open orders, the order book, and a market depth chart, refreshed every three seconds while the tab is visible.
 - Manual development order commands with a notional cap, Binance filter validation, and an order-intent journal to prevent duplicate submission after restart.
 - Testnet order placement from the dashboard: limit and market buys with a required take profit and stop loss that Binance attaches to the entry, a pre-execution check preview, and a confirmed Cancel button on every open order.
 
