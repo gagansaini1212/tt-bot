@@ -11,16 +11,26 @@ import type { ExchangeSource } from "./exchange-credentials";
 type Method = "GET" | "POST" | "DELETE";
 
 /**
+ * Who may call a route. The web server holds the worker's main token. The
+ * analysis assistant holds its own, which reaches only the routes marked for
+ * it: it records decisions and can never place an order.
+ */
+export type Caller = "web" | "assistant";
+
+/**
  * What an endpoint accepts and does. The query, and a JSON body if `body` is
  * set, are validated before `handle` runs; invalid input returns 400.
  * `handle` returns the 200 response body, such as `{ status: "connected", ... }`.
  *
- * The request acts for the customer the web app names in the X-Customer-Id
+ * The request acts for the customer the caller names in the X-Customer-Id
  * header, and runs only if that customer owns the exchange account the
  * worker trades on. `account` is that account, and `exchange` the Binance
  * client for its keys: the ones saved in Settings, or else the worker's.
+ * Only the web server may call it, unless `caller` says the assistant does
+ * instead.
  */
 export interface Handler<Query, Body> {
+  caller?: Caller;
   query: z.ZodType<Query>;
   body?: z.ZodType<Body>;
   handle(context: {
@@ -38,6 +48,7 @@ export interface Handler<Query, Body> {
  */
 export interface AccountHandler<Query, Body> {
   needs: "account";
+  caller?: Caller;
   query: z.ZodType<Query>;
   body?: z.ZodType<Body>;
   handle(context: {
@@ -62,7 +73,7 @@ export interface CustomerHandler<Query, Body> {
   }): Promise<object>;
 }
 
-/** An endpoint serving public market data, for any caller with the token. */
+/** An endpoint serving public market data to the web server. */
 export interface PublicHandler<Query> {
   public: true;
   query: z.ZodType<Query>;
@@ -103,6 +114,7 @@ export function publicHandler<Query>(
 export interface Route {
   method: Method;
   path: `/${string}`;
+  caller: Caller;
   handle(input: {
     exchanges: ExchangeSource;
     accounts: AccountResolver;
@@ -160,6 +172,7 @@ export function route<Query, Body>(
   return {
     method,
     path,
+    caller: ("caller" in definition && definition.caller) || "web",
     async handle({ exchanges, accounts, search, request }) {
       const query = parse(
         definition.query,
@@ -208,22 +221,27 @@ export function route<Query, Body>(
 }
 
 /**
- * Serves `routes` to callers holding the bearer token. Requests carrying an
- * Origin header come from a browser and are refused. The token is the web
- * server's, so the worker trusts the customer it names in X-Customer-Id.
+ * Serves `routes` to callers holding a bearer token: `token`, the web
+ * server's, or `assistantToken`, the analysis assistant's, each for its own
+ * routes. Requests carrying an Origin header come from a browser and are
+ * refused. Only those two hold a token, so the worker trusts the customer
+ * they name in X-Customer-Id.
  */
 export function createRequestListener({
   token,
+  assistantToken,
   exchanges,
   accounts,
   routes,
 }: {
   token: string;
+  assistantToken?: string;
   exchanges: ExchangeSource;
   accounts: AccountResolver;
   routes: readonly Route[];
 }): RequestListener {
-  const expected = Buffer.from(`Bearer ${token}`);
+  const tokens = new Map<Caller, Buffer>([["web", bearer(token)]]);
+  if (assistantToken) tokens.set("assistant", bearer(assistantToken));
   return async (request, response) => {
     response.setHeader("Cache-Control", "no-store");
     response.setHeader("Content-Type", "application/json");
@@ -231,11 +249,12 @@ export function createRequestListener({
       response.writeHead(status).end(JSON.stringify(body));
     };
     const received = Buffer.from(request.headers.authorization ?? "");
-    if (
-      request.headers.origin ||
-      received.length !== expected.length ||
-      !timingSafeEqual(received, expected)
-    )
+    const caller = [...tokens].find(
+      ([, expected]) =>
+        received.length === expected.length &&
+        timingSafeEqual(received, expected),
+    )?.[0];
+    if (request.headers.origin || !caller)
       return send(401, { status: "unauthorized" });
     // Paths match exactly, without normalization or absolute-form URLs.
     const target = request.url ?? "";
@@ -251,6 +270,7 @@ export function createRequestListener({
       );
       return send(405, { status: "method_not_allowed" });
     }
+    if (route.caller !== caller) return send(403, { status: "forbidden" });
     try {
       send(
         200,
@@ -266,6 +286,10 @@ export function createRequestListener({
       send(503, { status: "unavailable", message: safeError(error) });
     }
   };
+}
+
+function bearer(token: string) {
+  return Buffer.from(`Bearer ${token}`);
 }
 
 export function safeError(error: unknown): string {

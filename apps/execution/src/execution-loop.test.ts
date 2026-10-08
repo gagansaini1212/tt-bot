@@ -23,6 +23,10 @@ import { PostgresOrderIntents, RECONCILE_TOPIC } from "./order-intents";
 import { NotificationWebhooks, WEBHOOK_TOPIC } from "./notification-webhooks";
 import { PostgresRiskLimits } from "./risk-limits";
 import { SecretBox } from "./secret-box";
+import {
+  PostgresTradeProposals,
+  proposalClientOrderId,
+} from "./trade-proposals";
 
 const config = (() => {
   const loaded = loadManualTradingConfig({
@@ -85,6 +89,7 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
     const now = () => new Date(Date.now() + offset);
     const fake = new FakeBinance(now);
     const intents = new PostgresOrderIntents(database.app);
+    const proposals = new PostgresTradeProposals(database.app);
     const risk = new PostgresRiskLimits(database.app);
     await risk.change(
       scope,
@@ -103,6 +108,7 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
         exchange: fake,
         config,
         intents,
+        proposals,
         risk,
         now,
       });
@@ -124,6 +130,7 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
       scope,
       fake,
       intents,
+      proposals,
       risk,
       logs,
       get desk() {
@@ -389,6 +396,69 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
     await w.pass();
     assert.equal(w.fake.count("placeMarketSell"), 1);
     assert.equal((await notifications(w.scope)).length, 2);
+  });
+
+  test("an approved assistant proposal is watched like a dashboard entry, and its unprotected quantity is sold", async () => {
+    const w = await world();
+    const decision = await w.proposals.record(
+      w.scope,
+      {
+        kind: "trade_proposal",
+        proposal: {
+          instrument: "BTC-USDT",
+          marketKind: "spot",
+          direction: "long",
+          quantity: "0.001",
+          entryPrice: "59900",
+          stopLossPrice: "58000",
+          takeProfitPrice: "63000",
+          leverage: 1,
+          entryExpiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+        },
+        model: "test-model",
+        promptVersion: "test",
+        sourceSnapshotId: randomUUID(),
+        rationale: "Support held.",
+        idempotencyKey: `loop:${randomUUID()}`,
+      },
+      new Date(),
+    );
+    const id = decision.proposal!.id;
+    const listId = proposalClientOrderId(id);
+    assert.equal((await w.desk.approve(w.scope, id)).status, "working");
+    await w.pass();
+    assert.equal((await reconciliation(listId))?.state, "working");
+    let view = await w.proposals.view(w.scope, id, new Date());
+    assert.equal(view?.status, "submitted");
+    assert.equal(view?.order?.reconciliation?.state, "working");
+
+    w.fake.fillEntry(listId, "0.001", { exits: "drop" });
+    await w.pass();
+    assert.equal(w.fake.count("placeMarketSell"), 1);
+    assert.deepEqual(
+      (await exits(listId)).map((exit) => exit.status),
+      ["acknowledged"],
+    );
+    const closed = await reconciliation(listId);
+    assert.equal(closed?.state, "closed");
+    assert.equal(closed?.exit_reason, "protection_failed");
+    assert.deepEqual(await notifications(w.scope), [
+      "critical:protection_failed",
+      "info:position_closed",
+    ]);
+    view = await w.proposals.view(w.scope, id, new Date());
+    assert.equal(view?.status, "filled");
+    assert.equal(view?.order?.reconciliation?.state, "closed");
+    assert.ok(view?.order?.reconciliation?.detail);
+    // It belongs to no strategy: no holding deadline, nothing to pause.
+    const [{ count }] = await database.admin<{ count: string }[]>`
+      select count(*) from holding_deadlines d
+      join order_intents i on i.id = d.order_intent_id
+      where i.idempotency_key = ${listId}
+    `;
+    assert.equal(count, "0");
+    await w.pass();
+    assert.equal(w.fake.count("placeMarketSell"), 1);
   });
 
   test("a partly filled entry cancelled outside the worker has its quantity sold", async () => {

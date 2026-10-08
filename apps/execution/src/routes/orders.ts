@@ -15,24 +15,27 @@ import {
 } from "../manual-orders";
 import type { OrderIntentStore } from "../order-intents";
 import type { RiskLimitStore } from "../risk-limits";
+import type { TradeProposalStore } from "../trade-proposals";
 
 /**
  * The worker's dashboard order desks, or none while dashboard orders are
  * off. There is a desk per Binance client, which changes when an account's
  * keys do. The routes and the execution loop share them, and they share one
- * queue, so placements and cancels run one at a time.
+ * queue, so placements, approved proposals and cancels run one at a time.
  */
 export function deskProvider({
   env,
   now,
   onChange,
   intents,
+  proposals,
   risk,
 }: {
   env: NodeJS.ProcessEnv;
   now: () => number;
   onChange: () => void;
   intents: OrderIntentStore;
+  proposals?: TradeProposalStore;
   risk: Pick<RiskLimitStore, "current" | "dailyRiskUsed">;
 }) {
   const loaded = loadManualTradingConfig(env);
@@ -48,6 +51,7 @@ export function deskProvider({
           exchange,
           config: loaded.config,
           intents,
+          proposals,
           risk,
           now: () => new Date(now()),
           onChange,

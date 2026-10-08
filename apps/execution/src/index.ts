@@ -36,6 +36,7 @@ import {
 } from "./risk-limits";
 import { createWorker } from "./routes";
 import { SecretBox } from "./secret-box";
+import { PostgresTradeProposals } from "./trade-proposals";
 
 export { authorizeTradeProposal };
 
@@ -134,6 +135,15 @@ async function main() {
       throw new Error(
         "Set EXECUTION_API_TOKEN to at least 32 characters, shared with apps/web/.env.local.",
       );
+    // Optional: without it, the assistant cannot record its decisions.
+    const assistantToken = process.env.EXECUTION_ASSISTANT_TOKEN || undefined;
+    if (
+      assistantToken !== undefined &&
+      (assistantToken.length < 32 || assistantToken === token)
+    )
+      throw new Error(
+        "Set EXECUTION_ASSISTANT_TOKEN to at least 32 characters, different from EXECUTION_API_TOKEN, or leave it empty.",
+      );
     const port = Number(process.env.EXECUTION_PORT ?? "4001");
     if (!Number.isInteger(port) || port < 1024 || port > 65535)
       throw new Error("EXECUTION_PORT must be between 1024 and 65535.");
@@ -147,6 +157,7 @@ async function main() {
     let loop: ExecutionLoop | undefined;
     const worker = createWorker({
       intents,
+      proposals: new PostgresTradeProposals(db),
       risk,
       reader: { state: (scope) => loop!.state(scope) },
       settings: {
@@ -188,6 +199,7 @@ async function main() {
     });
     const handle = createRequestListener({
       token,
+      assistantToken,
       exchanges,
       accounts,
       routes: worker.routes,

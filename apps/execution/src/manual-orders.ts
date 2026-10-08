@@ -34,6 +34,12 @@ import {
   type Settlement,
 } from "./order-intents";
 import { withinPlatformMaximums, type RiskLimitStore } from "./risk-limits";
+import {
+  planProposalOrder,
+  type SavedProposal,
+  type SavedProposalStatus,
+  type TradeProposalStore,
+} from "./trade-proposals";
 
 export type ManualOrderExchange = Pick<
   BinanceSpotTestnet,
@@ -134,6 +140,15 @@ export function serializer() {
 }
 export type Serializer = ReturnType<typeof serializer>;
 
+// Why a proposal that is no longer a draft cannot be approved.
+const DECIDED: Record<Exclude<SavedProposalStatus, "draft">, string> = {
+  approved:
+    "This proposal was already approved, so it was not sent again. Its order is on the Activity page.",
+  authorized: "This proposal was already authorized, so it was not sent again.",
+  rejected: "This proposal was rejected, so nothing was sent.",
+  expired: "This proposal expired before it was approved, so nothing was sent.",
+};
+
 // Binance's code for an order or order list that does not exist.
 const NO_SUCH_ORDER = -2013;
 const RULES_TTL_MS = 5 * 60_000;
@@ -151,6 +166,7 @@ export class ManualOrderDesk {
   readonly #exchange: ManualOrderExchange;
   readonly #config: ManualTradingEnvironment;
   readonly #intents: OrderIntentStore;
+  readonly #proposals?: TradeProposalStore;
   readonly #risk: Pick<RiskLimitStore, "current" | "dailyRiskUsed">;
   readonly #now: () => Date;
   readonly #onChange: () => void;
@@ -161,6 +177,8 @@ export class ManualOrderDesk {
     exchange: ManualOrderExchange;
     config: ManualTradingEnvironment;
     intents: OrderIntentStore;
+    // AI proposals the customer can approve.
+    proposals?: TradeProposalStore;
     risk: Pick<RiskLimitStore, "current" | "dailyRiskUsed">;
     now?: () => Date;
     // Called after anything that may have changed the account.
@@ -172,6 +190,7 @@ export class ManualOrderDesk {
     this.#exchange = options.exchange;
     this.#config = options.config;
     this.#intents = options.intents;
+    this.#proposals = options.proposals;
     this.#risk = options.risk;
     this.#now = options.now ?? (() => new Date());
     this.#onChange = options.onChange ?? (() => {});
@@ -294,22 +313,9 @@ export class ManualOrderDesk {
     const request = parsed.data;
     const id = request.listClientOrderId;
     return this.#exclusive(async () => {
-      let ticket: ManualOrderTicket;
-      try {
-        ticket = await this.ticket(scope);
-      } catch (error) {
-        if (error instanceof RiskLimitsNotSet)
-          return { status: "rejected", message: error.message };
-        // Such as the database failing while it reads entry prices.
-        if (!(error instanceof BinanceTestnetError))
-          return {
-            status: "rejected",
-            message:
-              "The worker could not check this order, so nothing was sent. Check the execution worker and try again.",
-          };
-        return failure(error, "Binance rejected the account lookup.");
-      }
-      const plan = planManualOrder(request, ticket, this.#now(), {
+      const checked = await this.#freshTicket(scope);
+      if ("outcome" in checked) return checked.outcome;
+      const plan = planManualOrder(request, checked.ticket, this.#now(), {
         proposalId: randomUUID(),
         sourceSnapshotId: randomUUID(),
       });
@@ -350,6 +356,147 @@ export class ManualOrderDesk {
         };
       return this.#send(scope, entry);
     });
+  }
+
+  /**
+   * Places an AI proposal the customer approved. The worker runs every check
+   * again on the proposal as saved, with fresh account data, then approves it
+   * and saves its order intent together, so it is approved and sent at most
+   * once. It runs in the same queue as dashboard orders, so neither can claim
+   * allocation the other is using.
+   */
+  approve(
+    scope: AccountScope,
+    proposalId: string,
+  ): Promise<ManualOrderOutcome> {
+    const proposals = this.#proposals;
+    if (!proposals)
+      return Promise.resolve({
+        status: "rejected",
+        message: "This worker does not take proposals. Nothing was sent.",
+      });
+    return this.#exclusive(async () => {
+      const now = this.#now();
+      let proposal: SavedProposal | undefined;
+      try {
+        proposal = await proposals.find(scope, proposalId);
+      } catch {
+        return {
+          status: "rejected",
+          message:
+            "The worker could not read this proposal, so nothing was sent. Check the execution worker's database and try again.",
+        };
+      }
+      if (!proposal)
+        return {
+          status: "invalid",
+          message: "There is no such proposal, so nothing was sent.",
+        };
+      if (proposal.strategyId !== null)
+        return {
+          status: "rejected",
+          message:
+            "This proposal belongs to a strategy, whose own rules decide it. Nothing was sent.",
+        };
+      if (proposal.status !== "draft")
+        return {
+          status: proposal.status === "approved" ? "duplicate" : "rejected",
+          message: DECIDED[proposal.status],
+        };
+      if (proposal.entryExpiresAt.getTime() <= now.getTime()) {
+        await proposals.expire(scope, proposalId, now).catch(() => false);
+        return { status: "rejected", message: DECIDED.expired };
+      }
+      const checked = await this.#freshTicket(scope);
+      if ("outcome" in checked) return checked.outcome;
+      const plan = planProposalOrder(proposal, checked.ticket, now);
+      const refuse = async (reason: string) => {
+        await proposals
+          .reject(scope, proposalId, { by: "execution_checks", reason }, now)
+          .catch(() => false);
+      };
+      if (!plan.passed || !plan.entry) {
+        await refuse(
+          plan.checks
+            .filter((check) => !check.passed)
+            .map((check) => `${check.label}: ${check.detail}`)
+            .join(" "),
+        );
+        return {
+          status: "rejected",
+          message:
+            "The execution checks rejected this proposal, so it was not approved and nothing was sent.",
+          checks: plan.checks,
+        };
+      }
+      const entry = protectedEntrySchema.parse(plan.entry);
+      try {
+        await this.#exchange.testProtectedEntry(entry);
+      } catch (error) {
+        const outcome = failure(
+          error,
+          "Binance rejected the entry, so the proposal was not approved. Nothing was sent.",
+        );
+        // Only a refusal of the order itself decides the proposal.
+        if (error instanceof BinanceTestnetError && error.kind === "rejected")
+          await refuse(outcome.message);
+        return outcome;
+      }
+      let approved: boolean;
+      try {
+        approved = await proposals.approve(
+          scope,
+          proposalId,
+          { kind: "protected_entry", entry },
+          this.#now(),
+        );
+      } catch {
+        return {
+          status: "rejected",
+          message:
+            "The approval could not be saved, so nothing was sent. Check the execution worker's database and try again.",
+        };
+      }
+      if (!approved) {
+        // Rejected, expired or approved meanwhile, by another tab or worker.
+        const current = await proposals
+          .find(scope, proposalId)
+          .catch(() => undefined);
+        const status = current?.status ?? "approved";
+        return {
+          status: status === "approved" ? "duplicate" : "rejected",
+          message: status === "draft" ? DECIDED.expired : DECIDED[status],
+        };
+      }
+      return this.#send(scope, entry);
+    });
+  }
+
+  /**
+   * Fresh account limits, risk limits and market rules, or why an order
+   * cannot be checked now.
+   */
+  async #freshTicket(
+    scope: AccountScope,
+  ): Promise<{ ticket: ManualOrderTicket } | { outcome: ManualOrderOutcome }> {
+    try {
+      return { ticket: await this.ticket(scope) };
+    } catch (error) {
+      if (error instanceof RiskLimitsNotSet)
+        return { outcome: { status: "rejected", message: error.message } };
+      // Such as the database failing while it reads entry prices.
+      if (!(error instanceof BinanceTestnetError))
+        return {
+          outcome: {
+            status: "rejected",
+            message:
+              "The worker could not check this order, so nothing was sent. Check the execution worker and try again.",
+          },
+        };
+      return {
+        outcome: failure(error, "Binance rejected the account lookup."),
+      };
+    }
   }
 
   /** Saves a stop-limit entry for the worker to send once its stop trades. */

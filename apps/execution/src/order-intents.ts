@@ -81,7 +81,8 @@ export type Settlement =
   | { status: "acknowledged"; orderListId?: number; orders?: TestnetOrder[] }
   | { status: "rejected" | "unknown"; reason?: string };
 
-export type IntentSource = "dashboard" | "cli" | "journal_import" | "worker";
+export type IntentSource =
+  "dashboard" | "cli" | "journal_import" | "worker" | "assistant_proposal";
 
 /**
  * Binance can still be executing a submission it did not confirm, so an
@@ -217,42 +218,14 @@ export class PostgresOrderIntents implements OrderIntentStore {
     status: "submitting" | "pending",
     createdAt?: Date,
   ) {
-    const parsed = manualOrderSchema.parse(order);
-    const clientOrderId = clientOrderIdOf(parsed);
-    return this.#scoped(scope, async (tx) => {
-      const [intent] = await tx<{ id: string }[]>`
-        insert into order_intents (
-          customer_id, exchange_account_id, idempotency_key, status, manual_order,
-          closes_order_intent_id, created_at, updated_at
-        )
-        values (
-          ${scope.customerId}, ${scope.exchangeAccountId}, ${clientOrderId},
-          ${status}, ${tx.json(order)},
-          ${
-            parsed.kind === "exit"
-              ? tx`(select id from order_intents where idempotency_key = ${parsed.closes})`
-              : null
-          },
-          coalesce(${createdAt ?? null}::timestamptz, now()),
-          coalesce(${createdAt ?? null}::timestamptz, now())
-        )
-        on conflict (idempotency_key) do nothing
-        returning id
-      `;
-      if (!intent) return false;
-      if (status === "submitting") await queueReconcile(tx, scope, intent.id);
-      await audit(
-        tx,
-        scope,
-        intent.id,
-        status === "pending" ? "order_intent.held" : "order_intent.recorded",
-        {
-          actor: actorFor(source),
-          payload: { source, order },
-        },
-      );
-      return true;
-    });
+    return this.#scoped(
+      scope,
+      async (tx) =>
+        (await insertOrderIntent(tx, scope, order, source, {
+          status,
+          createdAt,
+        })) !== undefined,
+    );
   }
 
   pendingTriggers(scope: AccountScope) {
@@ -490,6 +463,63 @@ export class PostgresOrderIntents implements OrderIntentStore {
   }
 }
 
+/**
+ * Saves an intent in `tx`: with status `submitting` and its reconcile job,
+ * or `pending` for a stop-limit entry the worker holds, and an audit event.
+ * Resolves its ID, or undefined if the client order ID was used before, by
+ * anyone. An approved proposal's intent names the proposal.
+ */
+export async function insertOrderIntent(
+  tx: Transaction,
+  scope: AccountScope,
+  order: ManualOrder,
+  source: IntentSource,
+  {
+    status = "submitting",
+    createdAt,
+    proposalId,
+  }: {
+    status?: "submitting" | "pending";
+    createdAt?: Date;
+    proposalId?: string;
+  } = {},
+): Promise<string | undefined> {
+  const parsed = manualOrderSchema.parse(order);
+  const clientOrderId = clientOrderIdOf(parsed);
+  const [intent] = await tx<{ id: string }[]>`
+    insert into order_intents (
+      customer_id, exchange_account_id, proposal_id, idempotency_key, status,
+      manual_order, closes_order_intent_id, created_at, updated_at
+    )
+    values (
+      ${scope.customerId}, ${scope.exchangeAccountId}, ${proposalId ?? null},
+      ${clientOrderId}, ${status}, ${tx.json(order)},
+      ${
+        parsed.kind === "exit"
+          ? tx`(select id from order_intents where idempotency_key = ${parsed.closes})`
+          : null
+      },
+      coalesce(${createdAt ?? null}::timestamptz, now()),
+      coalesce(${createdAt ?? null}::timestamptz, now())
+    )
+    on conflict (idempotency_key) do nothing
+    returning id
+  `;
+  if (!intent) return undefined;
+  if (status === "submitting") await queueReconcile(tx, scope, intent.id);
+  await audit(
+    tx,
+    scope,
+    intent.id,
+    status === "pending" ? "order_intent.held" : "order_intent.recorded",
+    {
+      actor: actorFor(source),
+      payload: { source, order, ...(proposalId ? { proposalId } : {}) },
+    },
+  );
+  return intent.id;
+}
+
 function queueReconcile(
   tx: Transaction,
   scope: AccountScope,
@@ -557,10 +587,13 @@ export function audit(
   eventType: string,
   {
     actor,
+    actorId,
     subjectType = "order_intent",
     payload,
   }: {
-    actor: "customer" | "execution_worker" | "system";
+    actor: "customer" | "execution_worker" | "system" | "assistant";
+    // Defaults to the customer's ID for the customer, else the worker.
+    actorId?: string;
     subjectType?: string;
     payload: Record<string, JSONValue>;
   },
@@ -570,7 +603,7 @@ export function audit(
       (customer_id, actor_type, actor_id, event_type, subject_type, subject_id, payload)
     values (
       ${scope.customerId}, ${actor},
-      ${actor === "customer" ? scope.customerId : "execution-worker"},
+      ${actorId ?? (actor === "customer" ? scope.customerId : "execution-worker")},
       ${eventType}, ${subjectType}, ${subjectId},
       ${tx.json({ exchangeAccountId: scope.exchangeAccountId, ...payload })}
     )

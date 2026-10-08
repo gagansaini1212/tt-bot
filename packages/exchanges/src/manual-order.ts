@@ -6,6 +6,7 @@ import {
   authorizeTradeProposal,
   executionPolicySchema,
   type ExecutionPolicy,
+  type TradeProposal,
 } from "@crypto-trading/domain";
 import type { TestnetOrder } from "./binance-spot-testnet";
 import {
@@ -340,25 +341,9 @@ export function planManualOrder(
     stopLossPrice: request.stopLossPrice,
     listClientOrderId: request.listClientOrderId,
   };
-  // A marketable entry fills at the ask, below its limit. A stop loss at or
-  // above the fill price would trigger as soon as Binance placed it. A
-  // stop-limit entry buys later, and its stop price check covers this.
-  const stop = new Decimal(entry.stopLossPrice);
-  if (
-    request.type !== "stop_limit" &&
-    market?.bestAsk &&
-    stop.lessThan(entry.price) &&
-    stop.greaterThanOrEqualTo(market.bestAsk)
-  )
-    checks.push({
-      name: "price",
-      label: "Stop loss",
-      passed: false,
-      detail: `The stop loss must be below the best ask of ${market.bestAsk}, where this entry would fill at once.`,
-    });
-  const notional = new Decimal(entry.quantity).times(entry.price);
   const { policy } = ticket;
-  const authorization = authorizeTradeProposal(
+  return checkProtectedEntry(
+    entry,
     {
       proposalId: ids.proposalId,
       customerId: policy.customerId,
@@ -379,9 +364,57 @@ export function planManualOrder(
       rationale: "Manual testnet order from the dashboard.",
       sourceSnapshotId: ids.sourceSnapshotId,
     },
-    policy,
+    ticket,
     now,
+    { earlier: checks, waitsForStop: request.type === "stop_limit" },
   );
+}
+
+/**
+ * Runs `authorizeTradeProposal` for `proposal` against `policy`, the
+ * ticket's unless given, then the per-order cap, the daily risk limit,
+ * Binance's filters and the free balance for `entry`, the order that would
+ * carry it out. `earlier` holds checks already run, such as the market price.
+ * An entry that `waitsForStop` buys later, so it is not checked against the
+ * best ask. The entry may be submitted only when every check passes.
+ */
+export function checkProtectedEntry(
+  entry: ProtectedEntry,
+  proposal: TradeProposal,
+  ticket: ManualOrderTicket,
+  now: Date,
+  {
+    earlier = [],
+    policy = ticket.policy,
+    waitsForStop = false,
+  }: {
+    earlier?: ManualOrderCheck[];
+    policy?: ExecutionPolicy;
+    waitsForStop?: boolean;
+  } = {},
+): ManualOrderPlan {
+  const checks = [...earlier];
+  const market = ticket.markets.find(
+    (candidate) => candidate.rules.instrument === proposal.instrument,
+  );
+  // A marketable entry fills at the ask, below its limit. A stop loss at or
+  // above the fill price would trigger as soon as Binance placed it. A
+  // stop-limit entry buys later, and its stop price check covers this.
+  const stop = new Decimal(entry.stopLossPrice);
+  if (
+    !waitsForStop &&
+    market?.bestAsk &&
+    stop.lessThan(entry.price) &&
+    stop.greaterThanOrEqualTo(market.bestAsk)
+  )
+    checks.push({
+      name: "price",
+      label: "Stop loss",
+      passed: false,
+      detail: `The stop loss must be below the best ask of ${market.bestAsk}, where this entry would fill at once.`,
+    });
+  const notional = new Decimal(entry.quantity).times(entry.price);
+  const authorization = authorizeTradeProposal(proposal, policy, now);
   const uncommitted = new Decimal(policy.allocation)
     .minus(policy.committedCapital)
     .minus(policy.reservedBudget);

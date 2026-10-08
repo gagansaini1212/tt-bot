@@ -12,10 +12,25 @@ import {
   MemoryRiskLimits,
   TEST_RISK_LIMITS,
 } from "./fixtures/memory-risk-limits";
+import { MemoryTradeProposals } from "./fixtures/memory-trade-proposals";
 import { createRequestListener, handler, route, type Route } from "./http";
 import { createRoutes } from "./routes";
 
 const token = "http-test-token-at-least-32-characters";
+const assistantToken = "http-test-assistant-token-at-least-32";
+
+/**
+ * Order intents and proposals that share one memory, as the database does,
+ * and the customer's risk limits.
+ */
+function memory() {
+  const intents = new MemoryOrderIntents();
+  return {
+    intents,
+    proposals: new MemoryTradeProposals(intents),
+    risk: new MemoryRiskLimits({ limits: TEST_RISK_LIMITS }),
+  };
+}
 // The customer who owns the worker's exchange account.
 const owner = {
   customerId: "5a3b2c1d-0e9f-4a8b-9c7d-6e5f4a3b2c01",
@@ -113,15 +128,10 @@ async function serve(
   const server = createServer(
     createRequestListener({
       token,
+      assistantToken,
       exchanges: fixedExchanges(exchange),
       accounts,
-      routes:
-        routes ??
-        createRoutes({
-          intents: new MemoryOrderIntents(),
-          risk: new MemoryRiskLimits({ limits: TEST_RISK_LIMITS }),
-          now: () => now,
-        }),
+      routes: routes ?? createRoutes({ ...memory(), now: () => now }),
     }),
   );
   server.listen(0, "127.0.0.1");
@@ -509,11 +519,7 @@ test("order routes stay off until their limits are configured", async (t) => {
   const fake = binance();
   const { call, json } = await serve(t, {
     exchange: fake.exchange,
-    routes: createRoutes({
-      intents: new MemoryOrderIntents(),
-      risk: new MemoryRiskLimits({ limits: TEST_RISK_LIMITS }),
-      env: {},
-    }),
+    routes: createRoutes({ ...memory(), env: {} }),
   });
   const ticket = await json("/orders/ticket");
   assert.equal(ticket.status, "connected");
@@ -648,8 +654,7 @@ test("a placement runs the worker's checks, clears the snapshot cache and is nev
   const { call, json } = await serve(t, {
     exchange: fake.exchange,
     routes: createRoutes({
-      intents: new MemoryOrderIntents(),
-      risk: new MemoryRiskLimits({ limits: TEST_RISK_LIMITS }),
+      ...memory(),
       env: {
         TESTNET_MANUAL_INSTRUMENTS: "BTC-USDT",
         TESTNET_MANUAL_ALLOCATION_USDT: "300",
@@ -781,4 +786,162 @@ test("a held stop-limit entry is cancelled through its own route", async (t) => 
   assert.equal(await cancel(), "not_open");
   assert.equal(intents.intents.get("ct_http_stop")?.status, "cancelled");
   assert.equal(fake.calls.length, 0);
+});
+
+const asAssistant = {
+  "Content-Type": "application/json",
+  Authorization: `Bearer ${assistantToken}`,
+};
+const decision = (overrides: Record<string, unknown> = {}) => ({
+  kind: "trade_proposal",
+  proposal: {
+    instrument: "BTC-USDT",
+    marketKind: "spot",
+    direction: "long",
+    quantity: "0.001",
+    entryPrice: "59000",
+    stopLossPrice: "57000",
+    takeProfitPrice: "62000",
+    leverage: 1,
+    entryExpiresAt: new Date(1_800_000_000_000 + 3_600_000).toISOString(),
+    ...overrides,
+  },
+  model: "openai/gpt-6-luna",
+  promptVersion: "assistant-2026-10-08",
+  sourceSnapshotId: "5a3b2c1d-0e9f-4a8b-9c7d-6e5f4a3b2c09",
+  rationale: "Support held.",
+  idempotencyKey: "session-1:call-1",
+});
+
+test("the assistant's token records decisions and reaches nothing else", async (t) => {
+  const fake = binance();
+  const { call } = await serve(t, { exchange: fake.exchange });
+  const recorded = await call("/decisions", {
+    ...post("/decisions", decision()),
+    headers: asAssistant,
+  });
+  assert.equal(recorded.status, 200);
+  const body = await recorded.json();
+  assert.equal(body.decision.proposal.status, "draft");
+  for (const [path, init] of [
+    ["/snapshot", {}],
+    ["/decisions", {}],
+    ["/orders/ticket", {}],
+    ["/market/tickers", {}],
+    ["/orders", post("/orders", order)],
+    [
+      "/proposals/approve",
+      post("/proposals/approve", { proposalId: body.decision.proposal.id }),
+    ],
+  ] as const) {
+    const response = await call(path, {
+      ...init,
+      headers: { ...("headers" in init ? init.headers : {}), ...asAssistant },
+    });
+    assert.equal(response.status, 403, path);
+    assert.deepEqual(await response.json(), { status: "forbidden" });
+  }
+  // The web server cannot record AI decisions.
+  const forged = await call("/decisions", post("/decisions", decision()));
+  assert.equal(forged.status, 403);
+  assert.equal(fake.calls.length, 0);
+});
+
+test("the assistant learns why a decision was not recorded", async (t) => {
+  const { call } = await serve(t, { exchange: binance().exchange });
+  const record = (body: unknown, customerId = owner.customerId) =>
+    call("/decisions", {
+      ...post("/decisions", body),
+      headers: { ...asAssistant, "X-Customer-Id": customerId },
+    });
+  const backwards = await record(
+    decision({ stopLossPrice: "60000", takeProfitPrice: "58000" }),
+  );
+  assert.equal(backwards.status, 400);
+  assert.match((await backwards.json()).message, /long only/);
+  const stale = await record(
+    decision({ entryExpiresAt: new Date(1_799_999_999_000).toISOString() }),
+  );
+  assert.equal(stale.status, 400);
+  assert.match((await stale.json()).message, /in the future/);
+  const short = await record(decision({ direction: "short" }));
+  assert.equal(short.status, 400);
+  const stranger = await record(
+    decision(),
+    "5a3b2c1d-0e9f-4a8b-9c7d-6e5f4a3b2c03",
+  );
+  assert.equal((await stranger.json()).reason, "exchange_account");
+});
+
+test("the web lists decisions, and a rejected proposal keeps its reason and cannot be approved", async (t) => {
+  const fake = binance();
+  const { call, json } = await serve(t, {
+    exchange: fake.exchange,
+    routes: createRoutes({
+      ...memory(),
+      now: () => 1_800_000_000_000,
+      env: {
+        TESTNET_MANUAL_INSTRUMENTS: "BTC-USDT",
+        TESTNET_MANUAL_ALLOCATION_USDT: "300",
+        TESTNET_MAX_ORDER_NOTIONAL_USDT: "100",
+      },
+    }),
+  });
+  const { decision: recorded } = await (
+    await call("/decisions", {
+      ...post("/decisions", decision()),
+      headers: asAssistant,
+    })
+  ).json();
+  const id = recorded.proposal.id;
+  const { decisions } = await json("/decisions");
+  assert.deepEqual(
+    decisions.map((entry: { id: string }) => entry.id),
+    [recorded.id],
+  );
+  assert.equal(
+    (await json(`/proposals?proposalId=${id}`)).proposal.status,
+    "draft",
+  );
+  assert.equal(
+    (
+      await call(
+        "/proposals/reject",
+        post("/proposals/reject", {
+          proposalId: id,
+          reason: "x".repeat(501),
+        }),
+      )
+    ).status,
+    400,
+  );
+  const rejected = await (
+    await call(
+      "/proposals/reject",
+      post("/proposals/reject", {
+        proposalId: id,
+        reason: "Too close to resistance.",
+      }),
+    )
+  ).json();
+  assert.equal(rejected.rejected, true);
+  assert.equal(rejected.proposal.status, "rejected");
+  assert.equal(rejected.proposal.decisionReason, "Too close to resistance.");
+  const again = await (
+    await call(
+      "/proposals/reject",
+      post("/proposals/reject", { proposalId: id }),
+    )
+  ).json();
+  assert.equal(again.rejected, false);
+  const approval = await (
+    await call(
+      "/proposals/approve",
+      post("/proposals/approve", { proposalId: id }),
+    )
+  ).json();
+  assert.equal(approval.outcome.status, "rejected");
+  assert.match(approval.outcome.message, /was rejected/);
+  assert.equal(approval.proposal.status, "rejected");
+  assert.equal(fake.count("/api/v3/orderList/opoco"), 0);
 });

@@ -21,6 +21,7 @@ import {
 import type { OrderIntentStore } from "../order-intents";
 import type { RiskLimitStore } from "../risk-limits";
 import { MemoryRiskLimits, TEST_RISK_LIMITS } from "./memory-risk-limits";
+import type { TradeProposalStore } from "../trade-proposals";
 
 export const rules = (instrument: TestnetInstrument): SymbolRules => ({
   instrument,
@@ -212,6 +213,7 @@ export function deskFixture({
   behaviour,
   env = {},
   intents,
+  proposals,
   scope,
   gate,
   risk = new MemoryRiskLimits({ limits: TEST_RISK_LIMITS }),
@@ -219,6 +221,7 @@ export function deskFixture({
   behaviour?: Behaviour;
   env?: Record<string, string>;
   intents: OrderIntentStore;
+  proposals?: TradeProposalStore;
   scope: AccountScope;
   gate?: Promise<void>;
   risk?: Pick<RiskLimitStore, "current" | "dailyRiskUsed">;
@@ -238,6 +241,7 @@ export function deskFixture({
     config: loaded.config,
     intents,
     risk,
+    proposals,
     now: () => new Date(Date.now() + offset),
     onChange: () => changes++,
   });
@@ -247,6 +251,7 @@ export function deskFixture({
     cancel: (request: unknown) => desk.cancel(customer, request),
     ticket: () => desk.ticket(customer),
     cancelTrigger: (id: unknown) => desk.cancelTrigger(customer, id),
+    approve: (proposalId: string) => desk.approve(customer, proposalId),
   });
   return {
     ...fake,

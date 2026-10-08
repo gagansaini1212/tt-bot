@@ -1,6 +1,8 @@
 import { route, type Route } from "../http";
 import type { OrderIntentStore } from "../order-intents";
 import type { RiskLimitStore } from "../risk-limits";
+import type { TradeProposalStore } from "../trade-proposals";
+import { decisions } from "./decisions";
 import { execution, type ExecutionReader } from "./execution";
 import { depth, klines, tickers } from "./market";
 import { deskProvider, orders } from "./orders";
@@ -13,10 +15,12 @@ import { createSnapshotCache, snapshot } from "./snapshot";
  * here: `handler` for a customer's exchange account, `accountHandler` or
  * `customerHandler` for their data without Binance, and `publicHandler` for
  * market data. Each call creates fresh caches; `now` is their clock. Without
- * `settings`, the Settings routes are left out.
+ * `settings`, the Settings routes are left out, and without `proposals`, the
+ * AI decision routes.
  */
 export function createWorker({
   intents,
+  proposals,
   risk,
   reader,
   settings: settingsDependencies,
@@ -24,6 +28,7 @@ export function createWorker({
   env = process.env,
 }: {
   intents: OrderIntentStore;
+  proposals?: TradeProposalStore;
   risk: Pick<RiskLimitStore, "current" | "dailyRiskUsed">;
   reader?: ExecutionReader;
   settings?: SettingsDependencies;
@@ -36,6 +41,7 @@ export function createWorker({
     now,
     onChange: account.clear,
     intents,
+    proposals,
     risk,
   });
   const desk = orders(desks);
@@ -51,6 +57,16 @@ export function createWorker({
     route("POST", "/orders/cancel", desk.cancel),
     route("POST", "/orders/triggers/cancel", desk.cancelTrigger),
   ];
+  if (proposals) {
+    const ai = decisions({ proposals, now, ...desks });
+    routes.push(
+      route("POST", "/decisions", ai.record),
+      route("GET", "/decisions", ai.list),
+      route("GET", "/proposals", ai.proposal),
+      route("POST", "/proposals/approve", ai.approve),
+      route("POST", "/proposals/reject", ai.reject),
+    );
+  }
   if (settingsDependencies) {
     // The snapshot was read with the old keys.
     const settingsRoutes = settings(settingsDependencies, account.clear);
