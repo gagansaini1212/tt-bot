@@ -19,6 +19,8 @@ import {
 import Decimal from "decimal.js";
 import { z } from "zod";
 
+import { getCurrentCustomer } from "./current-customer";
+
 /** A finished backtest, or why it could not run, safe to show. */
 export type BacktestOutcome =
   | { status: "completed"; result: BacktestResult }
@@ -46,6 +48,13 @@ type HistorySource = Pick<SpotHistoryCache, "hourlyKlines" | "symbolFilters">;
 // .market-history in the working directory.
 let sharedHistory: SpotHistoryCache | undefined;
 const defaultHistory = () => (sharedHistory ??= new SpotHistoryCache());
+
+// The proxy keeps signed-out visitors off /strategies, but actions are
+// reachable without the page, so these functions check again.
+const SIGNED_OUT = {
+  status: "invalid" as const,
+  message: "Sign in to run a backtest.",
+};
 
 const UNAVAILABLE =
   "Binance's market data could not be read. Check the connection and try again.";
@@ -107,6 +116,7 @@ export async function runBacktestRequest(
     now = Date.now(),
   }: { history?: HistorySource; now?: number } = {},
 ): Promise<BacktestOutcome> {
+  if (!(await getCurrentCustomer())) return SIGNED_OUT;
   const parsed = backtestRequestSchema.safeParse(input);
   if (!parsed.success)
     return { status: "invalid", message: parsed.error.issues[0].message };
@@ -154,6 +164,7 @@ export async function summarizePeriod(
     now = Date.now(),
   }: { history?: HistorySource; now?: number } = {},
 ): Promise<PeriodSummaryOutcome> {
+  if (!(await getCurrentCustomer())) return SIGNED_OUT;
   const parsed = summaryRequestSchema.safeParse(input);
   if (!parsed.success)
     return { status: "invalid", message: parsed.error.issues[0].message };

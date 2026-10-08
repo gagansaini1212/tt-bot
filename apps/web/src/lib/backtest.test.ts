@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, test } from "node:test";
+import { before, describe, test } from "node:test";
 import { DEFAULT_ASSUMPTIONS } from "@crypto-trading/backtest";
 import {
   BinanceHistoryError,
@@ -7,7 +7,16 @@ import {
   type TestnetKline,
 } from "@crypto-trading/exchanges";
 
-import { runBacktestRequest, summarizePeriod } from "./backtest";
+import type * as Backtest from "./backtest";
+import { signInForTesting } from "./current-customer.testing";
+
+let runBacktestRequest: typeof Backtest.runBacktestRequest;
+let summarizePeriod: typeof Backtest.summarizePeriod;
+
+before(async () => {
+  signInForTesting();
+  ({ runBacktestRequest, summarizePeriod } = await import("./backtest"));
+});
 
 const HOUR = 60 * 60 * 1000;
 const SEPT_1 = Date.UTC(2026, 8, 1);
