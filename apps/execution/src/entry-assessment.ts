@@ -45,6 +45,14 @@ export const TERMINAL_STATES: readonly EntryState[] = [
 const OPEN = new Set(["NEW", "PARTIALLY_FILLED", "PENDING_NEW"]);
 
 /**
+ * Exit reasons that stop an entry only until it has filled completely, as a
+ * pause does: it cancels pending entries and keeps the exits of filled ones.
+ * A partly filled entry is cancelled and what it bought is sold, because
+ * Binance cannot protect it.
+ */
+export const CANCEL_ONLY_REASONS: readonly string[] = ["pause"];
+
+/**
  * Binance places an OPOCO list's exits just after its entry fills. Until
  * this long after the last fill, exits it has not placed yet are not missing.
  */
@@ -67,9 +75,14 @@ export type EntryObservation = {
   stopLossPrice: string;
   // The latest traded price, when the worker read it.
   lastPrice?: string;
-  customerCancelled: boolean;
+  // What the customer accepted leaving without exits when they cancelled
+  // the entry's order list from the dashboard, if they did.
+  customerAccepted: string | null;
   // Why the worker is already selling the entry, if it is.
   exitReason: string | null;
+  // The loop last found it unprotected: an exit's sale was refused after
+  // its stop loss was cancelled, so it stays unprotected until sold.
+  wasUnprotected?: boolean;
   now: Date;
 };
 
@@ -93,13 +106,14 @@ export function isOpen(leg: LegState | undefined) {
 }
 
 export function assessEntry(observation: EntryObservation): EntryAssessment {
-  const {
-    entry,
-    takeProfit,
-    stopLoss,
-    closes,
-    exitReason: carried,
-  } = observation;
+  const { entry, takeProfit, stopLoss, closes } = observation;
+  // A pause leaves an entry that has filled completely alone.
+  const carried =
+    observation.exitReason &&
+    CANCEL_ONLY_REASONS.includes(observation.exitReason) &&
+    entry.status === "FILLED"
+      ? null
+      : observation.exitReason;
   const filled = new Decimal(entry.executedQty);
   const exits = [takeProfit, stopLoss].filter(
     (leg): leg is LegState => leg !== undefined,
@@ -142,7 +156,10 @@ export function assessEntry(observation: EntryObservation): EntryAssessment {
   });
 
   if (carried) {
-    const state = carried === "protection_failed" ? "unprotected" : "exiting";
+    const state =
+      carried === "protection_failed" || observation.wasUnprotected
+        ? "unprotected"
+        : "exiting";
     if (listOpen)
       return result(
         state,
@@ -199,7 +216,12 @@ export function assessEntry(observation: EntryObservation): EntryAssessment {
       "The entry has filled and Binance is placing its exits.",
     );
 
-  if (observation.customerCancelled)
+  // Only what the customer accepted: if more filled before the cancel
+  // reached Binance, the whole quantity is a protection failure.
+  if (
+    observation.customerAccepted !== null &&
+    held.lte(observation.customerAccepted)
+  )
     return result(
       "handed_over",
       `You cancelled the order after ${filled.toFixed()} filled, accepting that what it holds has no exits. It is yours to manage.`,

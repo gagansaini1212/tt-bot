@@ -51,9 +51,15 @@ CREATE TABLE entry_reconciliations (
   exit_requested_at timestamptz,
   -- Set when the worker stops trying to sell, after repeated failures.
   close_blocked_at timestamptz,
-  -- Set just before the customer cancels a partly filled entry from the
-  -- dashboard, having confirmed that its quantity is left without exits.
+  -- Set just before the customer cancels an entry's order list from the
+  -- dashboard, having confirmed that the quantity it bought is left without
+  -- exits, with the quantity they accepted.
   customer_cancelled_at timestamptz,
+  customer_accepted_quantity numeric(38, 18)
+    CHECK (customer_accepted_quantity > 0),
+  -- Market sells Binance refused only because of a rate limit. They do not
+  -- count towards the attempts after which the worker stops selling.
+  rate_limited_sells integer NOT NULL DEFAULT 0 CHECK (rate_limited_sells >= 0),
   detail text NOT NULL DEFAULT '',
   checked_at timestamptz NOT NULL DEFAULT now(),
   created_at timestamptz NOT NULL DEFAULT now(),

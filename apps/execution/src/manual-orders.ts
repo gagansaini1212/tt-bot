@@ -329,8 +329,9 @@ export class ManualOrderDesk {
   /**
    * Sends a stop-limit entry whose stop price has traded. Only one worker can
    * claim it. Every check runs again with fresh account data first; if one
-   * fails, nothing is sent and the entry is rejected. Resolves undefined if
-   * the entry was no longer pending.
+   * fails, nothing is sent and the entry is rejected. If the checks cannot
+   * run, it is held again and the error is thrown. Resolves undefined if the
+   * entry was no longer pending.
    */
   submitTrigger(
     scope: AccountScope,
@@ -356,15 +357,11 @@ export class ManualOrderDesk {
           this.#now(),
           { proposalId: randomUUID(), sourceSnapshotId: randomUUID() },
         );
-      } catch {
-        // The intent stays submitting with its reconciliation due. Binance
-        // has no such order, so reconciliation rejects it.
-        return {
-          status: "unknown",
-          listClientOrderId,
-          message:
-            "The stop price traded, but the worker could not check the entry. Reconciliation will settle it shortly.",
-        };
+      } catch (error) {
+        // Nothing was sent, so the entry waits for a later pass. If even
+        // this fails, reconciliation finds it unsent and rejects it.
+        await this.#intents.releaseTrigger(scope, listClientOrderId);
+        throw error;
       }
       if (!plan.passed) {
         const failed = plan.checks.filter((check) => !check.passed);
@@ -730,7 +727,11 @@ export class ManualOrderDesk {
         ? protectedLeg(target.clientOrderId)?.listClientOrderId
         : undefined;
       if (listClientOrderId)
-        await this.#intents.noteCustomerCancel(scope, listClientOrderId, true);
+        await this.#intents.noteCustomerCancel(
+          scope,
+          listClientOrderId,
+          unprotectedQuantity,
+        );
       let cancelled: TestnetOrder[];
       try {
         cancelled =
@@ -755,7 +756,7 @@ export class ManualOrderDesk {
           error.kind !== "unknown_outcome"
         )
           await this.#intents
-            .noteCustomerCancel(scope, listClientOrderId, false)
+            .noteCustomerCancel(scope, listClientOrderId, null)
             .catch(() => {});
         return failure(
           error,

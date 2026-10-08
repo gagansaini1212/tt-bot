@@ -18,8 +18,8 @@ export class MemoryOrderIntents implements OrderIntentStore {
   readonly intents = new Map<string, OrderIntent & { scope: AccountScope }>();
   readonly orders = new Map<string, TestnetOrder>();
   readonly cancelled: TestnetOrder[] = [];
-  // List client order IDs the customer cancelled, accepting no exits.
-  readonly customerCancels = new Set<string>();
+  // What the customer accepted leaving without exits, by list client order ID.
+  readonly customerCancels = new Map<string, string>();
 
   async record(
     scope: AccountScope,
@@ -62,6 +62,11 @@ export class MemoryOrderIntents implements OrderIntentStore {
     return this.find(scope, clientOrderId);
   }
 
+  async releaseTrigger(scope: AccountScope, clientOrderId: string) {
+    const intent = this.#owned(scope, clientOrderId);
+    if (intent?.status === "submitting") intent.status = "pending";
+  }
+
   async cancelTrigger(scope: AccountScope, clientOrderId: string) {
     const intent = this.#owned(scope, clientOrderId);
     if (intent?.status !== "pending") return false;
@@ -72,10 +77,10 @@ export class MemoryOrderIntents implements OrderIntentStore {
   async noteCustomerCancel(
     scope: AccountScope,
     listClientOrderId: string,
-    accepted: boolean,
+    accepted: string | null,
   ) {
     if (!this.#owned(scope, listClientOrderId)) return;
-    if (accepted) this.customerCancels.add(listClientOrderId);
+    if (accepted) this.customerCancels.set(listClientOrderId, accepted);
     else this.customerCancels.delete(listClientOrderId);
   }
 

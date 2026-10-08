@@ -41,9 +41,10 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
   ]);
   readonly calls: Partial<Record<Method, number>> = {};
   /** What market sells do. */
-  sellBehaviour: "fill" | "reject" | "expire" | "unknown_placed" = "fill";
-  /** What placing an order list does. */
-  entryBehaviour: "place" | "unknown_placed" = "place";
+  sellBehaviour:
+    "fill" | "reject" | "rate_limited" | "expire" | "unknown_placed" = "fill";
+  /** What placing an order list does: fill_now fills the entry at once. */
+  entryBehaviour: "place" | "fill_now" | "unknown_placed" = "place";
   #failures = new Map<Method, Failure[]>();
   #nextId = 1000;
   #nextFill = 1;
@@ -131,7 +132,13 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
   fillEntry(
     listClientOrderId: string,
     quantity: string,
-    { exits = "place" }: { exits?: "place" | "drop" } = {},
+    {
+      exits = "place",
+    }: {
+      // drop: Binance expires them; reject: it rejects them unsized;
+      // pending: it has not placed them yet.
+      exits?: "place" | "drop" | "reject" | "pending";
+    } = {},
   ) {
     const { entry, takeProfit, stopLoss } = this.#legs(listClientOrderId);
     const amount = new Decimal(quantity);
@@ -151,11 +158,13 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
       ),
       rules("BTC-USDT").stepSize,
     );
+    if (exits === "pending") return;
     for (const exit of [takeProfit, stopLoss])
       this.#set({
         ...exit,
-        origQty: received.toFixed(),
-        status: exits === "place" ? "NEW" : "EXPIRED",
+        origQty: exits === "reject" ? "0" : received.toFixed(),
+        status:
+          exits === "place" ? "NEW" : exits === "drop" ? "EXPIRED" : "REJECTED",
       });
     if (exits === "place") {
       base.free = base.free.minus(received);
@@ -355,6 +364,15 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
     this.lists.set(entry.listClientOrderId, list);
     if (this.entryBehaviour === "unknown_placed")
       throw new BinanceTestnetError("unknown_outcome");
+    if (this.entryBehaviour === "fill_now") {
+      this.fillEntry(entry.listClientOrderId, entry.quantity);
+      return {
+        ...structuredClone(list),
+        orderReports: list.orders.map(({ clientOrderId }) => ({
+          ...this.orders.get(clientOrderId)!,
+        })),
+      };
+    }
     return { ...structuredClone(list), orderReports: legs };
   };
 
@@ -401,6 +419,8 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
         undefined,
         "Duplicate order sent.",
       );
+    if (this.sellBehaviour === "rate_limited")
+      throw new BinanceTestnetError("rate_limited", -1015, 30);
     if (this.sellBehaviour === "reject")
       throw new BinanceTestnetError(
         "rejected",

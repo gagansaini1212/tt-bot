@@ -15,9 +15,9 @@ import {
 } from "@crypto-trading/exchanges";
 import type { AccountResolver, AccountScope } from "./accounts";
 import { ExecutionLoop } from "./execution-loop";
-import { requestEntryExit } from "./execution-store";
+import { requestEntryExit, stopStrategyEntries } from "./execution-store";
 import { FakeBinance } from "./fixtures/fake-binance";
-import { limit } from "./fixtures/fake-exchange";
+import { limit, market } from "./fixtures/fake-exchange";
 import { loadManualTradingConfig, ManualOrderDesk } from "./manual-orders";
 import { PostgresOrderIntents, RECONCILE_TOPIC } from "./order-intents";
 
@@ -297,6 +297,13 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
       "critical:protection_failed",
       "info:position_closed",
     ]);
+    // The sale's fill is kept, although it closed the entry in the same pass.
+    const [sold] = await database.admin<{ quantity: string }[]>`
+      select f.quantity::text from fills f
+      join exchange_orders o on o.id = f.exchange_order_id
+      where o.client_order_id = 'ct_loop_drop_c1'
+    `;
+    assert.equal(new Decimal(sold.quantity).toFixed(), "0.00099");
     await w.pass();
     assert.equal(w.fake.count("placeMarketSell"), 1);
     assert.equal((await notifications(w.scope)).length, 2);
@@ -643,16 +650,25 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
     ]);
   });
 
-  test("an exit that cannot sell past its deadline is overdue, alerted, and given up after three tries", async () => {
+  test("an exit that cannot sell past its deadline is unprotected, overdue, alerted, and given up after three tries", async () => {
     const w = await world();
-    await strategyEntry(w, "ct_loop_overdue", 60);
+    const strategyId = await strategyEntry(w, "ct_loop_overdue", 60);
     w.fake.fillEntry("ct_loop_overdue", "0.001");
     await w.pass();
     w.fake.sellBehaviour = "reject";
     w.advance(61_000);
     await w.pass();
-    assert.equal((await reconciliation("ct_loop_overdue"))?.state, "exiting");
+    // Its exits are cancelled and the sale was refused, so nothing protects
+    // it: a protection failure, which pauses the strategy.
+    assert.equal(
+      (await reconciliation("ct_loop_overdue"))?.state,
+      "unprotected",
+    );
     assert.equal(w.fake.count("placeMarketSell"), 1);
+    const [strategy] = await database.admin<{ status: string }[]>`
+      select status from strategies where id = ${strategyId}
+    `;
+    assert.equal(strategy.status, "paused");
 
     w.advance(61_000);
     await w.pass();
@@ -669,6 +685,7 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
     assert.equal(state.alerts[0].closeBlocked, true);
     assert.deepEqual(await notifications(w.scope), [
       "info:holding_deadline_reached",
+      "critical:protection_failed",
       "critical:exit_overdue",
       "critical:close_failed",
     ]);
@@ -752,5 +769,165 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
     await w.pass();
     assert.deepEqual(await notifications(other.scope), []);
     assert.deepEqual((await other.loop.state(other.scope)).alerts, []);
+  });
+
+  test("exits Binance rejected, or has not placed a minute after the fill, leave the entry unprotected", async () => {
+    const w = await world();
+    await w.place(limit("ct_loop_rejected"));
+    w.fake.fillEntry("ct_loop_rejected", "0.001", { exits: "reject" });
+    await w.pass();
+    assert.equal((await reconciliation("ct_loop_rejected"))?.state, "closed");
+    // Unsized, so it sells what the entry received less the fee.
+    assert.deepEqual(
+      (await exits("ct_loop_rejected")).map((exit) => exit.quantity),
+      ["0.00099"],
+    );
+
+    await w.place(limit("ct_loop_pending"));
+    w.fake.fillEntry("ct_loop_pending", "0.001", { exits: "pending" });
+    await w.pass();
+    assert.equal(
+      (await reconciliation("ct_loop_pending"))?.state,
+      "awaiting_exits",
+    );
+    w.advance(61_000);
+    await w.pass();
+    // Its list is still open, so it is cancelled before the sale.
+    assert.equal(w.fake.count("cancelOrderList"), 1);
+    assert.equal((await reconciliation("ct_loop_pending"))?.state, "closed");
+    assert.deepEqual(await notifications(w.scope), [
+      "critical:protection_failed",
+      "info:position_closed",
+      "critical:protection_failed",
+      "info:position_closed",
+    ]);
+  });
+
+  test("an entry that filled when it was placed has its fills and first fill kept", async () => {
+    const w = await world();
+    w.fake.entryBehaviour = "fill_now";
+    assert.equal((await w.place(market("ct_loop_fok"))).status, "protected");
+    w.advance(30_000);
+    await w.pass();
+    const entry = await reconciliation("ct_loop_fok");
+    assert.equal(entry?.state, "protected");
+    // The fill's own time, not the pass's.
+    assert.ok(Date.now() - entry!.first_fill_at!.getTime() < 10_000);
+    const [{ count }] = await database.admin<{ count: string }[]>`
+      select count(*) from fills f
+      join exchange_orders o on o.id = f.exchange_order_id
+      where o.client_order_id = 'ct_loop_fok_en'
+    `;
+    assert.equal(count, "1");
+  });
+
+  test("a stop-limit entry the worker could not check when it triggered is held again", async () => {
+    const w = await world();
+    await w.place(stopLimit("ct_loop_stop_retry"));
+    w.fake.setPrice("BTC-USDT", "61500");
+    w.fake.failNext("getAccount", new BinanceTestnetError("unavailable"));
+    await w.pass();
+    assert.equal(await intentStatus("ct_loop_stop_retry"), "pending");
+    assert.equal(w.fake.count("placeProtectedEntry"), 0);
+    assert.ok(w.logs.some((line) => line.includes("ct_loop_stop_retry")));
+    await w.pass();
+    assert.equal(await intentStatus("ct_loop_stop_retry"), "acknowledged");
+    assert.equal(w.fake.count("placeProtectedEntry"), 1);
+    // Held again, its reconciliation was not left due to reject it.
+    w.advance(61_000);
+    await w.pass();
+    assert.equal(await intentStatus("ct_loop_stop_retry"), "acknowledged");
+  });
+
+  test("more filled than the customer accepted leaving bare is sold, not handed over", async () => {
+    const w = await world();
+    await w.place(limit("ct_loop_accepted"));
+    w.fake.fillEntry("ct_loop_accepted", "0.0004");
+    // The customer confirmed leaving 0.0004 bare, but the entry filled
+    // completely before the cancel reached Binance.
+    await w.intents.noteCustomerCancel(w.scope, "ct_loop_accepted", "0.0004");
+    w.fake.fillEntry("ct_loop_accepted", "0.0006");
+    w.fake.cancelElsewhere("ct_loop_accepted");
+    await w.pass();
+    const sold = await reconciliation("ct_loop_accepted");
+    assert.equal(sold?.state, "closed");
+    assert.equal(sold?.exit_reason, "protection_failed");
+  });
+
+  test("sells refused only for a rate limit do not count towards giving up", async () => {
+    const w = await world();
+    await w.place(limit("ct_loop_limited"));
+    w.fake.fillEntry("ct_loop_limited", "0.001", { exits: "drop" });
+    w.fake.sellBehaviour = "rate_limited";
+    for (let pass = 0; pass < 4; pass++) await w.pass();
+    assert.equal(w.fake.count("placeMarketSell"), 4);
+    const limited = await reconciliation("ct_loop_limited");
+    assert.equal(limited?.state, "unprotected");
+    assert.equal(limited?.close_blocked_at, null);
+    w.fake.sellBehaviour = "fill";
+    await w.pass();
+    assert.equal((await reconciliation("ct_loop_limited"))?.state, "closed");
+    assert.deepEqual(await notifications(w.scope), [
+      "critical:protection_failed",
+      "info:position_closed",
+    ]);
+  });
+
+  test("pausing a strategy cancels its pending entries and keeps the exits of filled ones; close all sells them", async () => {
+    const w = await world();
+    const strategyId = await strategyEntry(w, "ct_loop_pause_filled");
+    w.fake.fillEntry("ct_loop_pause_filled", "0.001");
+    await withCustomerScope(database.app, w.scope.customerId, async (tx) => {
+      const [proposal] = await tx<{ id: string }[]>`
+        insert into trade_proposals (
+          id, customer_id, exchange_account_id, strategy_id, strategy_version,
+          source_snapshot_id, instrument, market_kind, direction, quantity,
+          entry_price, stop_loss_price, take_profit_price, leverage,
+          entry_expires_at, rationale, status
+        )
+        values (
+          ${randomUUID()}, ${w.scope.customerId}, ${w.scope.exchangeAccountId},
+          ${strategyId}, 1, ${randomUUID()}, 'BTC-USDT', 'spot', 'long', 0.001,
+          59000, 58000, 63000, 1, now() + interval '1 hour', 'Test', 'authorized'
+        )
+        returning id
+      `;
+      await tx`
+        insert into order_intents (customer_id, proposal_id, idempotency_key, status)
+        values (${w.scope.customerId}, ${proposal.id}, 'ct_loop_pause_open', 'acknowledged')
+      `;
+    });
+    await w.fake.placeProtectedEntry({
+      instrument: "BTC-USDT",
+      quantity: "0.001",
+      price: "59000",
+      timeInForce: "GTC",
+      takeProfitPrice: "63000",
+      stopLossPrice: "58000",
+      listClientOrderId: "ct_loop_pause_open",
+    });
+    await w.pass();
+    assert.equal(
+      (await stopStrategyEntries(database.app, w.scope, strategyId, "pause"))
+        .length,
+      2,
+    );
+    await w.pass();
+    assert.equal(
+      (await reconciliation("ct_loop_pause_open"))?.state,
+      "not_filled",
+    );
+    assert.equal(
+      (await reconciliation("ct_loop_pause_filled"))?.state,
+      "protected",
+    );
+    assert.equal(w.fake.count("placeMarketSell"), 0);
+
+    await stopStrategyEntries(database.app, w.scope, strategyId, "close_all");
+    await w.pass();
+    const closed = await reconciliation("ct_loop_pause_filled");
+    assert.equal(closed?.state, "closed");
+    assert.equal(closed?.exit_reason, "close_all");
+    assert.equal(w.fake.count("placeMarketSell"), 1);
   });
 });

@@ -28,7 +28,7 @@ const observe = (changes: Partial<EntryObservation>): EntryObservation => ({
   stepSize: "0.00001",
   lastFillAt: null,
   stopLossPrice: "58000",
-  customerCancelled: false,
+  customerAccepted: null,
   exitReason: null,
   now,
   ...changes,
@@ -136,8 +136,17 @@ test("a partly filled entry cancelled elsewhere is unprotected; from the dashboa
   assert.equal(verdict.sell, "0.0003996");
   assert.match(verdict.finding, /canceled after 0.0004 filled/);
   assert.equal(
-    assessEntry({ ...cancelled, customerCancelled: true }).state,
+    assessEntry({ ...cancelled, customerAccepted: "0.0004" }).state,
     "handed_over",
+  );
+  // More filled than the customer accepted: protection failure after all.
+  assert.equal(
+    assessEntry({
+      ...cancelled,
+      entry: leg("en", "CANCELED", "0.001", "0.0008"),
+      customerAccepted: "0.0004",
+    }).state,
+    "unprotected",
   );
   // The same for a filled entry whose exits the customer cancelled.
   assert.equal(
@@ -146,7 +155,7 @@ test("a partly filled entry cancelled elsewhere is unprotected; from the dashboa
         entry: filled,
         takeProfit: leg("tp", "CANCELED", "0.00099"),
         stopLoss: leg("sl", "CANCELED", "0.00099"),
-        customerCancelled: true,
+        customerAccepted: "0.00099",
       }),
     ).state,
     "handed_over",
@@ -234,4 +243,48 @@ test("an entry that ended without filling, or whose exit filled, holds nothing",
   );
   assert.equal(closed.state, "closed");
   assert.equal(closed.exitReason, null);
+});
+
+test("a pause cancels an entry that has not filled completely, and leaves a filled one protected", () => {
+  const working = assessEntry(observe({ exitReason: "pause" }));
+  assert.equal(working.cancelList, true);
+  const partial = assessEntry(
+    observe({
+      entry: leg("en", "CANCELED", "0.001", "0.0004"),
+      exitReason: "pause",
+    }),
+  );
+  assert.equal(partial.sell, "0.0004");
+  const filledEntry = observe({
+    entry: filled,
+    takeProfit: leg("tp", "NEW", "0.00099"),
+    stopLoss: leg("sl", "NEW", "0.00099"),
+    exitReason: "pause",
+  });
+  const kept = assessEntry(filledEntry);
+  assert.equal(kept.state, "protected");
+  assert.equal(kept.cancelList, false);
+  assert.equal(kept.exitReason, null);
+  // Its protection can still fail, and that replaces the pause.
+  const failed = assessEntry({
+    ...filledEntry,
+    stopLoss: leg("sl", "EXPIRED", "0.00099"),
+    takeProfit: leg("tp", "EXPIRED", "0.00099"),
+  });
+  assert.equal(failed.exitReason, "protection_failed");
+});
+
+test("an exit whose sale Binance refused stays unprotected until it is sold", () => {
+  const exiting = observe({
+    entry: filled,
+    takeProfit: leg("tp", "CANCELED", "0.00099"),
+    stopLoss: leg("sl", "CANCELED", "0.00099"),
+    exitReason: "holding_deadline",
+    closes: [{ clientOrderId: "ct_a_c1", intentStatus: "rejected" }],
+  });
+  assert.equal(assessEntry(exiting).state, "exiting");
+  assert.equal(
+    assessEntry({ ...exiting, wasUnprotected: true }).state,
+    "unprotected",
+  );
 });

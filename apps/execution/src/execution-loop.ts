@@ -7,7 +7,6 @@ import {
 } from "@crypto-trading/database";
 import {
   BinanceTestnetError,
-  binanceSymbol,
   closeOrderId,
   floorToStep,
   protectedLegIds,
@@ -23,6 +22,7 @@ import {
 import type { AccountResolver, AccountScope } from "./accounts";
 import {
   assessEntry,
+  CANCEL_ONLY_REASONS,
   isOpen,
   TERMINAL_STATES,
   type CloseState,
@@ -74,6 +74,8 @@ export type TriggerDesk = Pick<ManualOrderDesk, "submitTrigger">;
 export const PASS_INTERVAL_MS = 5_000;
 /** Market sells the worker tries for one entry before asking the customer. */
 export const MAX_CLOSE_ATTEMPTS = 3;
+// closeOrderId numbers an entry's sells 1 to 9.
+const MAX_SELL_IDS = 9;
 // Binance's code for an order or order list that does not exist.
 const NO_SUCH_ORDER = -2013;
 const RULES_TTL_MS = 5 * 60_000;
@@ -95,9 +97,10 @@ const NOTIFICATIONS_SHOWN_MS = 7 * 24 * 60 * 60_000;
  * Everything it acts on is in PostgreSQL, so a restarted worker carries on
  * where it stopped. Two workers can run at once: an advisory lock gives each
  * customer's pass to one of them, and every action is guarded on its own as
- * well. Each order is saved as an intent before it is sent, state changes
- * lock their row, and notifications are raised in the same transaction as
- * the change they report.
+ * well. Each order is saved as an intent before it is sent, and state
+ * changes lock their row. Alerts about an entry's state are raised in the
+ * same transaction as the change; notices of a stop-limit entry being sent
+ * follow the send, so a crash between them loses only the notice.
  */
 export class ExecutionLoop {
   readonly #database: Database;
@@ -313,12 +316,19 @@ export class ExecutionLoop {
           this.#onChange();
           continue;
         }
-        await this.#intents.resolveMissing(scope, intent.clientOrderId);
-        if (intent.order?.kind === "protected_entry" && intent.order.trigger)
-          await this.#store.notify(
-            scope,
-            triggerInterrupted(intent.order, intent.clientOrderId),
-          );
+        const order = intent.order;
+        await this.#intents.resolveMissing(
+          scope,
+          intent.clientOrderId,
+          async (tx) => {
+            if (order?.kind === "protected_entry" && order.trigger)
+              await raiseNotification(
+                tx,
+                scope.customerId,
+                triggerInterrupted(order, intent.clientOrderId),
+              );
+          },
+        );
       } catch (error) {
         await retryJob(
           this.#database,
@@ -424,7 +434,15 @@ export class ExecutionLoop {
             ? await read(close.clientOrderId)
             : undefined,
       });
-    await this.#keep(scope, tracked, reports);
+    await this.#store.recordOrders(scope, reports);
+    // Including legs already final, such as an entry that filled when it
+    // was placed, whose fills nothing has read yet.
+    await this.#keepFills(scope, tracked, [
+      entryLeg,
+      takeProfit,
+      stopLoss,
+      ...closes.map((close) => close.leg),
+    ]);
 
     let facts = this.#fillFacts(tracked);
     const rules = await this.#symbolRules(instrument);
@@ -441,15 +459,19 @@ export class ExecutionLoop {
         entryLeg.status === "PARTIALLY_FILLED"
           ? await reads.lastPrice(instrument)
           : undefined,
-      customerCancelled: Boolean(tracked.reconciliation?.customerCancelledAt),
+      customerAccepted: tracked.reconciliation?.customerAccepted ?? null,
       exitReason: tracked.reconciliation?.exitReason ?? null,
+      wasUnprotected: tracked.reconciliation?.state === "unprotected",
       now,
     };
     let assessment = assessEntry(observation);
 
     // Decided now: saved, notified and paused before anything is sent, so
     // a crash cannot lose the decision or repeat its notification.
-    if (assessment.exitReason && !observation.exitReason) {
+    if (
+      assessment.exitReason &&
+      assessment.exitReason !== observation.exitReason
+    ) {
       const previous = await this.#store.transition(
         scope,
         tracked,
@@ -491,7 +513,16 @@ export class ExecutionLoop {
       sale = await this.#sell(scope, tracked, assessment, reads);
       if (sale.kind === "sent") {
         observation.closes.push(sale.close);
+        await this.#keepFills(scope, tracked, [sale.close.leg]);
         assessment = assessEntry(observation);
+        // Its exits are cancelled and Binance refused the sale, so what it
+        // holds now has no stop loss, whatever the reason for the exit.
+        if (
+          sale.close.intentStatus === "rejected" &&
+          !sale.rateLimited &&
+          assessment.state === "exiting"
+        )
+          assessment = { ...assessment, state: "unprotected" };
       } else if (sale.kind === "dust" || sale.kind === "gone") {
         // Nothing is left that the worker can sell, so it is done.
         assessment = { ...assessment, state: "closed" };
@@ -504,6 +535,7 @@ export class ExecutionLoop {
       {
         ...this.#update(assessment, facts.firstFillAt),
         closeBlocked: sale?.kind === "blocked",
+        rateLimitedSells: sale?.kind === "sent" && sale.rateLimited ? 1 : 0,
         // A sale that stopped or cannot happen replaces "selling".
         detail:
           sale && sale.kind !== "sent" && sale.kind !== "waiting"
@@ -514,32 +546,32 @@ export class ExecutionLoop {
     );
   }
 
-  /** Keeps Binance's reports, and the fills of any order that filled more. */
-  async #keep(
+  /** Keeps the fills of every order that has filled more than recorded. */
+  async #keepFills(
     scope: AccountScope,
     tracked: TrackedEntry,
-    reports: TestnetOrder[],
+    legs: (LegState | undefined)[],
   ) {
-    await this.#store.recordOrders(scope, reports);
-    for (const order of reports) {
+    for (const leg of legs) {
+      if (!leg || leg.orderId === null) continue;
       const recorded = tracked.fills
-        .filter((fill) => fill.clientOrderId === order.clientOrderId)
+        .filter((fill) => fill.clientOrderId === leg.clientOrderId)
         .reduce((total, fill) => total.plus(fill.quantity), new Decimal(0));
-      if (new Decimal(order.executedQty).lte(recorded)) continue;
+      if (new Decimal(leg.executedQty).lte(recorded)) continue;
       const fills = await this.#exchange.getOrderFills(
         tracked.entry.instrument,
-        order.orderId,
+        leg.orderId,
       );
-      await this.#store.recordFills(scope, order, fills);
+      await this.#store.recordFills(scope, leg.clientOrderId, fills);
       tracked.fills = tracked.fills
-        .filter((fill) => fill.clientOrderId !== order.clientOrderId)
-        .concat(fills.map((fill) => toFill(order.clientOrderId, fill)));
+        .filter((fill) => fill.clientOrderId !== leg.clientOrderId)
+        .concat(fills.map((fill) => toFill(leg.clientOrderId, fill)));
     }
   }
 
   #fillFacts(tracked: TrackedEntry) {
     const entryId = protectedLegIds(tracked.listClientOrderId).entry;
-    const base = binanceSymbol(tracked.entry.instrument).replace(/USDT$/, "");
+    const base = baseAsset(tracked.entry.instrument);
     const fills = tracked.fills.filter(
       (fill) => fill.clientOrderId === entryId,
     );
@@ -599,7 +631,8 @@ export class ExecutionLoop {
       orderListId,
       reason: exitReason,
     });
-    await this.#keep(scope, tracked, orderReports);
+    await this.#store.recordOrders(scope, orderReports);
+    await this.#keepFills(scope, tracked, orderReports.map(toLeg));
     return orderReports;
   }
 
@@ -615,7 +648,7 @@ export class ExecutionLoop {
     reads: PassReads,
   ): Promise<Sale> {
     const { instrument } = tracked.entry;
-    const base = binanceSymbol(instrument).replace(/USDT$/, "");
+    const base = baseAsset(instrument);
     const [rules, price, balance] = await Promise.all([
       this.#symbolRules(instrument),
       reads.lastPrice(instrument),
@@ -635,8 +668,16 @@ export class ExecutionLoop {
         kind: "dust",
         note: `${held.toFixed()} ${base} is left, below Binance's minimum order size, so it cannot be sold.`,
       };
+    // Sells refused for a rate limit are retried without counting, up to
+    // the nine IDs an entry's sells can have.
     const attempt = tracked.closes.length + 1;
-    if (tracked.reconciliation?.closeBlockedAt || attempt > MAX_CLOSE_ATTEMPTS)
+    const counted =
+      tracked.closes.length - (tracked.reconciliation?.rateLimitedSells ?? 0);
+    if (
+      tracked.reconciliation?.closeBlockedAt ||
+      counted >= MAX_CLOSE_ATTEMPTS ||
+      attempt > MAX_SELL_IDS
+    )
       // The worker has stopped selling, so no sale of its own explains a
       // lower balance: the customer sold it outside the worker.
       return sellable(new Decimal(balance.free).plus(balance.locked))
@@ -677,6 +718,7 @@ export class ExecutionLoop {
     const close = (
       intentStatus: CloseState["intentStatus"],
       placed?: TestnetOrder,
+      rateLimited = false,
     ): Sale => ({
       kind: "sent",
       close: {
@@ -684,6 +726,7 @@ export class ExecutionLoop {
         intentStatus,
         leg: placed && toLeg(placed),
       },
+      rateLimited,
       note: "",
     });
     let placed: TestnetOrder;
@@ -709,7 +752,11 @@ export class ExecutionLoop {
       this.#warn(
         `Could not sell for ${tracked.listClientOrderId}: ${describe(error)}`,
       );
-      return close(refused ? "rejected" : "unknown");
+      return close(
+        refused ? "rejected" : "unknown",
+        undefined,
+        error instanceof BinanceTestnetError && error.kind === "rate_limited",
+      );
     }
     this.#onChange();
     await this.#intents
@@ -776,8 +823,12 @@ export class ExecutionLoop {
     assessment: EntryAssessment,
   ): TransitionEffects {
     return async (tx, previous) => {
-      if (previous?.exitReason) return;
-      const base = binanceSymbol(tracked.entry.instrument).replace(/USDT$/, "");
+      if (
+        previous?.exitReason &&
+        !CANCEL_ONLY_REASONS.includes(previous.exitReason)
+      )
+        return;
+      const base = baseAsset(tracked.entry.instrument);
       const held = `${new Decimal(assessment.held).toFixed()} ${base}`;
       const data = entryData(tracked, { held: assessment.held });
       if (assessment.exitReason === "protection_failed") {
@@ -832,7 +883,7 @@ export class ExecutionLoop {
     sale: Sale | undefined,
   ): TransitionEffects {
     return async (tx, previous) => {
-      const base = binanceSymbol(tracked.entry.instrument).replace(/USDT$/, "");
+      const base = baseAsset(tracked.entry.instrument);
       const data = entryData(tracked, { held: assessment.held });
       const list = tracked.listClientOrderId;
       const notify = (notification: Omit<NewNotification, "data">) =>
@@ -845,6 +896,24 @@ export class ExecutionLoop {
           body: `The worker tried ${MAX_CLOSE_ATTEMPTS} market sells for order ${list} and none sold everything it holds. It has no stop loss. Sell it yourself on Binance Spot Testnet.`,
         }));
       if (previous?.state === assessment.state) return;
+      if (
+        assessment.state === "unprotected" &&
+        assessment.exitReason !== "protection_failed"
+      ) {
+        if (tracked.strategy)
+          await this.#pause(
+            tx,
+            scope,
+            tracked.strategy.strategyId,
+            `Binance refused the sale of entry ${list} after its exits were cancelled.`,
+          );
+        return void (await notify({
+          kind: "protection_failed",
+          severity: "critical",
+          title: `${new Decimal(assessment.held).toFixed()} ${base} has no stop loss`,
+          body: `The worker cancelled the exits of order ${list} to sell it (${(assessment.exitReason ?? "").replace(/_/g, " ")}), and Binance refused the sale. It has no stop loss until it is sold; the worker keeps trying.${tracked.strategy ? " Its strategy is paused until you resume it." : ""}`,
+        }));
+      }
       if (assessment.state === "handed_over")
         return void (await notify({
           kind: "handed_over",
@@ -885,7 +954,7 @@ export class ExecutionLoop {
 }
 
 type Sale =
-  | { kind: "sent"; close: CloseState; note: string }
+  | { kind: "sent"; close: CloseState; rateLimited: boolean; note: string }
   | { kind: "dust" | "gone" | "waiting" | "blocked"; note: string };
 
 /** What a pass reads from Binance once, however many entries need it. */
@@ -983,6 +1052,11 @@ async function absentIfMissing<T>(request: Promise<T>) {
       return undefined;
     throw error;
   }
+}
+
+/** BTC-USDT → BTC */
+function baseAsset(instrument: TestnetInstrument) {
+  return instrument.split("-")[0];
 }
 
 function pair(instrument: TestnetInstrument) {

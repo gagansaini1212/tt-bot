@@ -16,6 +16,7 @@ import {
 import type { JSONValue } from "@crypto-trading/database";
 import type { AccountScope } from "./accounts";
 import {
+  CANCEL_ONLY_REASONS,
   TERMINAL_STATES,
   type EntryState,
   type LegState,
@@ -45,7 +46,9 @@ export type Reconciliation = {
   firstFillAt: Date | null;
   exitReason: string | null;
   closeBlockedAt: Date | null;
-  customerCancelledAt: Date | null;
+  // What the customer accepted leaving without exits, if they cancelled it.
+  customerAccepted: string | null;
+  rateLimitedSells: number;
   detail: string;
 };
 
@@ -87,6 +90,8 @@ export type ReconciliationUpdate = {
   firstFillAt: Date | null;
   exitReason: string | null;
   closeBlocked?: boolean;
+  // Sells Binance refused this pass only because of a rate limit.
+  rateLimitedSells?: number;
   detail: string;
 };
 
@@ -130,6 +135,7 @@ export const pauseStrategyInDatabase: StrategyPauser = async (
 export const OVERDUE_AFTER_MS = 60_000;
 
 const terminal = TERMINAL_STATES as readonly string[];
+const cancelOnly = CANCEL_ONLY_REASONS as readonly string[];
 
 /** The execution loop's records in PostgreSQL, one customer scope at a time. */
 export class ExecutionStore {
@@ -155,7 +161,8 @@ export class ExecutionStore {
           p.take_profit_price, p.strategy_id, p.strategy_version,
           v.rules ->> 'holdingPeriodSeconds' as holding_period_seconds,
           r.state, r.filled_quantity, r.held_quantity, r.first_fill_at,
-          r.exit_reason, r.close_blocked_at, r.customer_cancelled_at, r.detail
+          r.exit_reason, r.close_blocked_at, r.customer_accepted_quantity,
+          r.rate_limited_sells, r.detail
         from order_intents i
         left join trade_proposals p on p.id = i.proposal_id
         left join strategy_versions v
@@ -307,7 +314,11 @@ export class ExecutionStore {
   }
 
   /** Keeps an order's fills. Record the order itself first. */
-  recordFills(scope: AccountScope, order: TestnetOrder, fills: TestnetFill[]) {
+  recordFills(
+    scope: AccountScope,
+    clientOrderId: string,
+    fills: TestnetFill[],
+  ) {
     if (!fills.length) return Promise.resolve();
     return this.#scoped(scope, async (tx) => {
       for (const fill of fills)
@@ -320,7 +331,7 @@ export class ExecutionStore {
             ${fill.price}::numeric, ${fill.commission}::numeric,
             ${fill.commissionAsset}, ${new Date(fill.time)}
           from exchange_orders
-          where client_order_id = ${order.clientOrderId}
+          where client_order_id = ${clientOrderId}
           on conflict (exchange_order_id, exchange_fill_id) do nothing
         `;
     });
@@ -347,7 +358,7 @@ export class ExecutionStore {
       `;
       const [row] = await tx<ReconciliationRow[]>`
         select state, filled_quantity, held_quantity, first_fill_at, exit_reason,
-          close_blocked_at, customer_cancelled_at, detail
+          close_blocked_at, customer_accepted_quantity, rate_limited_sells, detail
         from entry_reconciliations
         where order_intent_id = ${entry.orderIntentId}
         for update
@@ -362,9 +373,12 @@ export class ExecutionStore {
           held_quantity = ${update.held}::numeric,
           first_fill_at = coalesce(first_fill_at, ${update.firstFillAt}),
           exit_requested_at = case
-            when exit_reason is null and ${update.exitReason}::text is not null
+            when (exit_reason is null or exit_reason in ${tx(cancelOnly)}) and ${update.exitReason}::text is not null
               then now() else exit_requested_at end,
-          exit_reason = coalesce(exit_reason, ${update.exitReason}),
+          exit_reason = case
+            when (exit_reason is null or exit_reason in ${tx(cancelOnly)}) then coalesce(${update.exitReason}, exit_reason)
+            else exit_reason end,
+          rate_limited_sells = rate_limited_sells + ${update.rateLimitedSells ?? 0},
           close_blocked_at = case
             when ${update.closeBlocked ?? false} then coalesce(close_blocked_at, now())
             else close_blocked_at end,
@@ -411,8 +425,8 @@ export class ExecutionStore {
         `;
         await tx`
           update entry_reconciliations set
-            exit_reason = coalesce(exit_reason, 'holding_deadline'),
-            exit_requested_at = coalesce(exit_requested_at, now()),
+            exit_requested_at = case when (exit_reason is null or exit_reason in ${tx(cancelOnly)}) then now() else exit_requested_at end,
+            exit_reason = case when (exit_reason is null or exit_reason in ${tx(cancelOnly)}) then 'holding_deadline' else exit_reason end,
             updated_at = now()
           where order_intent_id = ${row.order_intent_id}
         `;
@@ -508,10 +522,9 @@ export class ExecutionStore {
  * Asks the worker to stop a protected entry: cancel whatever is still open
  * on Binance, the entry's unfilled remainder and its exits, and sell whatever
  * it holds at market. The request is saved, so it survives a restart, and
- * the execution loop carries it out on its next pass. Close all, loss limits
- * and pauses call this for each entry they stop. A pause stops only entries
- * that hold nothing yet: the loop then cancels them and sells nothing.
- * Resolves false if the entry is not on this account or already finished.
+ * the execution loop carries it out on its next pass. Close all and loss
+ * limits use this, or `stopStrategyEntries` for a whole strategy. Resolves
+ * false if the entry is not on this account or already finished.
  */
 export function requestEntryExit(
   database: Database,
@@ -519,8 +532,7 @@ export function requestEntryExit(
   orderIntentId: string,
   reason: string,
 ): Promise<boolean> {
-  if (!/^[a-z_]{1,40}$/.test(reason))
-    throw new Error("Exit reasons are lowercase words joined by underscores.");
+  checkReason(reason);
   return withCustomerScope(database, scope.customerId, async (tx) => {
     const [intent] = await tx<{ id: string }[]>`
       select i.id from order_intents i
@@ -528,28 +540,74 @@ export function requestEntryExit(
       where i.id = ${orderIntentId} and i.status = 'acknowledged'
         and coalesce(i.exchange_account_id, p.exchange_account_id) = ${scope.exchangeAccountId}
     `;
-    if (!intent) return false;
-    await tx`
-      insert into entry_reconciliations (customer_id, order_intent_id, state)
-      values (${scope.customerId}, ${orderIntentId}, 'exiting')
-      on conflict (order_intent_id) do nothing
-    `;
-    const [requested] = await tx<{ id: string }[]>`
-      update entry_reconciliations set
-        exit_reason = coalesce(exit_reason, ${reason}),
-        exit_requested_at = coalesce(exit_requested_at, now()),
-        updated_at = now()
-      where order_intent_id = ${orderIntentId}
-        and state not in ${tx(terminal)}
-      returning id
-    `;
-    if (requested)
-      await audit(tx, scope, orderIntentId, "entry.exit_requested", {
-        actor: "execution_worker",
-        payload: { reason },
-      });
-    return Boolean(requested);
+    return intent ? requestExit(tx, scope, intent.id, reason) : false;
   });
+}
+
+/**
+ * Stops every protected entry a strategy has on the account, as
+ * `requestEntryExit` does. With reason `pause`, an entry that has filled
+ * completely keeps its exits and holding deadline: only entries still on
+ * the book are cancelled, and what a partly filled one bought is sold,
+ * because Binance cannot protect it. Resolves the IDs of the order intents
+ * it stopped.
+ */
+export function stopStrategyEntries(
+  database: Database,
+  scope: AccountScope,
+  strategyId: string,
+  reason: string,
+): Promise<string[]> {
+  checkReason(reason);
+  return withCustomerScope(database, scope.customerId, async (tx) => {
+    const entries = await tx<{ id: string }[]>`
+      select i.id from order_intents i
+      join trade_proposals p on p.id = i.proposal_id
+      left join entry_reconciliations r on r.order_intent_id = i.id
+      where p.strategy_id = ${strategyId} and i.status = 'acknowledged'
+        and p.exchange_account_id = ${scope.exchangeAccountId}
+        and (r.state is null or r.state not in ${tx(terminal)})
+      order by i.created_at, i.id
+    `;
+    const stopped: string[] = [];
+    for (const { id } of entries)
+      if (await requestExit(tx, scope, id, reason)) stopped.push(id);
+    return stopped;
+  });
+}
+
+function checkReason(reason: string) {
+  if (!/^[a-z_]{1,40}$/.test(reason))
+    throw new Error("Exit reasons are lowercase words joined by underscores.");
+}
+
+async function requestExit(
+  tx: Transaction,
+  scope: AccountScope,
+  orderIntentId: string,
+  reason: string,
+) {
+  await tx`
+    insert into entry_reconciliations (customer_id, order_intent_id, state)
+    values (${scope.customerId}, ${orderIntentId}, 'working')
+    on conflict (order_intent_id) do nothing
+  `;
+  // A stronger request replaces a pause; nothing replaces another reason.
+  const [requested] = await tx<{ id: string }[]>`
+    update entry_reconciliations set
+      exit_reason = case when (exit_reason is null or exit_reason in ${tx(cancelOnly)}) then ${reason} else exit_reason end,
+      exit_requested_at = case when (exit_reason is null or exit_reason in ${tx(cancelOnly)}) then now() else exit_requested_at end,
+      updated_at = now()
+    where order_intent_id = ${orderIntentId}
+      and state not in ${tx(terminal)}
+    returning id
+  `;
+  if (requested)
+    await audit(tx, scope, orderIntentId, "entry.exit_requested", {
+      actor: "execution_worker",
+      payload: { reason },
+    });
+  return Boolean(requested);
 }
 
 async function startHoldingDeadline(
@@ -636,7 +694,8 @@ type ReconciliationRow = {
   first_fill_at: Date | null;
   exit_reason: string | null;
   close_blocked_at: Date | null;
-  customer_cancelled_at: Date | null;
+  customer_accepted_quantity: string | null;
+  rate_limited_sells: number;
   detail: string;
 };
 
@@ -662,7 +721,11 @@ function toReconciliation(row: ReconciliationRow): Reconciliation {
     firstFillAt: row.first_fill_at,
     exitReason: row.exit_reason,
     closeBlockedAt: row.close_blocked_at,
-    customerCancelledAt: row.customer_cancelled_at,
+    customerAccepted:
+      row.customer_accepted_quantity === null
+        ? null
+        : amount(row.customer_accepted_quantity),
+    rateLimitedSells: row.rate_limited_sells,
     detail: row.detail,
   };
 }

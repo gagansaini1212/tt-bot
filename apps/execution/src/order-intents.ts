@@ -132,17 +132,22 @@ export interface OrderIntentStore {
     scope: AccountScope,
     clientOrderId: string,
   ): Promise<OrderIntent | undefined>;
+  /**
+   * Returns a claimed stop-limit entry to pending, when the worker could not
+   * check it and sent nothing, so a later pass tries again.
+   */
+  releaseTrigger(scope: AccountScope, clientOrderId: string): Promise<void>;
   /** Cancels a pending stop-limit entry. False if it is no longer pending. */
   cancelTrigger(scope: AccountScope, clientOrderId: string): Promise<boolean>;
   /**
-   * Notes, just before the customer cancels a partly filled entry from the
-   * dashboard, that they accepted leaving its quantity without exits. False
-   * clears the note if Binance refused the cancel.
+   * Notes, just before the customer cancels an entry's order list from the
+   * dashboard, that they accepted leaving `accepted` of what it bought
+   * without exits. Null clears the note if Binance refused the cancel.
    */
   noteCustomerCancel(
     scope: AccountScope,
     listClientOrderId: string,
-    accepted: boolean,
+    accepted: string | null,
   ): Promise<void>;
   /** Records Binance's answer. An intent never goes back to unknown. */
   settle(
@@ -298,6 +303,27 @@ export class PostgresOrderIntents implements OrderIntentStore {
     });
   }
 
+  releaseTrigger(scope: AccountScope, clientOrderId: string) {
+    return this.#scoped(scope, async (tx) => {
+      const [row] = await tx<{ id: string }[]>`
+        update order_intents set status = 'pending', updated_at = now()
+        where idempotency_key = ${clientOrderId} and status = 'submitting'
+          and manual_order ? 'trigger'
+        returning id
+      `;
+      if (!row) return;
+      await tx`
+        update outbox_jobs set completed_at = now()
+        where deduplication_key = ${`${RECONCILE_TOPIC}:${row.id}`}
+          and completed_at is null
+      `;
+      await audit(tx, scope, row.id, "order_intent.released", {
+        actor: "execution_worker",
+        payload: {},
+      });
+    });
+  }
+
   cancelTrigger(scope: AccountScope, clientOrderId: string) {
     return this.#scoped(scope, async (tx) => {
       const [row] = await tx<{ id: string }[]>`
@@ -317,15 +343,21 @@ export class PostgresOrderIntents implements OrderIntentStore {
   noteCustomerCancel(
     scope: AccountScope,
     listClientOrderId: string,
-    accepted: boolean,
+    accepted: string | null,
   ) {
     return this.#scoped(scope, async (tx) => {
       await tx`
-        insert into entry_reconciliations (customer_id, order_intent_id, state, customer_cancelled_at)
-        select ${scope.customerId}, id, 'partly_filled', ${accepted ? tx`now()` : null}
+        insert into entry_reconciliations (
+          customer_id, order_intent_id, state, customer_cancelled_at,
+          customer_accepted_quantity
+        )
+        select ${scope.customerId}, id, 'partly_filled',
+          ${accepted === null ? null : tx`now()`}, ${accepted}::numeric
         from order_intents where idempotency_key = ${listClientOrderId}
         on conflict (order_intent_id) do update set
-          customer_cancelled_at = excluded.customer_cancelled_at, updated_at = now()
+          customer_cancelled_at = excluded.customer_cancelled_at,
+          customer_accepted_quantity = excluded.customer_accepted_quantity,
+          updated_at = now()
       `;
     });
   }
@@ -373,7 +405,12 @@ export class PostgresOrderIntents implements OrderIntentStore {
    * Settles an intent Binance has no record of, once the grace period is
    * over. Only reconciliation may decide this.
    */
-  resolveMissing(scope: AccountScope, clientOrderId: string) {
+  resolveMissing(
+    scope: AccountScope,
+    clientOrderId: string,
+    // Runs in the same transaction, such as to raise a notification.
+    effects?: (tx: Transaction) => Promise<unknown>,
+  ) {
     return this.#scoped(scope, async (tx) => {
       const [changed] = await tx<{ id: string }[]>`
         update order_intents set status = 'rejected', updated_at = now()
@@ -393,6 +430,7 @@ export class PostgresOrderIntents implements OrderIntentStore {
             "Binance has no order with this client ID after the grace period, so it was never placed.",
         },
       });
+      await effects?.(tx);
       return true;
     });
   }
