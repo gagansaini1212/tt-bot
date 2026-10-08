@@ -22,7 +22,7 @@ import { getTestnetAccount } from "@/lib/testnet-account";
 export const metadata: Metadata = { title: "Activity · Northstar Trading" };
 export const dynamic = "force-dynamic";
 
-export default async function DecisionsPage() {
+export default async function ActivityPage() {
   const account = await getTestnetAccount();
   return (
     <>

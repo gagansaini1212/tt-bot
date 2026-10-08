@@ -1,45 +1,56 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  Activity,
   ChartCandlestick,
-  Database,
+  History,
   LayoutDashboard,
+  Menu,
   Settings2,
   WalletCards,
+  Workflow,
 } from "lucide-react";
 
-import { buttonVariants } from "@/components/ui/button";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 
+// The Activity icon is reserved for live performance metrics.
 const navigation = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
   { href: "/accounts", label: "Accounts", icon: WalletCards },
-  { href: "/strategies", label: "Strategies", icon: Activity },
-  { href: "/decisions", label: "Activity", icon: Database },
+  { href: "/strategies", label: "Strategies", icon: Workflow },
+  { href: "/activity", label: "Activity", icon: History },
 ];
+
+const settings = { href: "/settings", label: "Settings", icon: Settings2 };
 
 function NavigationLink({
   href,
   label,
   icon: Icon,
   active,
-  compact = false,
-}: (typeof navigation)[number] & { active: boolean; compact?: boolean }) {
+  onClick,
+}: (typeof navigation)[number] & { active: boolean; onClick?: () => void }) {
   return (
     <Link
       aria-current={active ? "page" : undefined}
       className={cn(
         buttonVariants({ variant: active ? "secondary" : "ghost" }),
-        compact
-          ? "h-auto min-w-0 flex-col gap-1 px-1 py-2 text-[11px]"
-          : "w-full justify-start",
+        "w-full justify-start",
       )}
       href={href}
+      onClick={onClick}
     >
       <Icon className="size-4" />
       {label}
@@ -49,7 +60,8 @@ function NavigationLink({
 
 export function DashboardShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const settingsActive = pathname === "/settings";
+  const [menuOpen, setMenuOpen] = useState(false);
+  const closeMenu = () => setMenuOpen(false);
 
   return (
     <div className="min-h-screen bg-background">
@@ -81,19 +93,8 @@ export function DashboardShell({ children }: { children: ReactNode }) {
 
           <div className="mt-auto space-y-4">
             <Separator />
-            <Link
-              aria-current={settingsActive ? "page" : undefined}
-              className={cn(
-                buttonVariants({
-                  variant: settingsActive ? "secondary" : "ghost",
-                }),
-                "w-full justify-start",
-              )}
-              href="/settings"
-            >
-              <Settings2 className="size-4" />
-              Settings
-            </Link>
+            <NavigationLink active={pathname === settings.href} {...settings} />
+            <ThemeToggle />
             <div className="rounded-lg border border-border bg-background/40 p-3">
               <div className="flex items-center gap-2 text-xs font-medium">
                 <span className="size-2 rounded-full bg-amber-400" />
@@ -107,32 +108,50 @@ export function DashboardShell({ children }: { children: ReactNode }) {
         </aside>
 
         <div className="min-w-0">
-          <nav
-            className="grid grid-cols-5 gap-1 border-b border-border/70 bg-card/35 p-2 md:hidden"
-            aria-label="Main navigation"
-          >
-            {navigation.map((item) => (
-              <NavigationLink
-                active={pathname === item.href}
-                compact
-                key={item.href}
-                {...item}
-              />
-            ))}
+          <header className="flex items-center justify-between gap-3 border-b border-border/70 bg-card/35 px-4 py-2 md:hidden">
             <Link
-              aria-current={settingsActive ? "page" : undefined}
-              className={cn(
-                buttonVariants({
-                  variant: settingsActive ? "secondary" : "ghost",
-                }),
-                "h-auto min-w-0 flex-col gap-1 px-1 py-2 text-[11px]",
-              )}
-              href="/settings"
+              aria-label="Overview"
+              className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground"
+              href="/"
             >
-              <Settings2 className="size-4" />
-              Settings
+              <ChartCandlestick className="size-5" />
             </Link>
-          </nav>
+            <Sheet onOpenChange={setMenuOpen} open={menuOpen}>
+              <SheetTrigger asChild>
+                <Button size="lg" variant="outline">
+                  <Menu />
+                  Menu
+                </Button>
+              </SheetTrigger>
+              <SheetContent aria-describedby={undefined} side="left">
+                <SheetHeader>
+                  <SheetTitle>Menu</SheetTitle>
+                </SheetHeader>
+                <nav
+                  className="space-y-1 px-4 text-sm"
+                  aria-label="Main navigation"
+                >
+                  {navigation.map((item) => (
+                    <NavigationLink
+                      active={pathname === item.href}
+                      key={item.href}
+                      onClick={closeMenu}
+                      {...item}
+                    />
+                  ))}
+                </nav>
+                <div className="mt-auto space-y-4 p-4">
+                  <Separator />
+                  <NavigationLink
+                    active={pathname === settings.href}
+                    onClick={closeMenu}
+                    {...settings}
+                  />
+                  <ThemeToggle />
+                </div>
+              </SheetContent>
+            </Sheet>
+          </header>
           <main className="min-w-0 px-4 py-5 sm:px-6 lg:px-8">{children}</main>
         </div>
       </div>
