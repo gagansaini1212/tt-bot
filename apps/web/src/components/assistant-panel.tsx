@@ -2,6 +2,7 @@
 
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type FormEvent,
@@ -55,15 +56,30 @@ export function AssistantPanel({
   const transcriptRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const followLatest = useRef(true);
+  const restoreInputFocus = useRef(false);
 
   // Keep the newest message in view while the reader is following along,
   // but leave the scroll position alone once they scroll up to read history.
-  useEffect(() => {
+  // Scroll before paint so streamed text never shows below the fold first.
+  useLayoutEffect(() => {
     const transcript = transcriptRef.current;
     if (transcript && followLatest.current) {
       transcript.scrollTop = transcript.scrollHeight;
     }
   }, [messages, agent.error]);
+
+  // The input is disabled during a turn, which drops its focus. Give focus
+  // back when the turn ends unless the reader has moved it elsewhere.
+  useEffect(() => {
+    if (busy || !restoreInputFocus.current) return;
+    restoreInputFocus.current = false;
+    if (
+      document.activeElement === null ||
+      document.activeElement === document.body
+    ) {
+      inputRef.current?.focus();
+    }
+  }, [busy]);
 
   function handleTranscriptScroll(event: UIEvent<HTMLDivElement>) {
     const { clientHeight, scrollHeight, scrollTop } = event.currentTarget;
@@ -97,6 +113,7 @@ export function AssistantPanel({
     if (!message || busy) return;
 
     followLatest.current = true;
+    restoreInputFocus.current = true;
     setDraft("");
     await agent.send(message, {
       clientContext: {
