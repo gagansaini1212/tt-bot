@@ -43,7 +43,9 @@ type Behaviour =
   | "fok_expire"
   | "reject"
   | "timeout_placed"
-  | "timeout_not_placed";
+  | "timeout_not_placed"
+  | "lookup_refused"
+  | "rate_limited";
 
 /** An in-memory exchange that models OPOCO lists the way Binance documents them. */
 function fakeExchange(behaviour: Behaviour = "rest") {
@@ -73,7 +75,11 @@ function fakeExchange(behaviour: Behaviour = "rest") {
       const list = lists.find(
         (entry) => entry.listClientOrderId === listClientOrderId,
       );
-      if (!list) throw new BinanceTestnetError("rejected", -2011);
+      if (!list)
+        throw new BinanceTestnetError(
+          "rejected",
+          behaviour === "lookup_refused" ? -1022 : -2013,
+        );
       return list;
     },
     getSymbolRules: async () => [rules("BTC-USDT"), rules("ETH-USDT")],
@@ -94,8 +100,10 @@ function fakeExchange(behaviour: Behaviour = "rest") {
           undefined,
           "Account has insufficient balance for requested action.",
         );
-      if (behaviour === "timeout_not_placed")
+      if (behaviour === "timeout_not_placed" || behaviour === "lookup_refused")
         throw new BinanceTestnetError("unknown_outcome");
+      if (behaviour === "rate_limited")
+        throw new BinanceTestnetError("rate_limited", -1015, 30);
       const orderListId = nextId++;
       const ids = protectedLegIds(entry.listClientOrderId);
       const filled = ["fill", "fill_without_exits"].includes(behaviour);
@@ -346,6 +354,32 @@ test("an unknown outcome is looked up by client ID and never resubmitted", async
   } finally {
     await placed.cleanup();
     await lost.cleanup();
+  }
+});
+
+test("only Binance's does-not-exist answer proves an order was not placed", async () => {
+  const f = await desk("lookup_refused");
+  try {
+    // A signature or clock rejection says nothing about the order.
+    assert.equal((await f.desk.place(limit("ct_refused"))).status, "unknown");
+    const status = await f.desk.status("ct_refused");
+    assert.equal(status.status, "unknown");
+    assert.doesNotMatch(status.message, /not placed/);
+  } finally {
+    await f.cleanup();
+  }
+});
+
+test("a rate-limited submission is reported as not placed and burns its ID", async () => {
+  const f = await desk("rate_limited");
+  try {
+    const outcome = await f.desk.place(limit("ct_limited"));
+    assert.equal(outcome.status, "rejected");
+    assert.match(outcome.message, /Try again in 30 seconds/);
+    assert.equal((await f.journal("ct_limited")).status, "rejected");
+    assert.equal((await f.desk.place(limit("ct_limited"))).status, "duplicate");
+  } finally {
+    await f.cleanup();
   }
 });
 

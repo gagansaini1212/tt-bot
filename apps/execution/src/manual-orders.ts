@@ -99,6 +99,8 @@ export function loadManualTradingConfig(
   };
 }
 
+// Binance's code for an order or order list that does not exist.
+const NO_SUCH_ORDER = -2013;
 const journalEntrySchema = z.object({ entry: z.object({ price: z.string() }) });
 const RULES_TTL_MS = 5 * 60_000;
 
@@ -253,7 +255,11 @@ export class ManualOrderDesk {
       try {
         list = await this.#exchange.placeProtectedEntry(entry);
       } catch (error) {
-        if (error instanceof BinanceTestnetError && error.kind === "rejected") {
+        // Binance refused the request outright, so nothing was placed.
+        if (
+          error instanceof BinanceTestnetError &&
+          (error.kind === "rejected" || error.kind === "rate_limited")
+        ) {
           await this.#journal
             .update(id, { ...intent, status: "rejected" })
             .catch(() => {});
@@ -329,7 +335,13 @@ export class ManualOrderDesk {
     try {
       return await this.#exchange.getOrderList(listClientOrderId);
     } catch (error) {
-      if (error instanceof BinanceTestnetError && error.kind === "rejected")
+      // Only "does not exist" proves Binance has no such list. Any other
+      // rejection, such as a signature or clock error, leaves it unknown.
+      if (
+        error instanceof BinanceTestnetError &&
+        error.kind === "rejected" &&
+        error.code === NO_SUCH_ORDER
+      )
         return undefined;
       throw error;
     }
