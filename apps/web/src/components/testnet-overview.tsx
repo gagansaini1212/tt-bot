@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/card";
 import { WelcomeCard } from "@/components/welcome-card";
 import type { PortfolioState } from "@/lib/account-portfolio";
+import { contentId } from "@/lib/content-id";
 import type { ExecutionView } from "@/lib/execution";
 import type { TestnetAccountState } from "@/lib/testnet-account";
 
@@ -119,7 +120,7 @@ function AccountContent({
   const available = (asset: string) =>
     snapshot.balances.find((balance) => balance.asset === asset)?.free ?? "0";
   const fills = snapshot.fills.slice(0, 10);
-  const accountSnapshot = {
+  const snapshotContent = {
     capturedAt: snapshot.capturedAt,
     dataKind: "Binance Spot Testnet, virtual funds",
     account: {
@@ -137,6 +138,11 @@ function AccountContent({
     recentFills: fills,
     strategyManagement:
       "Manual development trades. The execution worker watches each order's exits and sells any bought quantity left without a stop loss. Strategy ownership and profit/loss are not tracked for these holdings.",
+  };
+  // AI decisions name the snapshot they were based on by this ID.
+  const accountSnapshot = {
+    snapshotId: contentId(snapshotContent),
+    ...snapshotContent,
   };
 
   return (
@@ -188,7 +194,7 @@ function AccountContent({
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="scroll-mt-20" id="open-orders">
             <CardHeader>
               <CardTitle>Open orders</CardTitle>
               <CardDescription>

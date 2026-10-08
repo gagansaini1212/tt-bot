@@ -1,14 +1,28 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   Ban,
   CircleCheck,
+  CircleSlash,
   LoaderCircle,
   ReceiptText,
   TriangleAlert,
   Wrench,
 } from "lucide-react";
+import type { ProposalView } from "@crypto-trading/exchanges/ai-decisions";
 import type { EveDynamicToolPart } from "eve/react";
 
+import { loadProposal } from "@/app/proposal-actions";
+import { ProposalActions } from "@/components/proposal-actions";
+import { ProposalFigures } from "@/components/proposal-figures";
 import { Badge } from "@/components/ui/badge";
+import {
+  PROPOSAL_STATUS_LABELS,
+  proposalOutcome,
+  proposalStatusVariant,
+} from "@/lib/proposal-display";
 import { cn } from "@/lib/utils";
 
 type ToolState = EveDynamicToolPart["state"];
@@ -33,6 +47,12 @@ export function AssistantToolPart({ part }: { part: EveDynamicToolPart }) {
     if (proposal || part.state !== "output-available") {
       return <TradeProposalPart part={part} proposal={proposal} />;
     }
+  }
+  if (part.toolName === "record_no_trade_decision") {
+    const decision = readNoTradeDecision(
+      part.state === "output-available" ? part.output : part.input,
+    );
+    if (decision) return <NoTradePart decision={decision} part={part} />;
   }
 
   return <GenericToolPart part={part} />;
@@ -96,9 +116,10 @@ type ProposalDraft = {
   entryExpiresAt: string;
   stopLossPrice: string;
   takeProfitPrice: string;
-  leverage?: number;
-  strategyVersion: number;
   rationale: string;
+  // Set once the worker saved it for the customer to approve.
+  proposalId?: string;
+  saved?: boolean;
   notice?: string;
 };
 
@@ -117,16 +138,13 @@ const proposalStringFields = [
 function readProposalDraft(value: unknown): ProposalDraft | null {
   if (typeof value !== "object" || value === null) return null;
   const record = value as Record<string, unknown>;
-  if (
-    proposalStringFields.some((field) => typeof record[field] !== "string") ||
-    typeof record.strategyVersion !== "number"
-  ) {
+  if (proposalStringFields.some((field) => typeof record[field] !== "string"))
     return null;
-  }
-
   return {
-    ...(record as Omit<ProposalDraft, "leverage" | "notice">),
-    leverage: typeof record.leverage === "number" ? record.leverage : undefined,
+    ...(record as Omit<ProposalDraft, "proposalId" | "saved" | "notice">),
+    proposalId:
+      typeof record.proposalId === "string" ? record.proposalId : undefined,
+    saved: record.status === "draft" && typeof record.proposalId === "string",
     notice: typeof record.notice === "string" ? record.notice : undefined,
   };
 }
@@ -141,11 +159,25 @@ function TradeProposalPart({
   const pending = isPending(part);
   const failed = part.state === "output-error";
   const denied = part.state === "output-denied";
-  const [base, quote] = proposal?.instrument.split("-") ?? [];
+  const done = part.state === "output-available" && !pending;
+  const proposalId = done && proposal?.saved ? proposal.proposalId : undefined;
+  // The proposal as the worker now has it: another tab may have decided it.
+  const [view, setView] = useState<ProposalView | null>(null);
+  useEffect(() => {
+    if (!proposalId) return;
+    let current = true;
+    void loadProposal(proposalId).then((loaded) => {
+      if (current && loaded) setView(loaded);
+    });
+    return () => {
+      current = false;
+    };
+  }, [proposalId]);
+  const status = view?.status ?? "draft";
 
   return (
     <section
-      aria-label="Trade proposal draft"
+      aria-label="Trade proposal"
       className={cn(
         "my-2 rounded-lg border bg-card/60 text-xs text-card-foreground",
         failed ? "border-destructive/40" : "border-primary/30",
@@ -174,6 +206,12 @@ function TradeProposalPart({
             <Badge variant="destructive">Not drafted</Badge>
           ) : denied ? (
             <Badge variant="outline">Declined</Badge>
+          ) : proposalId ? (
+            <Badge variant={proposalStatusVariant(status)}>
+              {PROPOSAL_STATUS_LABELS[status]}
+            </Badge>
+          ) : done ? (
+            <Badge variant="outline">Not saved</Badge>
           ) : (
             <Badge variant="outline">Draft</Badge>
           )}
@@ -181,43 +219,15 @@ function TradeProposalPart({
       </header>
 
       {proposal ? (
-        <dl className="grid grid-cols-2 gap-x-3 gap-y-2 px-3 py-2.5">
-          <ProposalField
-            label="Quantity"
-            value={withUnit(proposal.quantity, base)}
-          />
-          <ProposalField
-            label="Entry price"
-            value={withUnit(proposal.entryPrice, quote)}
-          />
-          <ProposalField
-            label="Stop loss"
-            value={withUnit(proposal.stopLossPrice, quote)}
-          />
-          <ProposalField
-            label="Take profit"
-            value={withUnit(proposal.takeProfitPrice, quote)}
-          />
-          <ProposalField
-            label="Leverage"
-            value={`${proposal.leverage ?? 1}×`}
-          />
-          <ProposalField
-            label="Strategy version"
-            value={`v${proposal.strategyVersion}`}
-          />
-          <ProposalField
-            className="col-span-2"
-            label="Entry expires"
-            value={formatUtc(proposal.entryExpiresAt)}
-          />
-          <div className="col-span-2">
-            <dt className="text-muted-foreground">Rationale</dt>
-            <dd className="mt-0.5 leading-5 text-foreground">
+        <div className="space-y-2 px-3 py-2.5">
+          <ProposalFigures proposal={proposal} />
+          <div>
+            <p className="text-muted-foreground">Rationale</p>
+            <p className="mt-0.5 leading-5 text-foreground">
               {proposal.rationale}
-            </dd>
+            </p>
           </div>
-        </dl>
+        </div>
       ) : null}
 
       {failed ? (
@@ -228,7 +238,29 @@ function TradeProposalPart({
           The proposal was not drafted.
         </p>
       ) : null}
-      {part.state === "output-available" && !pending && proposal?.notice ? (
+      {proposalId ? (
+        <div className="space-y-2 border-t border-border px-3 py-2.5">
+          {view && status !== "draft" ? (
+            <p className="text-muted-foreground">{proposalOutcome(view)}</p>
+          ) : (
+            <p className="text-muted-foreground">
+              The execution worker checks it again with your current account and
+              limits before anything is sent.
+            </p>
+          )}
+          <ProposalActions
+            onUpdate={setView}
+            proposalId={proposalId}
+            status={status}
+          />
+          <Link
+            className="inline-block text-primary underline-offset-4 hover:underline"
+            href="/activity"
+          >
+            View on Activity
+          </Link>
+        </div>
+      ) : done && proposal?.notice ? (
         <p className="border-t border-border px-3 py-2 text-muted-foreground">
           {proposal.notice}
         </p>
@@ -237,35 +269,72 @@ function TradeProposalPart({
   );
 }
 
-function ProposalField({
-  className,
-  label,
-  value,
+type NoTradeDecision = {
+  instrument?: string;
+  rationale: string;
+  recorded?: boolean;
+  notice?: string;
+};
+
+function readNoTradeDecision(value: unknown): NoTradeDecision | null {
+  if (typeof value !== "object" || value === null) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.rationale !== "string") return null;
+  return {
+    instrument:
+      typeof record.instrument === "string" ? record.instrument : undefined,
+    rationale: record.rationale,
+    recorded: record.recorded === true,
+    notice: typeof record.notice === "string" ? record.notice : undefined,
+  };
+}
+
+function NoTradePart({
+  part,
+  decision,
 }: {
-  className?: string;
-  label: string;
-  value: string;
+  part: EveDynamicToolPart;
+  decision: NoTradeDecision;
 }) {
+  const done = part.state === "output-available" && !isPending(part);
   return (
-    <div className={cn("min-w-0", className)}>
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="mt-0.5 font-mono [overflow-wrap:anywhere] text-foreground">
-        {value}
-      </dd>
-    </div>
+    <section
+      aria-label="No-trade decision"
+      className="my-2 rounded-lg border border-border bg-card/60 text-xs text-card-foreground"
+    >
+      <header className="flex items-center gap-2 border-b border-border px-3 py-2">
+        <CircleSlash className="size-4 shrink-0 text-muted-foreground" />
+        <p className="font-medium text-foreground">
+          No trade
+          {decision.instrument ? (
+            <span className="font-normal text-muted-foreground">
+              {" "}
+              · {decision.instrument.replace("-", "/")}
+            </span>
+          ) : null}
+        </p>
+        <span className="ml-auto">
+          {done ? (
+            <Badge variant="outline">
+              {decision.recorded ? "Recorded" : "Not recorded"}
+            </Badge>
+          ) : (
+            <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" />
+          )}
+        </span>
+      </header>
+      <p className="px-3 py-2.5 leading-5 text-foreground">
+        {decision.rationale}
+      </p>
+      {done && decision.notice ? (
+        <p className="border-t border-border px-3 py-2 text-muted-foreground">
+          {decision.notice}
+        </p>
+      ) : null}
+    </section>
   );
 }
 
 function capitalize(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function withUnit(amount: string, unit: string | undefined) {
-  return unit ? `${amount} ${unit}` : amount;
-}
-
-function formatUtc(timestamp: string) {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return timestamp;
-  return `${date.toISOString().slice(0, 16).replace("T", " ")} UTC`;
 }
