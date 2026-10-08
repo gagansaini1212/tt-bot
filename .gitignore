@@ -10,4 +10,5 @@ coverage/
 .DS_Store
 pnpm-debug.log*
 .testnet-orders/
+.market-history/
 apps/execution/.keys/

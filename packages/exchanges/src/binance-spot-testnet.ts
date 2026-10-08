@@ -180,7 +180,7 @@ export const depthSchema = z.object({
 });
 export type TestnetDepth = z.infer<typeof depthSchema>;
 // Binance sends klines and depth levels as positional arrays.
-const binanceKlineSchema = z
+export const binanceKlineSchema = z
   .tuple(
     [id, decimal, decimal, decimal, decimal, decimal, id, decimal, id],
     z.unknown(),
@@ -758,7 +758,7 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
   }
 }
 
-const exchangeInfoSchema = z.object({
+export const exchangeInfoSchema = z.object({
   symbols: z.array(
     z.object({
       symbol: z.string(),
@@ -772,7 +772,7 @@ const exchangeInfoSchema = z.object({
   ),
 });
 
-function symbolRules(
+export function symbolRules(
   instrument: TestnetInstrument,
   info: z.infer<typeof exchangeInfoSchema>["symbols"][number],
 ): SymbolRules {
