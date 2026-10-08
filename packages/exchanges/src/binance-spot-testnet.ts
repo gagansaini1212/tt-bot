@@ -63,6 +63,110 @@ export const testnetSnapshotSchema = z.object({
 });
 export type TestnetSnapshot = z.infer<typeof testnetSnapshotSchema>;
 
+// Public market data. Prices and quantities stay decimal strings.
+const signedDecimal = z.string().regex(/^-?\d+(\.\d+)?$/);
+// Binance lists some symbols in non-Latin scripts. This still rejects
+// lowercase, separators and anything that needs escaping.
+export const tickerSymbolSchema = z
+  .string()
+  .regex(/^[\p{Lu}\p{Lo}\p{Nd}]{2,20}$/u);
+export const MAX_TICKER_SYMBOLS = 100;
+export const klineIntervalSchema = z.enum([
+  "1m",
+  "3m",
+  "5m",
+  "15m",
+  "30m",
+  "1h",
+  "2h",
+  "4h",
+  "6h",
+  "8h",
+  "12h",
+  "1d",
+  "3d",
+  "1w",
+  "1M",
+]);
+export type KlineInterval = z.infer<typeof klineIntervalSchema>;
+export const MAX_KLINE_LIMIT = 1000;
+// Depth limits up to 100 cost Binance's lowest request weight.
+export const MAX_DEPTH_LIMIT = 100;
+export const tickerSchema = z.object({
+  symbol: z.string(),
+  lastPrice: decimal,
+  openPrice: decimal,
+  highPrice: decimal,
+  lowPrice: decimal,
+  priceChange: signedDecimal,
+  priceChangePercent: signedDecimal,
+  // Base-asset volume; quoteVolume is in the quote asset, e.g. USDT.
+  volume: decimal,
+  quoteVolume: decimal,
+  openTime: id,
+  closeTime: id,
+});
+export type TestnetTicker = z.infer<typeof tickerSchema>;
+export const klineSchema = z.object({
+  openTime: id,
+  open: decimal,
+  high: decimal,
+  low: decimal,
+  close: decimal,
+  volume: decimal,
+  closeTime: id,
+  quoteVolume: decimal,
+  trades: id,
+});
+export type TestnetKline = z.infer<typeof klineSchema>;
+const depthLevelSchema = z.object({ price: decimal, quantity: decimal });
+export const depthSchema = z.object({
+  lastUpdateId: id,
+  // Best price first on both sides.
+  bids: z.array(depthLevelSchema),
+  asks: z.array(depthLevelSchema),
+});
+export type TestnetDepth = z.infer<typeof depthSchema>;
+// Binance sends klines and depth levels as positional arrays.
+const binanceKlineSchema = z
+  .tuple(
+    [id, decimal, decimal, decimal, decimal, decimal, id, decimal, id],
+    z.unknown(),
+  )
+  .transform(
+    ([
+      openTime,
+      open,
+      high,
+      low,
+      close,
+      volume,
+      closeTime,
+      quoteVolume,
+      trades,
+    ]) => ({
+      openTime,
+      open,
+      high,
+      low,
+      close,
+      volume,
+      closeTime,
+      quoteVolume,
+      trades,
+    }),
+  );
+const binanceLevelsSchema = z
+  .array(z.tuple([decimal, decimal]))
+  .transform((levels) =>
+    levels.map(([price, quantity]) => ({ price, quantity })),
+  );
+const binanceDepthSchema = z.object({
+  lastUpdateId: id,
+  bids: binanceLevelsSchema,
+  asks: binanceLevelsSchema,
+});
+
 export interface SpotTestnetExchange {
   getAccount(): Promise<z.infer<typeof accountSchema>>;
   getOpenOrders(instrument: TestnetInstrument): Promise<TestnetOrder[]>;
@@ -77,6 +181,16 @@ export interface SpotTestnetExchange {
     instrument: TestnetInstrument,
     clientOrderId: string,
   ): Promise<TestnetOrder>;
+  getTickers(symbols?: readonly string[]): Promise<TestnetTicker[]>;
+  getKlines(
+    instrument: TestnetInstrument,
+    interval: KlineInterval,
+    limit?: number,
+  ): Promise<TestnetKline[]>;
+  getDepth(
+    instrument: TestnetInstrument,
+    limit?: number,
+  ): Promise<TestnetDepth>;
 }
 
 export class BinanceTestnetError extends Error {
@@ -320,6 +434,49 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
       orderSchema,
     );
   }
+  /** 24h statistics for every symbol, or for up to 100 listed symbols. */
+  getTickers(symbols?: readonly string[]) {
+    const listed =
+      symbols &&
+      z.array(tickerSymbolSchema).min(1).max(MAX_TICKER_SYMBOLS).parse(symbols);
+    return this.#request(
+      "GET",
+      "/api/v3/ticker/24hr",
+      listed ? { symbols: JSON.stringify(listed) } : {},
+      z.array(tickerSchema),
+      false,
+    );
+  }
+  /** The most recent candles, oldest first. */
+  getKlines(
+    instrument: TestnetInstrument,
+    interval: KlineInterval,
+    limit = 500,
+  ) {
+    return this.#request(
+      "GET",
+      "/api/v3/klines",
+      {
+        symbol: symbol(instrument),
+        interval: klineIntervalSchema.parse(interval),
+        limit: String(boundedLimit(MAX_KLINE_LIMIT).parse(limit)),
+      },
+      z.array(binanceKlineSchema),
+      false,
+    );
+  }
+  getDepth(instrument: TestnetInstrument, limit = MAX_DEPTH_LIMIT) {
+    return this.#request(
+      "GET",
+      "/api/v3/depth",
+      {
+        symbol: symbol(instrument),
+        limit: String(boundedLimit(MAX_DEPTH_LIMIT).parse(limit)),
+      },
+      binanceDepthSchema,
+      false,
+    );
+  }
   async getSnapshot(): Promise<TestnetSnapshot> {
     const [account, btcOrders, ethOrders, btcFills, ethFills] =
       await Promise.all([
@@ -344,6 +501,9 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
 
 function symbol(instrument: TestnetInstrument) {
   return testnetInstrumentSchema.parse(instrument).replace("-", "");
+}
+function boundedLimit(max: number) {
+  return z.number().int().min(1).max(max);
 }
 function orderIdentifier(instrument: TestnetInstrument, clientOrderId: string) {
   z.string()

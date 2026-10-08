@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   BinanceSpotTestnet,
   BinanceTestnetError,
+  type KlineInterval,
   type TestnetLimitOrder,
 } from "./binance-spot-testnet.js";
 
@@ -322,4 +323,141 @@ test("snapshot combines both supported instruments, shares clock sync and retain
     requests.filter(({ url }) => url.pathname === "/api/v3/time").length,
     1,
   );
+});
+
+const ticker = {
+  symbol: "BTCUSDT",
+  priceChange: "-1250.50000000",
+  priceChangePercent: "-1.996",
+  weightedAvgPrice: "61500.00000000",
+  prevClosePrice: "62650.51000000",
+  lastPrice: "61400.01000000",
+  lastQty: "0.00100000",
+  bidPrice: "61400.00000000",
+  bidQty: "1.00000000",
+  askPrice: "61400.01000000",
+  askQty: "2.00000000",
+  openPrice: "62650.51000000",
+  highPrice: "63000.00000000",
+  lowPrice: "61000.00000000",
+  volume: "9007199254740993.12345678",
+  quoteVolume: "123456789.12345678",
+  openTime: 1_799_913_600_000,
+  closeTime: 1_800_000_000_000,
+  firstId: -1,
+  lastId: -1,
+  count: 0,
+};
+
+test("market data is unsigned, keeps decimal strings and maps Binance's arrays", async () => {
+  const { exchange, requests } = setup((url) => {
+    if (url.pathname === "/api/v3/ticker/24hr") return Response.json([ticker]);
+    if (url.pathname === "/api/v3/klines")
+      return Response.json([
+        [
+          1_800_000_000_000,
+          "61000.00000000",
+          "61500.00000000",
+          "60900.00000000",
+          "61400.01000000",
+          "12.34500000",
+          1_800_003_599_999,
+          "757000.12345678",
+          308,
+          "6.00000000",
+          "368000.00000000",
+          "0",
+        ],
+      ]);
+    return Response.json({
+      lastUpdateId: 1027024,
+      bids: [["61400.00000000", "0.50000000"]],
+      asks: [
+        ["61400.01000000", "1.00000000"],
+        ["61400.02000000", "2.00000000"],
+      ],
+    });
+  });
+  const [all] = await exchange.getTickers();
+  assert.equal(all.priceChangePercent, "-1.996");
+  assert.equal(all.volume, "9007199254740993.12345678");
+  assert.equal("bidPrice" in all, false);
+  await exchange.getTickers(["BTCUSDT", "ETHUSDT"]);
+  const [kline] = await exchange.getKlines("BTC-USDT", "1h", 2);
+  assert.deepEqual(kline, {
+    openTime: 1_800_000_000_000,
+    open: "61000.00000000",
+    high: "61500.00000000",
+    low: "60900.00000000",
+    close: "61400.01000000",
+    volume: "12.34500000",
+    closeTime: 1_800_003_599_999,
+    quoteVolume: "757000.12345678",
+    trades: 308,
+  });
+  const depth = await exchange.getDepth("ETH-USDT", 5);
+  assert.deepEqual(depth.bids, [
+    { price: "61400.00000000", quantity: "0.50000000" },
+  ]);
+  assert.equal(depth.asks[1].price, "61400.02000000");
+
+  assert.deepEqual(
+    requests.map(({ url }) => `${url.pathname}${url.search}`),
+    [
+      "/api/v3/ticker/24hr",
+      `/api/v3/ticker/24hr?symbols=${encodeURIComponent('["BTCUSDT","ETHUSDT"]')}`,
+      "/api/v3/klines?symbol=BTCUSDT&interval=1h&limit=2",
+      "/api/v3/depth?symbol=ETHUSDT&limit=5",
+    ],
+  );
+  for (const { init } of requests) {
+    assert.equal(init.method, "GET");
+    assert.equal(new Headers(init.headers).get("X-MBX-APIKEY"), null);
+  }
+});
+
+test("market data rejects invalid inputs before network access", async () => {
+  const { exchange, requests } = setup(() => Response.json([]));
+  for (const symbols of [
+    [],
+    ["btcusdt"],
+    ["BTCUSDT,ETHUSDT"],
+    ["BTC-USDT"],
+    Array.from({ length: 101 }, (_, index) => `T${index}USDT`),
+  ])
+    assert.throws(() => exchange.getTickers(symbols), String(symbols));
+  for (const limit of [0, 1001, 1.5])
+    assert.throws(() => exchange.getKlines("BTC-USDT", "1m", limit));
+  assert.throws(() =>
+    exchange.getKlines("BTC-USDT", "1s" as KlineInterval, 10),
+  );
+  assert.throws(() => exchange.getDepth("BTC-USDT", 101));
+  assert.throws(() =>
+    exchange.getDepth("SOL-USDT" as TestnetLimitOrder["instrument"]),
+  );
+  assert.equal(requests.length, 0);
+  // Binance lists some symbols in other scripts.
+  await exchange.getTickers(["币安人生USDT", "1000SATSUSDT"]);
+  assert.equal(requests.length, 1);
+});
+
+test("malformed market data is reported as unavailable", async () => {
+  for (const body of [
+    [{ ...ticker, lastPrice: "6.1e4" }],
+    [{ ...ticker, priceChangePercent: undefined }],
+    [[1_800_000_000_000, "1", "1", "1", "1"]],
+    { lastUpdateId: 1, bids: [[61400, "1"]], asks: [] },
+  ]) {
+    const { exchange } = setup(() => Response.json(body));
+    const request = Array.isArray(body)
+      ? Array.isArray(body[0])
+        ? exchange.getKlines("BTC-USDT", "1m")
+        : exchange.getTickers()
+      : exchange.getDepth("BTC-USDT");
+    await assert.rejects(
+      request,
+      (error: unknown) =>
+        error instanceof BinanceTestnetError && error.kind === "unavailable",
+    );
+  }
 });
