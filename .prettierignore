@@ -1,0 +1,4 @@
+# Prettier also reads the root .gitignore. Add generated files here that are
+# tracked, or that only a nested .gitignore ignores.
+pnpm-lock.yaml
+next-env.d.ts
