@@ -260,13 +260,31 @@ describe("fees and equity", () => {
 describe("expiry and holding deadlines", () => {
   it("closes an entry at the first open at or after its deadline", () => {
     const result = run(
-      standing([entry()], { holdingPeriodSeconds: 2 * 60 * 60 }),
+      standing([entry()], { holdingPeriodSeconds: 60 * 60 }),
+      candles([
+        ["49800", "50100", "49700", "50000"],
+        ["50100", "50300", "50000", "50250"],
+      ]),
+    );
+    // Bought at the 00:00 open, so due out at 01:00.
+    assert.deepEqual(result.trades[0].exit, {
+      at: at(1),
+      price: "50100",
+      reason: "holding_deadline",
+    });
+  });
+
+  it("never closes an entry that filled during a candle before its deadline", () => {
+    const result = run(
+      standing([entry()], { holdingPeriodSeconds: 60 * 60 }),
       candles([
         ["50500", "50600", "49990", "50100"],
         ["50100", "50300", "50000", "50250"],
         ["50200", "50300", "50100", "50250"],
       ]),
     );
+    // It filled some time before 01:00, so its hour may run until 02:00.
+    assert.equal(result.trades[0].entryAt, at(0));
     assert.deepEqual(result.trades[0].exit, {
       at: at(2),
       price: "50200",
@@ -343,6 +361,39 @@ describe("loss limits", () => {
     // 02:00: the total reaches 2.1.
     assert.equal(result.trades[0].exit?.at, at(2));
     assert.match(result.notices[0].message, /total loss limit of 2 USDT/);
+  });
+
+  it("counts a loss in the day's last hour against that day", () => {
+    const result = run(
+      standing(
+        [
+          entry({ quantity: "0.01", stopLossPrice: "44000" }),
+          entry({
+            entryPrice: "43000",
+            stopLossPrice: "40000",
+            takeProfitPrice: "46000",
+          }),
+        ],
+        { lossLimits: { daily: "50", total: "500" } },
+      ),
+      // From 22:00. The stop sells at 23:00 for a loss of 60.
+      candles(
+        [
+          ["50500", "50600", "49990", "50000"],
+          ["50000", "50100", "43900", "44500"],
+          ["44500", "44600", "44400", "44500"],
+          ["44000", "44100", "42900", "43500"],
+        ],
+        -2,
+      ),
+    );
+    assert.equal(result.state, "paused");
+    assert.equal(result.trades.length, 1);
+    assert.deepEqual(result.notices[0], {
+      at: at(-1),
+      message:
+        "The daily loss limit of 50 USDT was reached with a loss of 60.00 USDT. Pending entries were cancelled, open entries closed, and the strategy paused. A backtest does not resume it.",
+    });
   });
 });
 
@@ -592,6 +643,13 @@ describe("execution checks", () => {
     assert.throws(
       () => run(standing([entry()]), rows, { instrument: "ETH-USDT" }),
       /do not trade ETH-USDT/,
+    );
+    assert.throws(
+      () =>
+        run({ ...ai, allowedInstruments: ["BTC-USDT", "ETH-USDT"] }, rows, {
+          proposals: [proposal({ instrument: "ETH-USDT" })],
+        }),
+      /must all be for BTC-USDT/,
     );
   });
 });

@@ -42,7 +42,7 @@ import { cn } from "@/lib/utils";
 const KIND_LABELS: Record<BacktestResult["strategyKind"], string> = {
   grid: "Grid",
   dca: "DCA",
-  standing_price_instruction: "Price instruction",
+  standing_price_instruction: "Standing price instruction",
   ai_managed: "AI-managed",
 };
 

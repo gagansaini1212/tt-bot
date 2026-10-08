@@ -23,7 +23,7 @@ At each candle's open, in this order:
 1. At midnight UTC, it records the unrealized result of open entries, where the daily loss limit starts.
 2. Pending entries past their expiry are cancelled.
 3. Open entries past their holding deadline are sold at the open, less slippage.
-4. Loss limits are measured with open entries at the open. If either is reached, pending entries are cancelled, open entries are sold at the open, and the strategy is paused for the rest of the run.
+4. Loss limits are measured with open entries at the open. If either is reached, pending entries are cancelled, open entries are sold at the open less slippage, and the strategy is paused for the rest of the run.
 5. A running strategy's planner proposes entries. Each passes `authorizeTradeProposal`, with a policy built from `ruleLimits` and the entries the strategy holds, then Binance's filters. An entry priced at or above the ask (the open plus slippage) buys at once at the ask, as a taker. Any other entry rests on the book.
 
 During the candle, in the worst order its open, high, low and close allow:
@@ -36,7 +36,9 @@ During the candle, in the worst order its open, high, low and close allow:
 - An entry whose expiry falls inside a candle does not fill in it.
 - A grid whose candle reaches the range stop or rises above the range closes what remains at the close and completes.
 
-Equity is cash plus open entries at each close. A strategy completes once its rules open no more entries and it holds none.
+At the close, loss limits are measured again, with open entries at the close and the clock at the candle's last millisecond, so a loss in a day's last hour counts against that day. Equity is cash plus open entries at each close.
+
+Fills and exits are timed to the candle they happen in. An entry bought at the open starts its holding period then. One that fills during a candle starts it at the candle's close, the latest it could have filled, so it is never closed before its deadline, though it can be closed up to an hour after. A strategy completes once its rules open no more entries and it holds none.
 
 ### What it enforces
 
@@ -74,7 +76,9 @@ Every result lists the limitations that apply to it. In short:
 - Fills are all-or-nothing at the order's price. Queue position, partial fills and book depth are not modelled.
 - Slippage is a fixed percentage. Real slippage depends on liquidity and can be much larger.
 - Binance takes a buy's fee in the asset bought, so live exits sell slightly less than the simulator's.
-- The strategy acts once an hour. An exit can come up to an hour late, and a loss can pass a limit before it is measured.
+- The strategy acts once an hour, and measures loss limits at each open and close. An exit can come up to an hour late, and a loss can pass a limit within the hour before it is measured.
+- Within a candle, resting entries fill first, then each entry's stop or target. Orders never compete for liquidity.
+- Equity, drawdown and the Sharpe ratio use hourly closes, so a fall and recovery within an hour does not show, and the Sharpe ratio counts the step across a missing hour as one return.
 - A strategy paused by a loss limit stays paused. A customer could resume it.
 - The stop-order limit assumes no other orders on the symbol use it.
 - Filters are today's and may have differed during the period.

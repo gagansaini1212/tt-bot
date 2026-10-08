@@ -2,6 +2,7 @@
 // the server checks it again before it runs.
 import {
   backtestRequestSchema,
+  DAY_MS,
   DEFAULT_ASSUMPTIONS,
   MAX_BACKTEST_DAYS,
   RECORDED_PROPOSAL_FIXTURES,
@@ -24,7 +25,10 @@ export type StrategyChoice =
 export const STRATEGY_CHOICES: { value: StrategyChoice; label: string }[] = [
   { value: "grid", label: "Grid" },
   { value: "dca", label: "DCA" },
-  { value: "standing_price_instruction", label: "Price instruction" },
+  {
+    value: "standing_price_instruction",
+    label: "Standing price instruction",
+  },
   { value: "recorded_proposals", label: "AI-managed (fixture)" },
 ];
 
@@ -114,7 +118,6 @@ export const DEFAULT_FORM: BacktestForm = {
   assumptions: DEFAULT_ASSUMPTIONS,
 };
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 const isoDate = (time: number) => new Date(time).toISOString().slice(0, 10);
 
 /** Today's UTC date, such as "2026-10-08". */

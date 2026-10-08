@@ -69,6 +69,13 @@ export const recordedProposalFixtureSchema = z
         fixture.allocation,
       ),
     "The position limit must fit the allocation.",
+  )
+  .refine(
+    (fixture) =>
+      fixture.proposals.every(
+        (proposal) => proposal.instrument === fixture.instrument,
+      ),
+    "Every proposal must be for the fixture's market.",
   );
 
 export type RecordedProposalFixture = z.infer<

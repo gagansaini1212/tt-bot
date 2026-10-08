@@ -148,6 +148,10 @@ export function simulate(input: BacktestInput): SimulationResult {
     throw new RangeError("Backtests cover spot strategies only.");
   if (!limits.allowedInstruments.includes(instrument))
     throw new RangeError(`The rules do not trade ${instrument}.`);
+  if (input.proposals?.some((proposal) => proposal.instrument !== instrument))
+    throw new RangeError(
+      `Recorded proposals must all be for ${instrument}, the backtested market.`,
+    );
 
   const maker = new Decimal(assumptions.makerFeePercent).dividedBy(100);
   const taker = new Decimal(assumptions.takerFeePercent).dividedBy(100);
@@ -182,7 +186,7 @@ export function simulate(input: BacktestInput): SimulationResult {
   let state: StrategyState = "running";
   // Set once the rules will open no more entries. The strategy completes when
   // it then holds none.
-  let rulesFinished: string | undefined;
+  let noMoreEntries: string | undefined;
   let dayStartUnrealized = new Decimal(0);
   // DCA bookkeeping: the latest buy submitted, and why each due buy waited.
   let previousBuy: { index: number; entryPrice: string } | undefined;
@@ -209,12 +213,15 @@ export function simulate(input: BacktestInput): SimulationResult {
     cash = cash.minus(notional).minus(paid);
     fees = fees.plus(paid);
     bookings.push({ at: iso(at), kind: "fee", amount: paid.toFixed() });
+    // A fill during a candle came at some time before its close. The holding
+    // period starts from the close, so the entry never closes early.
+    const firstFill = midCandle ? at + HOUR_MS : at;
     Object.assign(entry, {
       status: "open",
       fillPrice: price,
       filledAt: at,
       entryFee: paid,
-      deadline: at + entry.intent.holdingPeriodSeconds * 1000,
+      deadline: firstFill + entry.intent.holdingPeriodSeconds * 1000,
       filledMidCandle: midCandle,
     });
   }
@@ -241,8 +248,8 @@ export function simulate(input: BacktestInput): SimulationResult {
     entry.exit = { at, price, fee: paid, reason };
   }
 
-  /** Cancels pending entries and closes open ones at a taker price. */
-  function closeAll(price: Decimal.Value, at: number, reason: ExitReason) {
+  /** Cancels pending entries and sells open ones at a taker price. */
+  function closeEntries(price: Decimal.Value, at: number, reason: ExitReason) {
     for (const entry of active()) {
       if (entry.status === "pending") entry.status = "cancelled";
       else close(entry, takerSellPrice(price), at, taker, reason);
@@ -404,7 +411,41 @@ export function simulate(input: BacktestInput): SimulationResult {
     };
   }
 
-  function finish(at: number, reason: string) {
+  /** Open entries valued at `markPrice`, for the loss limits. */
+  const marks = (markPrice: string) =>
+    open().map((entry) => ({
+      direction: "long" as const,
+      quantity: entry.intent.quantity,
+      entryPrice: entry.fillPrice!.toFixed(),
+      markPrice,
+    }));
+
+  /**
+   * Measures the loss limits at `measuredAt`, with open entries at `price`.
+   * Reaching either cancels pending entries, sells open ones at `price` less
+   * slippage, and pauses the strategy, which a backtest never resumes.
+   */
+  function enforceLossLimits(measuredAt: number, at: number, price: string) {
+    if (state !== "running") return;
+    const status = lossLimitStatus({
+      now: new Date(measuredAt),
+      limits: rules.lossLimits,
+      bookings,
+      openEntries: marks(price),
+      dayStartUnrealizedPnl: dayStartUnrealized.toFixed(),
+    });
+    if (!status.breached) return;
+    const which = status.total.reached ? "total" : "daily";
+    const measure = status[which];
+    closeEntries(price, at, "loss_limit");
+    state = "paused";
+    notify(
+      at,
+      `The ${which} loss limit of ${measure.limit} USDT was reached with a loss of ${new Decimal(measure.loss).toFixed(2)} USDT. Pending entries were cancelled, open entries closed, and the strategy paused. A backtest does not resume it.`,
+    );
+  }
+
+  function complete(at: number, reason: string) {
     state = "completed";
     notify(at, `The strategy completed: ${reason}.`);
   }
@@ -412,18 +453,11 @@ export function simulate(input: BacktestInput): SimulationResult {
   for (const candle of candles) {
     const now = candle.openTime;
     const openPrice = new Decimal(candle.open);
-    const marks = () =>
-      open().map((entry) => ({
-        direction: "long" as const,
-        quantity: entry.intent.quantity,
-        entryPrice: entry.fillPrice!.toFixed(),
-        markPrice: candle.open,
-      }));
 
     // At the open: the day's starting point for the daily loss limit, expired
     // entries, holding deadlines, loss limits, then new entries.
     if (now % (24 * HOUR_MS) === 0)
-      dayStartUnrealized = marks().reduce(
+      dayStartUnrealized = marks(candle.open).reduce(
         (total, entry) => total.plus(unrealizedPnl(entry)),
         new Decimal(0),
       );
@@ -437,40 +471,22 @@ export function simulate(input: BacktestInput): SimulationResult {
       if (entry.deadline! <= now)
         close(entry, takerSellPrice(openPrice), now, taker, "holding_deadline");
 
-    if (state === "running") {
-      const status = lossLimitStatus({
-        now: new Date(now),
-        limits: rules.lossLimits,
-        bookings,
-        openEntries: marks(),
-        dayStartUnrealizedPnl: dayStartUnrealized.toFixed(),
-      });
-      if (status.breached) {
-        const measure = status.total.reached ? status.total : status.daily;
-        const which = status.total.reached ? "total" : "daily";
-        closeAll(openPrice, now, "loss_limit");
-        state = "paused";
-        notify(
-          now,
-          `The ${which} loss limit of ${measure.limit} USDT was reached with a loss of ${new Decimal(measure.loss).toFixed(2)} USDT. Pending entries were cancelled, open entries closed, and the strategy paused. A backtest does not resume it.`,
-        );
-      }
-    }
+    enforceLossLimits(now, now, candle.open);
 
     if (state === "running") {
       const next = plan(candle);
       if (next.action === "enter")
         for (const intent of next.intents) submit(intent, candle);
       else if (next.action === "close_and_complete") {
-        closeAll(openPrice, now, "range_exit");
-        finish(
+        closeEntries(openPrice, now, "range_exit");
+        complete(
           now,
           next.reason === "range_stop"
             ? "the price opened at or below the range stop"
             : "the price opened above the grid range",
         );
       } else if (next.action === "no_more_entries") {
-        rulesFinished ??= next.reason;
+        noMoreEntries ??= next.reason;
       } else if (
         rules.kind === "dca" &&
         (next.reason === "entry_limit" || next.reason === "unprotectable")
@@ -521,8 +537,8 @@ export function simulate(input: BacktestInput): SimulationResult {
       const below = gridRangePosition(rules, candle.low) === "range_stop";
       const above = gridRangePosition(rules, candle.high) === "above_range";
       if (below || above) {
-        closeAll(candle.close, now, "range_exit");
-        finish(
+        closeEntries(candle.close, now, "range_exit");
+        complete(
           now,
           below
             ? "the price reached the range stop"
@@ -530,8 +546,11 @@ export function simulate(input: BacktestInput): SimulationResult {
         );
       }
     }
-    if (state === "running" && rulesFinished && active().length === 0)
-      finish(now, finishedReason(rulesFinished));
+    // Measured again at the close, within the candle's UTC day, so a loss in
+    // the day's last hour still counts against that day's limit.
+    enforceLossLimits(now + HOUR_MS - 1, now, candle.close);
+    if (state === "running" && noMoreEntries && active().length === 0)
+      complete(now, completionReason(noMoreEntries));
 
     // Equity at the close: cash plus open entries at the closing price.
     equity.push({
@@ -651,7 +670,7 @@ const SKIP_REASONS: Record<string, string> = {
   not_due: "no candle opened while the buy was due",
 };
 
-function finishedReason(reason: string) {
+function completionReason(reason: string) {
   switch (reason) {
     case "schedule_complete":
       return "the DCA schedule ended and every buy has closed";

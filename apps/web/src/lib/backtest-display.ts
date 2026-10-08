@@ -1,4 +1,8 @@
-import type { BacktestResult, ExitReason } from "@crypto-trading/backtest";
+import {
+  DAY_MS,
+  type BacktestResult,
+  type ExitReason,
+} from "@crypto-trading/backtest";
 import Decimal from "decimal.js";
 
 import { formatDecimal } from "@/lib/decimals";
@@ -111,7 +115,6 @@ export function entryName(key: string) {
 
 /** The strategy's equity at each UTC midnight and at the end, for a table. */
 export function dailyEquity(result: BacktestResult) {
-  const DAY_MS = 24 * 60 * 60 * 1000;
   const rows = result.equity.filter(
     (point, index) =>
       point.time % DAY_MS === 0 || index === result.equity.length - 1,

@@ -1057,10 +1057,12 @@
     ],
     "limitations": [
       "Candles give only each hour's open, high, low and close, so within a candle the simulator assumes the worst order: a stop loss fills before a take profit, and an entry that fills during a candle can be stopped out in it but takes no profit until the next one.",
-      "Limit orders fill only when the price trades through them, in full, at their own price. Queue position, partial fills and order book depth are not modelled.",
+      "Limit orders fill only when the price trades through them, in full, at their own price. Within a candle, resting entries fill first, then each open entry's stop or target, and orders never compete for liquidity. Queue position, partial fills and order book depth are not modelled.",
       "Taker fills (buys at the ask, stop losses, and closes for deadlines, loss limits and range exits) land 0.05% beyond the price, and a stop the market opens through sells from the open. Real slippage depends on liquidity and can be much larger.",
       "Fees are 0.1% on maker fills and 0.1% on taker fills, charged in USDT. Binance takes a buy's fee in the asset bought, so its exits sell slightly less.",
-      "The strategy acts once an hour, at each candle's open. New entries, expiries, holding deadlines and loss limits are checked then, so an exit can come up to an hour late and a loss can pass a limit before it is measured.",
+      "The strategy acts once an hour, at each candle's open, where it places entries and enforces expiries and holding deadlines. Loss limits are measured at each open and close. An exit can come up to an hour late, and a loss can pass a limit within the hour before it is measured.",
+      "Fills and exits are timed to the hourly candle they happen in. An entry that fills during a candle starts its holding period at that candle's close, the latest it could have filled, so it never closes early.",
+      "Equity, drawdown and the Sharpe ratio use hourly closes, so a fall and recovery within an hour does not show.",
       "A strategy paused by a loss limit stays paused for the rest of the backtest. A customer could resume it.",
       "At most 5 entries are held at once: Binance allows 5 open stop orders per symbol per account, and the backtest assumes no other order uses them.",
       "Exchange filters (tick size, lot step and minimum order value) are today's, from Binance's public market data. They may have differed during the period.",
@@ -2191,10 +2193,12 @@
     ],
     "limitations": [
       "Candles give only each hour's open, high, low and close, so within a candle the simulator assumes the worst order: a stop loss fills before a take profit, and an entry that fills during a candle can be stopped out in it but takes no profit until the next one.",
-      "Limit orders fill only when the price trades through them, in full, at their own price. Queue position, partial fills and order book depth are not modelled.",
+      "Limit orders fill only when the price trades through them, in full, at their own price. Within a candle, resting entries fill first, then each open entry's stop or target, and orders never compete for liquidity. Queue position, partial fills and order book depth are not modelled.",
       "Taker fills (buys at the ask, stop losses, and closes for deadlines, loss limits and range exits) land 0.05% beyond the price, and a stop the market opens through sells from the open. Real slippage depends on liquidity and can be much larger.",
       "Fees are 0.1% on maker fills and 0.1% on taker fills, charged in USDT. Binance takes a buy's fee in the asset bought, so its exits sell slightly less.",
-      "The strategy acts once an hour, at each candle's open. New entries, expiries, holding deadlines and loss limits are checked then, so an exit can come up to an hour late and a loss can pass a limit before it is measured.",
+      "The strategy acts once an hour, at each candle's open, where it places entries and enforces expiries and holding deadlines. Loss limits are measured at each open and close. An exit can come up to an hour late, and a loss can pass a limit within the hour before it is measured.",
+      "Fills and exits are timed to the hourly candle they happen in. An entry that fills during a candle starts its holding period at that candle's close, the latest it could have filled, so it never closes early.",
+      "Equity, drawdown and the Sharpe ratio use hourly closes, so a fall and recovery within an hour does not show.",
       "A strategy paused by a loss limit stays paused for the rest of the backtest. A customer could resume it.",
       "At most 5 entries are held at once: Binance allows 5 open stop orders per symbol per account, and the backtest assumes no other order uses them.",
       "Exchange filters (tick size, lot step and minimum order value) are today's, from Binance's public market data. They may have differed during the period.",
@@ -2246,12 +2250,12 @@
       "position_limit_exceeded": 1
     },
     "metrics": {
-      "netPnl": "-8.171294",
-      "returnPercent": "-0.8171294",
-      "fees": "1.733894",
-      "realizedPnl": "-6.4374",
+      "netPnl": "-7.6572086",
+      "returnPercent": "-0.76572086",
+      "fees": "1.7344086",
+      "realizedPnl": "-5.9228",
       "unrealizedPnl": "0",
-      "finalEquity": "991.828706",
+      "finalEquity": "992.3427914",
       "maxDrawdown": {
         "amount": "12.8097127",
         "percent": "1.2760133147785706103",
@@ -2259,7 +2263,7 @@
         "troughAt": 1789045200000
       },
       "sharpe": {
-        "value": "-7.5328210573497518309",
+        "value": "-7.0368267803394175447",
         "riskFreeRatePercent": "0",
         "periodsPerYear": 8760
       },
@@ -3100,37 +3104,37 @@
       },
       {
         "time": 1789063200000,
-        "strategy": "991.828706",
+        "strategy": "992.8066316",
         "baseline": "950.0989795972"
       },
       {
         "time": 1789066800000,
-        "strategy": "991.828706",
+        "strategy": "992.3427914",
         "baseline": "949.1568579972"
       },
       {
         "time": 1789070400000,
-        "strategy": "991.828706",
+        "strategy": "992.3427914",
         "baseline": "948.0372903972"
       },
       {
         "time": 1789074000000,
-        "strategy": "991.828706",
+        "strategy": "992.3427914",
         "baseline": "949.3543203972"
       },
       {
         "time": 1789077600000,
-        "strategy": "991.828706",
+        "strategy": "992.3427914",
         "baseline": "947.8306179972"
       },
       {
         "time": 1789081200000,
-        "strategy": "991.828706",
+        "strategy": "992.3427914",
         "baseline": "944.0539039972"
       },
       {
         "time": 1789084800000,
-        "strategy": "991.828706",
+        "strategy": "992.3427914",
         "baseline": "940.7661795972"
       }
     ],
@@ -3188,21 +3192,23 @@
         "stopLossPrice": "76500",
         "takeProfitPrice": "81000",
         "exit": {
-          "at": "2026-09-10T17:00:00.000Z",
-          "price": "77161.4",
+          "at": "2026-09-10T18:00:00.000Z",
+          "price": "77290.05",
           "reason": "holding_deadline"
         },
-        "fees": "0.6246456",
-        "pnl": "-7.9790456"
+        "fees": "0.6251602",
+        "pnl": "-7.4649602"
       }
     ],
     "limitations": [
       "This replays a fixture of recorded proposals. It shows how the execution checks and the simulator treat those decisions, not how the AI trades.",
       "Candles give only each hour's open, high, low and close, so within a candle the simulator assumes the worst order: a stop loss fills before a take profit, and an entry that fills during a candle can be stopped out in it but takes no profit until the next one.",
-      "Limit orders fill only when the price trades through them, in full, at their own price. Queue position, partial fills and order book depth are not modelled.",
+      "Limit orders fill only when the price trades through them, in full, at their own price. Within a candle, resting entries fill first, then each open entry's stop or target, and orders never compete for liquidity. Queue position, partial fills and order book depth are not modelled.",
       "Taker fills (buys at the ask, stop losses, and closes for deadlines, loss limits and range exits) land 0.05% beyond the price, and a stop the market opens through sells from the open. Real slippage depends on liquidity and can be much larger.",
       "Fees are 0.1% on maker fills and 0.1% on taker fills, charged in USDT. Binance takes a buy's fee in the asset bought, so its exits sell slightly less.",
-      "The strategy acts once an hour, at each candle's open. New entries, expiries, holding deadlines and loss limits are checked then, so an exit can come up to an hour late and a loss can pass a limit before it is measured.",
+      "The strategy acts once an hour, at each candle's open, where it places entries and enforces expiries and holding deadlines. Loss limits are measured at each open and close. An exit can come up to an hour late, and a loss can pass a limit within the hour before it is measured.",
+      "Fills and exits are timed to the hourly candle they happen in. An entry that fills during a candle starts its holding period at that candle's close, the latest it could have filled, so it never closes early.",
+      "Equity, drawdown and the Sharpe ratio use hourly closes, so a fall and recovery within an hour does not show.",
       "A strategy paused by a loss limit stays paused for the rest of the backtest. A customer could resume it.",
       "At most 3 entries are held at once: Binance allows 5 open stop orders per symbol per account, and the backtest assumes no other order uses them.",
       "Exchange filters (tick size, lot step and minimum order value) are today's, from Binance's public market data. They may have differed during the period.",
