@@ -225,7 +225,13 @@ function AccountContent({
                 in a list, such as an entry with its exits, are grouped.
               </CardDescription>
             </CardHeader>
-            <CardContent className="overflow-x-auto">
+            {/* Focusable so keyboard users can scroll the table sideways. */}
+            <CardContent
+              aria-label="Open orders"
+              className="overflow-x-auto rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+              role="region"
+              tabIndex={0}
+            >
               <OpenOrders snapshot={snapshot} />
             </CardContent>
           </Card>
