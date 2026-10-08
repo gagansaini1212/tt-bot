@@ -95,6 +95,14 @@ _Avoid_: Close all
 A customer action that pauses entries and attempts to close all managed positions within its selected scope, every open protected entry included.
 _Avoid_: Pause
 
+**Kill switch**:
+A customer action that pauses every strategy on an exchange account and runs close all for every managed position there, the customer's own protected entries included.
+_Avoid_: Panic button, emergency stop
+
+**Daily drawdown limit**:
+A customer-set percentage of the allocations of all their strategies on an exchange account. When the strategies together lose it since midnight UTC, counting what each strategy's loss limits count, every strategy is paused until the customer resumes it.
+_Avoid_: Loss limit when referring to the portfolio
+
 **Strategy status**:
 A strategy's state as the customer sees it. Running is stored as `simulation` or `active`, by trading mode, and Paused as `paused`. Completed, stored as `retired`, means its rules will open no more entries and it holds none.
 _Avoid_: Stopped, finished

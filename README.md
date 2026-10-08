@@ -4,7 +4,8 @@ A Binance Spot Testnet trading application built with Next.js, eve, shadcn/ui, a
 
 ## What is implemented
 
-- A responsive dashboard for exchange balances, open orders, and recent fills. Unimplemented strategy management is shown explicitly.
+- A responsive dashboard for exchange balances, open orders, and recent fills.
+- Strategies: grid, DCA, AI-managed (the issue's AI Signal bot) and standing price instruction strategies, each with its own allocation and loss limits, created from forms that show their exact effects before they start. The execution worker runs them, checks every entry, reserves its budget and places it as a protected order list. Each strategy's card shows its status, allocation against current value, unrealized and realized PnL, and Pause, Resume, Edit limits and Close all. A kill switch in the top bar stops everything, and a portfolio daily drawdown limit pauses every strategy. See [Strategies](#strategies).
 - Customer sign-in with email and password (Better Auth). Every page, server action and assistant request checks the session on the server, and acts only for the signed-in customer.
 - An eve analysis assistant mounted through the Next.js app.
 - Assistant tools that draft trade proposals and record decisions not to trade. The execution worker saves them in PostgreSQL with the model, prompt version, input snapshot and rationale. The tools cannot place orders or change limits.
@@ -99,7 +100,7 @@ Keys in `apps/execution/.env` still work: `BINANCE_TESTNET_API_KEY`, with `BINAN
 
 The keys belong to the development customer's exchange account, so the worker serves account data and orders only for that customer. If you placed orders before order intents moved to PostgreSQL, the worker refuses to start while `.testnet-orders/` holds intents: run `pnpm exchange import-journal` once to copy them into the database, then delete the directory.
 
-The worker listens on `127.0.0.1:4001`, and on `[::1]:4001` when IPv6 is available. Its HTTP interface requires the shared token. It serves the account snapshot and market data, places and cancels dashboard orders, and runs the execution loop while it is serving. **The dashboard can place and cancel orders on the connected testnet account, so it must stay on this machine.** It has no customer authentication: never expose it to a network, put it behind a proxy, or reach it through a tunnel. Its order actions refuse requests that are not from `localhost`, `127.0.0.1` or `[::1]`. The Overview assistant receives the displayed testnet account snapshot and cannot access exchange credentials or submit orders. The application has no demo account data or invented strategy/decision records. Strategy management is not implemented.
+The worker listens on `127.0.0.1:4001`, and on `[::1]:4001` when IPv6 is available. Its HTTP interface requires the shared token. It serves the account snapshot and market data, places and cancels dashboard orders, and runs the execution loop while it is serving. **The dashboard can place and cancel orders on the connected testnet account, so it must stay on this machine.** It has no customer authentication: never expose it to a network, put it behind a proxy, or reach it through a tunnel. Its order actions refuse requests that are not from `localhost`, `127.0.0.1` or `[::1]`. The Overview assistant receives the displayed testnet account snapshot and cannot access exchange credentials or submit orders. The application has no demo account data or invented strategy/decision records. AI-managed strategies replay a recorded fixture when no model is configured, and label every such decision as one.
 
 ### Dashboard orders
 
@@ -136,7 +137,8 @@ The worker checks every customer's orders every five seconds, whether or not the
 - settles orders whose outcome was unknown, by looking them up on Binance by client ID once a minute has passed. It never resubmits one;
 - sends stop-limit entries whose stop price has traded;
 - reconciles each entry with Binance and keeps what Binance reports for it, its orders and fills, in PostgreSQL;
-- starts the exit of entries past their holding deadline.
+- starts the exit of entries past their holding deadline;
+- runs the customer's strategies: measures their loss limits and the portfolio's drawdown, and plans, checks and places their next entries (see [Strategies](#strategies)).
 
 When an entry holds bought quantity that no stop loss protects, the worker treats it as a protection failure ([ADR 0007](docs/adr/0007-hold-stop-limit-triggers-and-sell-unprotected-quantity.md)). This happens when Binance drops or rejects the exits after the entry fills, or when a partly filled entry is cancelled outside the dashboard. The worker cancels whatever is left of the order list, sells the quantity at market, pauses the strategy if the entry has one, and raises a critical alert. A partly filled entry has no exits on Binance, so if its market falls to the stop loss, the worker sells what it bought the same way. It tries three market sells, not counting ones Binance refused only for a rate limit. If none sells the quantity, it stops and asks you to sell it yourself. If you cancel an order list from the dashboard and confirm that what it bought is left without exits, the worker hands that quantity over to you instead of selling it. If more filled before the cancel reached Binance than you confirmed, it sells all of it.
 
@@ -148,7 +150,9 @@ Binance cancels every order in a list together, so cancelling any leg cancels th
 
 ### Risk limits and alerts
 
-**Settings → Risk limits** keeps each change as a new version, audited, and never edits an earlier one. A change applies to orders placed after it; open orders keep the limits they were placed under. The platform maximums are 1,000 USDT for the per-order cap and for the daily risk limit, and a default stop loss from 0.1% to 50% below the entry. The daily risk limit counts each dashboard entry's loss if its stop fills at its price, and each CLI buy, which has no stop, at its full value. A stop-market exit can fill lower and fees are extra, so it is not a guaranteed maximum. Reaching it refuses new orders and nothing more: unlike a strategy's loss limit, it measures no realized or unrealized results and pauses nothing. A held stop-limit entry counts its risk while it waits, and when its stop trades it meets the latest per-order cap and daily risk limit, counting its own risk once, or is rejected unsent. Exits are never held back by any of these limits: the sells the execution loop sends to protect or close a position, and CLI sells, are not checked against them.
+**Settings → Risk limits** keeps each change as a new version, audited, and never edits an earlier one. A change applies to orders placed after it; open orders keep the limits they were placed under. The platform maximums are 1,000 USDT for the per-order cap and for the daily risk limit, and a default stop loss from 0.1% to 50% below the entry. The daily risk limit counts each dashboard entry's loss if its stop fills at its price, and each CLI buy, which has no stop, at its full value. A stop-market exit can fill lower and fees are extra, so it is not a guaranteed maximum. Reaching it refuses new orders and nothing more: unlike a strategy's loss limit, it measures no realized or unrealized results and pauses nothing. A held stop-limit entry counts its risk while it waits, and when its stop trades it meets the latest per-order cap and daily risk limit, counting its own risk once, or is rejected unsent. Exits are never held back by any of these limits: the sells the execution loop sends to protect or close a position, and CLI sells, are not checked against them. Strategies' entries do not count against these limits: each strategy has its own allocation and loss limits.
+
+The same tab sets the **maximum daily drawdown** of your strategies together, as a percentage of their allocations, from 0.1% to 100%, also kept as versions. Strategies start only once it is set. When their combined result since midnight UTC reaches it, the worker pauses every strategy and cancels their pending entries; open entries keep their exits.
 
 **Settings → Notifications** lists the in-app alerts the execution worker raises, newest first. An optional Discord webhook URL, or a Telegram `https://api.telegram.org/bot<token>/sendMessage?chat_id=<chat ID>` URL, receives each new alert: the worker queues one outbox job per alert, posts it from the execution loop, and retries failed posts with backoff, from 30 seconds up to 15 minutes, for eight attempts. **Send test** posts straight away. The URL holds a token, so it is stored encrypted like exchange keys and never logged.
 
@@ -165,9 +169,33 @@ A proposal is a long spot limit buy on BTC/USDT or ETH/USDT with a stop loss, a 
 
 Activity shows each proposal as draft, approved, rejected, submitted, filled, cancelled or expired. Approved means Binance has not confirmed the order yet. Submitted, filled and cancelled follow the execution loop's reconciliation of the entry, with its detail line.
 
+### Strategies
+
+**Strategies** lists every strategy on the account, newest first, and lets you start one. Each kind follows [ADR 0004](docs/adr/0004-hold-several-protected-entries-per-strategy.md):
+
+- **Grid**: limit buys at the levels of a price range below the market, nearest first, each taking profit at the level above and stopped by the range stop. Leaving the range closes everything and completes it.
+- **DCA**: a buy of a fixed amount at the best ask on a schedule, with an optional dip multiplier. A buy that cannot be made while it is due is skipped.
+- **AI-managed** (the AI Signal bot): on its schedule, the worker asks the AI for one proposal or a decision not to trade, and records it on Activity. By default you approve each proposal there; you can choose instead to let the worker place each one that passes the strategy's limits. With no model configured, the worker replays a recorded fixture, `apps/execution/src/recorded-signals.json`, and every decision it records says so. Set `STRATEGY_AI_EVE_URL` in `apps/execution/.env` to a local eve dev server (`pnpm dev:agent`) with a model configured to ask the analysis assistant instead.
+- **Standing price instruction**: up to ten limit buys at your prices, each with your stop loss and take profit, expiring together.
+
+A strategy needs the portfolio's daily drawdown limit first, in **Settings → Risk limits**. Fill in the form, then **Review effects**: it lists what the strategy can commit, how many entries it can hold, its loss limits and holding period, and every entry it can make with its exact price, size, take profit and stop loss, rounded to Binance's steps as the worker will place it. **Start strategy** sends exactly that. **Backtest these rules** hands the form's rules to the backtest below.
+
+On every pass, every five seconds, the worker:
+
+- measures each strategy's daily loss since midnight UTC and its total loss, counting realized results, fees and the unrealized results of open entries. Reaching either limit cancels its pending entries, sells its open entries at market and pauses it, with a critical alert. It stays paused until you resume it, which it refuses while a limit is still reached: the total limit until a new version raises it, the daily one until midnight UTC or a new version. A strategy the worker cannot measure, such as one charged fees in BNB, opens no entries;
+- adds every strategy's result since midnight UTC and pauses every strategy once together they have lost the portfolio's daily drawdown limit, as a percentage of their allocations;
+- plans each running strategy's next entries, checks each with Binance's filters and test order and with `authorizeTradeProposal` against the strategy's version, allocation, reserved budget and limits, reserves its budget in the same transaction that saves its order intent, then places it as an OPOCO order list exactly as a dashboard order is placed. The execution loop then watches it like any other entry, with the strategy's holding period;
+- cancels entries that pass their entry expiry unfilled, and completes a strategy whose rules open no more entries once it holds nothing.
+
+Binance lets an account hold five open stop orders on a symbol (`MAX_NUM_ALGO_ORDERS`), and every entry's stop loss is one, together with your dashboard orders there. A strategy waits rather than open an entry it could not protect. One strategy owns a market's position on the account: another strategy in that market waits until it holds nothing there.
+
+Each card shows the strategy's status (**Running**, **Paused** or **Completed**), its allocation against its current value, its unrealized PnL and its realized PnL after fees, its loss limits, its entries and what the worker last did. **Pause** stops new entries and cancels pending ones; open entries keep their take profit, stop loss and holding deadline. **Close all** also sells what the open entries hold. **Edit limits** saves a new version: open entries keep the version they were made under. Strategies' entries count against their own allocations, not the dashboard's, and their order list IDs start with `ct_sg`.
+
+The **Kill switch** in the top bar, behind a confirmation, pauses every strategy, cancels every entry the worker manages, strategies' and your own dashboard orders, sells what they hold at market, and cancels stop-limit entries the worker holds. Orders placed with the CLI are left alone. It is audited and raises a critical alert.
+
 ### Manual test orders
 
-These commands are for developer-controlled limit orders on virtual funds. They do not activate automated strategies or attach stop-loss/take-profit protection, and the execution loop does not watch them. Automatic proposal execution still requires persisted reservations.
+These commands are for developer-controlled limit orders on virtual funds. They do not activate automated strategies or attach stop-loss/take-profit protection, and the execution loop does not watch them.
 
 They use the per-order cap and daily risk limit from **Settings → Risk limits**, which the worker reads before each order. `TESTNET_MAX_ORDER_NOTIONAL_USDT` is no longer read. A CLI buy has no stop loss, so all of its value counts against the daily risk limit; a sell is never refused for it. Use a current testnet price and a quantity meeting Binance's filters; the numbers below only illustrate the command syntax.
 
