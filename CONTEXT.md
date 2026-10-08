@@ -17,7 +17,7 @@ A customer's account at one venue, connected to the product. Its capital and pos
 _Avoid_: Customer when referring to the exchange account
 
 **Read-only exchange account**:
-An exchange account on a venue whose adapter cannot place orders, such as HTX in M4. It is monitored, but never the target of a strategy, proposal or order, and its keys have no trade or withdraw permission.
+An exchange account on a venue the product can only read, such as HTX in M4. It is monitored, but never the target of a strategy, proposal or order, and its keys must not allow trading or withdrawals.
 _Avoid_: Paused account, disconnected account
 
 **Transfer**:
@@ -128,7 +128,7 @@ A customer action that pauses every strategy on an exchange account and runs clo
 _Avoid_: Panic button, emergency stop
 
 **Daily drawdown limit**:
-A customer-set percentage of the allocations of all their strategies on an exchange account. When the strategies together lose it since midnight UTC, counting what each strategy's loss limits count, every strategy is paused until the customer resumes it. Other exchange accounts never count towards it.
+A customer-set percentage of the allocations of all their strategies on an exchange account. When the strategies together lose it since midnight UTC, counting what each strategy's loss limits count, every strategy on that account is paused until the customer resumes it.
 _Avoid_: Loss limit when referring to the portfolio
 
 **Strategy status**:
@@ -142,7 +142,7 @@ The portion of an allocation committed to pending orders and unavailable for ano
 Comparing the product's recorded orders, fills, balances, and positions with the exchange's actual state to resolve discrepancies or unknown outcomes.
 
 **Position ownership**:
-The assignment of an instrument's managed position to one strategy within an exchange account, including every protected entry in it. Other strategies must wait or use a separate account.
+The assignment of an instrument's managed position to one strategy within an exchange account, including every protected entry in it. Other strategies must wait or use a separate account, and positions on separate accounts are never netted.
 
 **Accounting currency**:
 The explicitly selected currency used to measure an exchange account's allocations, profit or loss, and limits. Conversion into the reporting currency does not change it.
@@ -153,7 +153,7 @@ The one currency a customer chooses, USDT by default, for displaying amounts and
 _Avoid_: Accounting currency, base currency
 
 **Conversion route**:
-The direct market, or two markets through USDT or USDC, on an exchange account's own venue whose prices convert its amounts into the reporting currency. Without a fresh route, the amount is shown as unconverted, never as zero.
+The direct market, or two markets through USDT or USDC, on an exchange account's own venue whose prices convert its amounts into the reporting currency. When the route is missing or its prices are stale, the amount is shown unconverted, never as zero.
 _Avoid_: FX rate, exchange rate
 
 **Standing entry expiry**:
