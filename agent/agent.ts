@@ -1,7 +1,9 @@
 import { defineAgent } from "eve";
 
+import { ASSISTANT_MODEL } from "./lib/decisions";
+
 export default defineAgent({
-  model: "openai/gpt-6-luna",
+  model: ASSISTANT_MODEL,
   reasoning: "medium",
   limits: {
     maxInputTokensPerSession: 200_000,
