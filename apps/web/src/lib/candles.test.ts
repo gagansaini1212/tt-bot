@@ -98,33 +98,195 @@ test("fills outside the candles are counted, not drawn", () => {
   });
 });
 
-test("open orders become levels with their unfilled quantity", () => {
-  const order = (
-    orderId: number,
-    side: "BUY" | "SELL",
-    price: string,
-    executedQty: string,
-  ): TestnetOrder => ({
-    symbol: "BTCUSDT",
-    orderId,
-    clientOrderId: `ct_${orderId}`,
-    price,
-    origQty: "0.00300000",
-    executedQty,
-    cummulativeQuoteQty: "0",
-    status: "NEW",
-    type: "LIMIT",
-    side,
+const order = (fields: Partial<TestnetOrder>): TestnetOrder => ({
+  symbol: "BTCUSDT",
+  orderId: 1,
+  clientOrderId: "web_order",
+  price: "59000.00000000",
+  origQty: "0.00300000",
+  executedQty: "0.00000000",
+  cummulativeQuoteQty: "0",
+  status: "NEW",
+  type: "LIMIT",
+  side: "BUY",
+  orderListId: -1,
+  ...fields,
+});
+
+test("standalone orders are levels at their limit price with the unfilled quantity", () => {
+  const groups = orderLines(
+    {
+      orders: [
+        order({ orderId: 1 }),
+        order({
+          orderId: 2,
+          side: "SELL",
+          price: "61000.10000000",
+          executedQty: "0.00100000",
+          status: "PARTIALLY_FILLED",
+        }),
+        // No price and no stop: nothing to draw.
+        order({ orderId: 3, side: "SELL", price: "0.00000000" }),
+        order({ orderId: 4, symbol: "ETHUSDT", price: "2500.00000000" }),
+      ],
+      pendingOrders: [],
+    },
+    "BTCUSDT",
+  );
+  assert.deepEqual(groups, [
+    {
+      key: "BTCUSDT:1",
+      orderListId: undefined,
+      lines: [
+        {
+          side: "BUY",
+          label: "Buy",
+          price: "59000.00000000",
+          stop: false,
+          quantity: "0.003",
+          pending: false,
+        },
+      ],
+    },
+    {
+      key: "BTCUSDT:2",
+      orderListId: undefined,
+      lines: [
+        {
+          side: "SELL",
+          label: "Sell",
+          price: "61000.10000000",
+          stop: false,
+          quantity: "0.002",
+          pending: false,
+        },
+      ],
+    },
+  ]);
+});
+
+test("an OPOCO list's legs stay together, with the stop loss at its trigger", () => {
+  // The dashboard's protected entry: Binance holds the take profit and the
+  // stop loss back, without a quantity, until the entry fills.
+  const entry = order({
+    orderId: 10,
+    clientOrderId: "ct_abc_en",
+    orderListId: 7,
+    price: "81000.00000000",
+    origQty: "0.00200000",
   });
+  const takeProfit = order({
+    orderId: 11,
+    clientOrderId: "ct_abc_tp",
+    orderListId: 7,
+    type: "LIMIT_MAKER",
+    side: "SELL",
+    price: "83000.00000000",
+    origQty: "0",
+    status: "PENDING_NEW",
+  });
+  const stopLoss = order({
+    orderId: 12,
+    clientOrderId: "ct_abc_sl",
+    orderListId: 7,
+    type: "STOP_LOSS",
+    side: "SELL",
+    price: "0.00000000",
+    stopPrice: "80000.00000000",
+    origQty: "0",
+    status: "PENDING_NEW",
+  });
+  const groups = orderLines(
+    // Listed out of order, and the entry also among the held-back legs.
+    { orders: [entry], pendingOrders: [stopLoss, entry, takeProfit] },
+    "BTCUSDT",
+  );
+  assert.deepEqual(groups, [
+    {
+      key: "BTCUSDT:list:7",
+      orderListId: 7,
+      lines: [
+        {
+          side: "BUY",
+          label: "Entry",
+          price: "81000.00000000",
+          stop: false,
+          quantity: "0.002",
+          pending: false,
+        },
+        {
+          side: "SELL",
+          label: "Take profit",
+          price: "83000.00000000",
+          stop: false,
+          quantity: undefined,
+          pending: true,
+        },
+        {
+          side: "SELL",
+          label: "Stop loss",
+          price: "80000.00000000",
+          stop: true,
+          quantity: undefined,
+          pending: true,
+        },
+      ],
+    },
+  ]);
   assert.deepEqual(
-    orderLines([
-      order(1, "BUY", "59000.00000000", "0.00000000"),
-      order(2, "SELL", "61000.10000000", "0.00100000"),
-      order(3, "SELL", "0.00000000", "0.00000000"),
-    ]),
+    orderLines({ orders: [entry], pendingOrders: [] }, "ETHUSDT"),
+    [],
+  );
+});
+
+test("legs of a list placed elsewhere get their role from the order type", () => {
+  const groups = orderLines(
+    {
+      orders: [
+        // An OCO exit: a limit-maker take profit and a stop-limit stop loss.
+        order({
+          orderId: 20,
+          orderListId: 9,
+          type: "LIMIT_MAKER",
+          side: "SELL",
+          price: "84000.00000000",
+        }),
+        order({
+          orderId: 21,
+          orderListId: 9,
+          type: "STOP_LOSS_LIMIT",
+          side: "SELL",
+          price: "79500.00000000",
+          stopPrice: "79600.00000000",
+        }),
+      ],
+      pendingOrders: [],
+    },
+    "BTCUSDT",
+  );
+  assert.deepEqual(
+    groups[0].lines.map(({ label, price, stop }) => [label, price, stop]),
     [
-      { orderId: 1, side: "BUY", price: "59000.00000000", quantity: "0.003" },
-      { orderId: 2, side: "SELL", price: "61000.10000000", quantity: "0.002" },
+      ["Take profit", "84000.00000000", false],
+      ["Stop loss", "79600.00000000", true],
     ],
+  );
+  // A stop price of 0 is no trigger: the limit price is used.
+  assert.deepEqual(
+    orderLines(
+      {
+        orders: [order({ stopPrice: "0.00000000" })],
+        pendingOrders: [],
+      },
+      "BTCUSDT",
+    )[0].lines[0],
+    {
+      side: "BUY",
+      label: "Buy",
+      price: "59000.00000000",
+      stop: false,
+      quantity: "0.003",
+      pending: false,
+    },
   );
 });

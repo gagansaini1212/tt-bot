@@ -19,6 +19,7 @@ import {
   fillMarkers,
   orderLines,
   toCandles,
+  type OrderLine,
 } from "@/lib/candles";
 import { fractionDigits, formatDecimal } from "@/lib/decimals";
 import {
@@ -188,13 +189,21 @@ function Candles({
     ? account.snapshot.fills.filter(({ symbol }) => symbol === market.symbol)
     : [];
   const { markers, outside } = fillMarkers(fills, klines);
-  const orders = orderLines(
-    connected
-      ? account.snapshot.orders.filter(({ symbol }) => symbol === market.symbol)
-      : [],
-  );
+  const groups = connected ? orderLines(account.snapshot, market.symbol) : [];
+  const orders = groups.flatMap(({ lines }) => lines);
   const price = (value: string) =>
     formatDecimal(value, Math.max(priceDigits, fractionDigits([value])));
+  // "Entry buy 0.002 BTC at 81,000.00", "Stop loss sell triggers at 80,000.00, waiting for entry"
+  const describe = (line: OrderLine) =>
+    [
+      line.label === "Buy" || line.label === "Sell"
+        ? line.label
+        : `${line.label} ${line.side.toLowerCase()}`,
+      line.quantity ? ` ${line.quantity} ${market.base}` : "",
+      line.stop ? " triggers at " : " at ",
+      price(line.price),
+      line.pending ? ", waiting for entry" : "",
+    ].join("");
 
   return (
     <>
@@ -223,19 +232,31 @@ function Candles({
                 <span className="w-3 border-t-2 border-dashed border-(--market-down)" />
                 Your open buy and sell orders
               </li>
+              {orders.some(({ stop }) => stop) ? (
+                <li className="flex items-center gap-1.5">
+                  <span className="w-4 border-t-2 border-dotted border-muted-foreground" />
+                  Stop triggers
+                </li>
+              ) : null}
             </ul>
           ) : null}
           <p>{fillSummary(fills.length, outside, market.label)}</p>
-          <p>
-            {orders.length === 0
-              ? `No open orders on ${market.label}.`
-              : `Open orders: ${orders
-                  .map(
-                    ({ side, quantity, price: level }) =>
-                      `${side === "BUY" ? "Buy" : "Sell"} ${quantity} ${market.base} at ${price(level)}`,
-                  )
-                  .join(" · ")}.`}
-          </p>
+          {groups.length === 0 ? (
+            <p>No open orders on {market.label}.</p>
+          ) : (
+            <div>
+              <p>Open orders:</p>
+              <ul className="mt-1 space-y-1">
+                {groups.map(({ key, orderListId, lines }) => (
+                  <li key={key}>
+                    {orderListId === undefined
+                      ? describe(lines[0])
+                      : `Order list ${orderListId}: ${lines.map(describe).join(" · ")}`}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       ) : (
         <p className="text-xs text-muted-foreground">

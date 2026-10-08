@@ -233,14 +233,15 @@ export function CandlestickCanvas({
     const current = chartRef.current;
     if (!current) return;
     const colors = chartColors(containerRef.current!);
-    const lines = orders.map(({ side, price, quantity }) =>
+    const lines = orders.map(({ side, label, price, stop, quantity }) =>
       current.series.createPriceLine({
         price: Number(price),
         color: side === "BUY" ? colors.up : colors.down,
         lineWidth: 1,
-        lineStyle: LineStyle.Dashed,
+        // Dotted for a stop's trigger, dashed for a resting limit price.
+        lineStyle: stop ? LineStyle.Dotted : LineStyle.Dashed,
         axisLabelVisible: true,
-        title: `${side === "BUY" ? "Buy" : "Sell"} ${quantity}`,
+        title: quantity ? `${label} ${quantity}` : label,
       }),
     );
     return () => {

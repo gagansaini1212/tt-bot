@@ -3,9 +3,11 @@ import type {
   TestnetFill,
   TestnetKline,
   TestnetOrder,
+  TestnetSnapshot,
 } from "@crypto-trading/exchanges";
 
 import { fractionDigits } from "./decimals";
+import { groupOpenOrders, orderRole, type OrderRole } from "./order-display";
 
 /** A candle as the chart draws it, timed by its open in UTC seconds. */
 export type Candle = {
@@ -19,12 +21,26 @@ export type Candle = {
 /** The customer's fills of one side within one candle. */
 export type FillMarker = { time: number; side: "BUY" | "SELL"; count: number };
 
-/** An open order's price level and unfilled quantity. */
+/** An open order's level on the chart. */
 export type OrderLine = {
-  orderId: number;
-  side: "BUY" | "SELL";
+  side: TestnetOrder["side"];
+  /** The leg's role, as the Open orders table badges it, or the side of a standalone order. */
+  label: OrderRole | "Buy" | "Sell";
+  /** Where the order acts: a stop order's trigger, otherwise its limit price. */
   price: string;
-  quantity: string;
+  stop: boolean;
+  /** Unfilled quantity; undefined while Binance holds an exit back until its entry fills. */
+  quantity?: string;
+  /** An exit Binance places once its list's entry fills. */
+  pending: boolean;
+};
+
+/** A standalone order, or one order list's legs: entry, take profit, stop loss. */
+export type OrderLineGroup = {
+  /** Unique per group, from groupOpenOrders. */
+  key: string;
+  orderListId?: number;
+  lines: OrderLine[];
 };
 
 export function toCandles(klines: readonly TestnetKline[]): Candle[] {
@@ -92,14 +108,38 @@ export function fillMarkers(
   return { markers, outside };
 }
 
-/** One market's open orders as price levels; orders without a price are left out. */
-export function orderLines(orders: readonly TestnetOrder[]): OrderLine[] {
-  return orders
-    .filter(({ price }) => new Decimal(price).gt(0))
-    .map(({ orderId, side, price, origQty, executedQty }) => ({
-      orderId,
-      side,
-      price,
-      quantity: new Decimal(origQty).minus(executedQty).toFixed(),
-    }));
+/**
+ * One market's open orders, grouped like the Open orders table, including the
+ * exits Binance holds back until their entry fills. Orders with neither a
+ * stop nor a limit price are left out.
+ */
+export function orderLines(
+  snapshot: Pick<TestnetSnapshot, "orders" | "pendingOrders">,
+  symbol: string,
+): OrderLineGroup[] {
+  return groupOpenOrders(snapshot)
+    .filter(({ orders }) => orders[0]?.symbol === symbol)
+    .map(({ key, orderListId, orders }) => ({
+      key,
+      orderListId,
+      lines: orders.flatMap((order) => orderLine(order) ?? []),
+    }))
+    .filter(({ lines }) => lines.length > 0);
+}
+
+function orderLine(order: TestnetOrder): OrderLine | undefined {
+  // A stop-market order's price is 0; it acts at its stopPrice.
+  const stop =
+    order.stopPrice !== undefined && new Decimal(order.stopPrice).gt(0);
+  const price = stop ? order.stopPrice! : order.price;
+  if (!new Decimal(price).gt(0)) return undefined;
+  const unfilled = new Decimal(order.origQty).minus(order.executedQty);
+  return {
+    side: order.side,
+    label: orderRole(order) ?? (order.side === "BUY" ? "Buy" : "Sell"),
+    price,
+    stop,
+    quantity: unfilled.gt(0) ? unfilled.toFixed() : undefined,
+    pending: order.status === "PENDING_NEW",
+  };
 }
