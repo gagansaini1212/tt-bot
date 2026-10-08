@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, mock, test } from "node:test";
+import { afterEach, before, beforeEach, mock, test } from "node:test";
 import type { ManualOrderRequest } from "@crypto-trading/exchanges/manual-order";
-import { cancelOrder, getOrderTicket, submitOrder } from "./orders";
+import { signInForTesting } from "./current-customer.testing";
+import type * as Orders from "./orders";
+
+let cancelOrder: typeof Orders.cancelOrder;
+let getOrderTicket: typeof Orders.getOrderTicket;
+let submitOrder: typeof Orders.submitOrder;
+
+before(async () => {
+  signInForTesting();
+  ({ cancelOrder, getOrderTicket, submitOrder } = await import("./orders"));
+});
 
 const request: ManualOrderRequest = {
   type: "limit",

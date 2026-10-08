@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, mock, test } from "node:test";
+import { afterEach, before, beforeEach, mock, test } from "node:test";
 import { z } from "zod";
 import { DEV_CUSTOMER_ID } from "@crypto-trading/database/dev-seed";
-import {
-  callWorker,
-  callWorkerForCustomer,
-  parseWorkerUrl,
-} from "./worker-client";
+import { signInForTesting } from "./current-customer.testing";
+import type * as WorkerClient from "./worker-client";
+
+let callWorker: typeof WorkerClient.callWorker;
+let callWorkerForCustomer: typeof WorkerClient.callWorkerForCustomer;
+let parseWorkerUrl: typeof WorkerClient.parseWorkerUrl;
+
+before(async () => {
+  signInForTesting();
+  ({ callWorker, callWorkerForCustomer, parseWorkerUrl } =
+    await import("./worker-client"));
+});
 
 test("worker URL accepts the loopback hosts", () => {
   for (const value of [

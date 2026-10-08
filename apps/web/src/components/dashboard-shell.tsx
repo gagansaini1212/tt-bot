@@ -15,6 +15,10 @@ import {
 } from "lucide-react";
 
 import { OrderTicket } from "@/components/order-ticket";
+import {
+  SignedInCustomer,
+  type SignedInCustomerProps,
+} from "@/components/signed-in-customer";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -85,7 +89,10 @@ function Brand() {
   );
 }
 
-export function DashboardShell({ children }: { children: ReactNode }) {
+export function DashboardShell({
+  children,
+  customer,
+}: { children: ReactNode } & SignedInCustomerProps) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
   const closeMenu = () => setMenuOpen(false);
@@ -139,6 +146,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
                 Binance testnet · virtual funds
               </p>
             </div>
+            <SignedInCustomer customer={customer} />
           </div>
         </aside>
 
@@ -185,6 +193,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
                       {...settings}
                     />
                     <ThemeToggle />
+                    <SignedInCustomer customer={customer} />
                   </div>
                 </SheetContent>
               </Sheet>

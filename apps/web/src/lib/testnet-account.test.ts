@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, mock, test } from "node:test";
-import { getTestnetAccount, snapshotFreshness } from "./testnet-account";
+import { afterEach, before, beforeEach, mock, test } from "node:test";
+import { signInForTesting } from "./current-customer.testing";
+import type * as TestnetAccount from "./testnet-account";
+
+let getTestnetAccount: typeof TestnetAccount.getTestnetAccount;
+let snapshotFreshness: typeof TestnetAccount.snapshotFreshness;
+
+before(async () => {
+  signInForTesting();
+  ({ getTestnetAccount, snapshotFreshness } =
+    await import("./testnet-account"));
+});
 
 const capturedAt = "2026-10-08T12:00:00.000Z";
 const captured = Date.parse(capturedAt);
