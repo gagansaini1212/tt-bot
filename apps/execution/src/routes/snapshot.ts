@@ -9,15 +9,17 @@ export function createSnapshotCache(now: () => number) {
 
 /**
  * The account's balances, open orders and recent fills, served only to the
- * customer who owns it. Cached for up to 10 seconds; order routes clear the
- * cache, so a placement or cancel shows on the next read.
+ * customer who owns it. Cached per account for up to 10 seconds; order routes
+ * and key changes clear the cache, so they show on the next read.
  */
 export function snapshot(cache: ReturnType<typeof createSnapshotCache>) {
   return handler({
     query: z.strictObject({}),
-    handle: async ({ exchange }) => ({
+    handle: async ({ exchange, account }) => ({
       status: "connected",
-      snapshot: await cache("snapshot", () => exchange.getSnapshot()),
+      snapshot: await cache(account.exchangeAccountId, () =>
+        exchange.getSnapshot(),
+      ),
     }),
   });
 }

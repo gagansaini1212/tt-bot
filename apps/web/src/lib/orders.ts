@@ -47,6 +47,7 @@ function writeFailure(
     "invalid_url",
     "signed_out",
     "worker_not_configured",
+    "exchange_keys_unusable",
     "no_exchange_account",
     "database_unavailable",
     "invalid_request",

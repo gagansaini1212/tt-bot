@@ -19,6 +19,8 @@ import {
   type ManualOrderExchange,
 } from "../manual-orders";
 import type { OrderIntentStore } from "../order-intents";
+import type { RiskLimitStore } from "../risk-limits";
+import { MemoryRiskLimits, TEST_RISK_LIMITS } from "./memory-risk-limits";
 
 export const rules = (instrument: TestnetInstrument): SymbolRules => ({
   instrument,
@@ -212,17 +214,18 @@ export function deskFixture({
   intents,
   scope,
   gate,
+  risk = new MemoryRiskLimits({ limits: TEST_RISK_LIMITS }),
 }: {
   behaviour?: Behaviour;
   env?: Record<string, string>;
   intents: OrderIntentStore;
   scope: AccountScope;
   gate?: Promise<void>;
+  risk?: Pick<RiskLimitStore, "current" | "dailyRiskUsed">;
 }) {
   const loaded = loadManualTradingConfig({
     TESTNET_MANUAL_INSTRUMENTS: "BTC-USDT,ETH-USDT",
     TESTNET_MANUAL_ALLOCATION_USDT: "300",
-    TESTNET_MAX_ORDER_NOTIONAL_USDT: "100",
     TESTNET_MARKET_MAX_SLIPPAGE_PERCENT: "0.5",
     ...env,
   });
@@ -234,6 +237,7 @@ export function deskFixture({
     exchange: fake.exchange,
     config: loaded.config,
     intents,
+    risk,
     now: () => new Date(Date.now() + offset),
     onChange: () => changes++,
   });

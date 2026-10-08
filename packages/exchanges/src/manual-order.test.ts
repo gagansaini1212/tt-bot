@@ -3,11 +3,14 @@ import { test } from "node:test";
 import type { TestnetOrder } from "./binance-spot-testnet.js";
 import {
   cancelImpact,
+  defaultStopLossPrice,
   manualCancelRequestSchema,
   manualExposure,
   manualOrderRequestSchema,
+  manualRiskLimitsSchema,
   manualTestnetPolicy,
   planManualOrder,
+  stopLossRisk,
   type ManualOrderRequest,
   type ManualOrderTicket,
 } from "./manual-order.js";
@@ -49,7 +52,13 @@ function ticket(
   return {
     capturedAt: "2027-01-15T08:00:00.000Z",
     policy: manualTestnetPolicy(config, exposure, account),
-    maxOrderNotional: config.maxOrderNotional,
+    riskLimits: {
+      version: 3,
+      maxOrderNotional: config.maxOrderNotional,
+      maxDailyRisk: "10",
+      defaultStopLossPercent: "2",
+    },
+    dailyRiskUsed: "0",
     marketSlippage: config.marketSlippage,
     freeUsdt: "1000",
     markets: [{ rules, bestAsk: "60000.00" }],
@@ -80,7 +89,7 @@ test("a limit entry inside every limit passes all checks as a resting GTC order"
   assert.equal(plan.passed, true);
   assert.deepEqual(
     plan.checks.map((check) => check.name),
-    ["limits", "cap", "filters", "balance"],
+    ["limits", "cap", "daily_risk", "filters", "balance"],
   );
   assert.equal(plan.notional, "60");
   assert.equal(plan.entry?.timeInForce, "GTC");
@@ -127,6 +136,78 @@ test("the per-order cap, filters and free balance are checked separately", () =>
   assert.deepEqual(failed({ ...limit, quantity: "0.002" }), ["limits", "cap"]);
   assert.deepEqual(failed({ ...limit, price: "60000.005" }), ["filters"]);
   assert.deepEqual(failed(limit, ticket({ freeUsdt: "59.99" })), ["balance"]);
+});
+
+test("the daily risk limit counts this order's loss at its stop with today's earlier orders", () => {
+  // 0.001 BTC from 60000 down to 58000 loses 2 USDT at the stop.
+  const plan = planManualOrder(
+    limit,
+    ticket({ dailyRiskUsed: "7.5" }),
+    now,
+    ids,
+  );
+  const check = plan.checks.find((entry) => entry.name === "daily_risk");
+  assert.equal(check?.passed, true);
+  assert.match(
+    check?.detail ?? "",
+    /loses about 2 USDT.*risk 9.5 of the 10 USDT/,
+  );
+  assert.deepEqual(failed(limit, ticket({ dailyRiskUsed: "8.01" })), [
+    "daily_risk",
+  ]);
+  // Exactly at the limit is within it.
+  assert.deepEqual(failed(limit, ticket({ dailyRiskUsed: "8" })), []);
+  const over = planManualOrder(
+    limit,
+    ticket({ dailyRiskUsed: "8.01" }),
+    now,
+    ids,
+  ).checks.find((entry) => entry.name === "daily_risk");
+  assert.match(
+    over?.detail ?? "",
+    /already risk 8.01 USDT.*10 USDT daily risk limit set in Settings/,
+  );
+  assert.equal(
+    stopLossRisk({
+      price: "60000",
+      stopLossPrice: "61000",
+      quantity: "1",
+    }).toFixed(),
+    "0",
+  );
+});
+
+test("the default stop loss rounds up to the tick so it never risks more than its percentage", () => {
+  assert.equal(defaultStopLossPrice("60000", "2", "0.01"), "58800");
+  // 60000.07 × 0.985 = 59100.06895, rounded up to 59100.07.
+  assert.equal(defaultStopLossPrice("60000.07", "1.5", "0.01"), "59100.07");
+  // 3333.33 × 0.97 = 3233.3301, rounded up to 3233.34.
+  assert.equal(defaultStopLossPrice("3333.33", "3", "0.01"), "3233.34");
+  // Rounding up to the entry leaves no stop.
+  assert.equal(defaultStopLossPrice("1", "0.1", "1"), undefined);
+});
+
+test("risk limit changes accept bounded positive decimals only", () => {
+  const valid = {
+    maxOrderNotional: "250.5",
+    maxDailyRisk: "40",
+    defaultStopLossPercent: "2.25",
+  };
+  assert.ok(manualRiskLimitsSchema.safeParse(valid).success);
+  for (const change of [
+    { ...valid, maxOrderNotional: "0" },
+    { ...valid, maxOrderNotional: "-5" },
+    { ...valid, maxOrderNotional: "1e3" },
+    { ...valid, maxDailyRisk: "0.000000001" },
+    { ...valid, defaultStopLossPercent: "100" },
+    { ...valid, defaultStopLossPercent: "2.255" },
+    { ...valid, extra: true },
+  ])
+    assert.equal(
+      manualRiskLimitsSchema.safeParse(change).success,
+      false,
+      JSON.stringify(change),
+    );
 });
 
 test("Binance filters cover every leg and the exits' size after fees", () => {
@@ -370,7 +451,7 @@ test("a stop-limit entry is planned as a resting limit entry held until its stop
   assert.equal(plan.passed, true);
   assert.deepEqual(
     plan.checks.map((check) => check.name),
-    ["price", "limits", "cap", "filters", "balance"],
+    ["price", "limits", "cap", "daily_risk", "filters", "balance"],
   );
   assert.match(plan.checks[0].detail, /at or above 61000/);
   assert.equal(plan.entry?.timeInForce, "GTC");

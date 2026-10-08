@@ -26,7 +26,8 @@ export function parseWorkerUrl(value: string): URL | undefined {
 /**
  * Why a worker call failed. The request was not sent after `missing_token`,
  * `invalid_url` or `signed_out`. The worker did nothing after
- * `worker_not_configured`, `no_exchange_account` or `database_unavailable`.
+ * `worker_not_configured`, `exchange_keys_unusable`, `no_exchange_account` or
+ * `database_unavailable`.
  * After `unreachable`, `timeout` or `invalid_response`, a write may have
  * reached the worker, so its outcome is unknown.
  */
@@ -35,6 +36,7 @@ export type WorkerFailureReason =
   | "invalid_url"
   | "signed_out"
   | "worker_not_configured"
+  | "exchange_keys_unusable"
   | "no_exchange_account"
   | "database_unavailable"
   | "unreachable"
@@ -95,7 +97,12 @@ const FAILURES: Record<WorkerFailureReason, Omit<WorkerFailure, "reason">> = {
   worker_not_configured: {
     status: "not_configured",
     message:
-      "Configure the Binance testnet provider and credentials in the execution worker, then restart it.",
+      "Add your Binance Spot Testnet API keys in Settings, or configure them in the execution worker and restart it.",
+  },
+  exchange_keys_unusable: {
+    status: "not_configured",
+    message:
+      "The execution worker cannot open your saved exchange keys. Check its CREDENTIALS_MASTER_KEY, or save the keys again in Settings.",
   },
   no_exchange_account: {
     status: "not_configured",
@@ -200,7 +207,9 @@ export async function callWorker<T>({
         ? "database_unavailable"
         : reason === "exchange_account"
           ? "no_exchange_account"
-          : "worker_not_configured",
+          : reason === "credentials"
+            ? "exchange_keys_unusable"
+            : "worker_not_configured",
     );
   const parsed = schema.safeParse(data);
   if (status !== "connected" || !parsed.success)

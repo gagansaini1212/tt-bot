@@ -17,6 +17,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import {
+  defaultStopLossPrice,
   manualOrderRequestSchema,
   marketEntryPrice,
   planManualOrder,
@@ -63,6 +64,9 @@ type Draft = {
   quantity: string;
   takeProfitPrice: string;
   stopLossPrice: string;
+  // Until the trader types a stop loss, it follows the default percentage
+  // from Settings below the entry price.
+  stopLossEdited: boolean;
 };
 
 // The preview is advisory, so it uses fixed IDs. The worker issues its own.
@@ -99,6 +103,7 @@ export function OrderTicket({
     quantity: "",
     takeProfitPrice: "",
     stopLossPrice: "",
+    stopLossEdited: false,
   });
   const [attempt, setAttempt] = useState<{
     unsettledId?: string;
@@ -228,6 +233,18 @@ function orderForm(draft: Draft, ticket: ManualOrderTicket) {
         )
       : undefined;
   const entryPrice = draft.type === "market" ? marketPrice : draft.price;
+  const { defaultStopLossPercent } = ticket.riskLimits;
+  const defaultStop =
+    market && entryPrice && isDecimal(entryPrice)
+      ? defaultStopLossPrice(
+          entryPrice,
+          defaultStopLossPercent,
+          market.rules.tickSize,
+        )
+      : undefined;
+  const stopLossPrice = draft.stopLossEdited
+    ? draft.stopLossPrice
+    : (defaultStop ?? "");
   const parsed = manualOrderRequestSchema.safeParse({
     type: draft.type,
     instrument,
@@ -235,7 +252,7 @@ function orderForm(draft: Draft, ticket: ManualOrderTicket) {
     ...(draft.type === "market" ? {} : { price: draft.price }),
     ...(draft.type === "stop_limit" ? { stopPrice: draft.stopPrice } : {}),
     takeProfitPrice: draft.takeProfitPrice,
-    stopLossPrice: draft.stopLossPrice,
+    stopLossPrice,
     listClientOrderId: PREVIEW.listClientOrderId,
   });
   const missing = [
@@ -245,7 +262,7 @@ function orderForm(draft: Draft, ticket: ManualOrderTicket) {
     draft.type !== "market" && !isDecimal(draft.price) && "a limit price",
     !isDecimal(draft.quantity) && "a quantity",
     !isDecimal(draft.takeProfitPrice) && "a take-profit price",
-    !isDecimal(draft.stopLossPrice) && "a stop-loss price",
+    !isDecimal(stopLossPrice) && "a stop-loss price",
   ].filter(Boolean) as string[];
   return {
     instrument,
@@ -253,6 +270,8 @@ function orderForm(draft: Draft, ticket: ManualOrderTicket) {
     market,
     base,
     entryPrice,
+    stopLossPrice,
+    defaultStopLossPercent,
     missing,
     request: parsed.success ? parsed.data : undefined,
     // Measured on the ticket's clock, so the preview is a pure function of it.
@@ -416,10 +435,26 @@ function OrderFields({
           value={draft.takeProfitPrice}
         />
         <PriceField
+          hint={
+            draft.stopLossEdited ? (
+              <Button
+                className="h-auto p-0 text-xs"
+                onClick={() => onChange({ stopLossEdited: false })}
+                size="xs"
+                variant="link"
+              >
+                Use the {form.defaultStopLossPercent}% default
+              </Button>
+            ) : (
+              `${form.defaultStopLossPercent}% below the entry, your default in Settings.`
+            )
+          }
           label="Stop loss"
-          onChange={(stopLossPrice) => onChange({ stopLossPrice })}
+          onChange={(stopLossPrice) =>
+            onChange({ stopLossPrice, stopLossEdited: true })
+          }
           required
-          value={draft.stopLossPrice}
+          value={form.stopLossPrice}
         />
       </div>
 
@@ -535,7 +570,7 @@ function PriceField({
   label: string;
   value: string;
   onChange: (value: string) => void;
-  hint?: string;
+  hint?: ReactNode;
   unit?: string;
   required?: boolean;
 }) {

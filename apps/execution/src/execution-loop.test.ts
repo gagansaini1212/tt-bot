@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { after, before, describe, test } from "node:test";
 import Decimal from "decimal.js";
 import { withCustomerScope } from "@crypto-trading/database";
@@ -20,12 +20,14 @@ import { FakeBinance } from "./fixtures/fake-binance";
 import { limit, market } from "./fixtures/fake-exchange";
 import { loadManualTradingConfig, ManualOrderDesk } from "./manual-orders";
 import { PostgresOrderIntents, RECONCILE_TOPIC } from "./order-intents";
+import { NotificationWebhooks, WEBHOOK_TOPIC } from "./notification-webhooks";
+import { PostgresRiskLimits } from "./risk-limits";
+import { SecretBox } from "./secret-box";
 
 const config = (() => {
   const loaded = loadManualTradingConfig({
     TESTNET_MANUAL_INSTRUMENTS: "BTC-USDT,ETH-USDT",
     TESTNET_MANUAL_ALLOCATION_USDT: "300",
-    TESTNET_MAX_ORDER_NOTIONAL_USDT: "100",
     TESTNET_MARKET_MAX_SLIPPAGE_PERCENT: "0.5",
   });
   assert.ok(loaded.ok);
@@ -74,12 +76,25 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
    * test database. `restart` builds a new desk and loop on the same state,
    * as a restarted worker would.
    */
-  async function world({ lockCustomers = true } = {}) {
+  async function world({
+    lockCustomers = true,
+    webhooks,
+  }: { lockCustomers?: boolean; webhooks?: NotificationWebhooks } = {}) {
     const scope = await addCustomer();
     let offset = 0;
     const now = () => new Date(Date.now() + offset);
     const fake = new FakeBinance(now);
     const intents = new PostgresOrderIntents(database.app);
+    const risk = new PostgresRiskLimits(database.app);
+    await risk.change(
+      scope,
+      {
+        maxOrderNotional: "100",
+        maxDailyRisk: "1000",
+        defaultStopLossPercent: "2",
+      },
+      0,
+    );
     const accounts: AccountResolver = async (customerId) =>
       customerId === scope.customerId ? scope : undefined;
     const logs: string[] = [];
@@ -88,6 +103,7 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
         exchange: fake,
         config,
         intents,
+        risk,
         now,
       });
       const loop = new ExecutionLoop({
@@ -99,6 +115,7 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
         now,
         log: (message) => logs.push(message),
         lockCustomers,
+        webhooks,
       });
       return { desk, loop };
     };
@@ -107,6 +124,7 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
       scope,
       fake,
       intents,
+      risk,
       logs,
       get desk() {
         return desk;
@@ -274,6 +292,70 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
     assert.equal(w.fake.count("placeMarketSell"), 0);
     assert.deepEqual(await notifications(w.scope), []);
     assert.ok(w.loop.lastPassAt(w.scope.customerId));
+  });
+
+  test("every alert the loop raises is posted to the customer's webhook exactly once", async () => {
+    const posts: string[] = [];
+    const webhooks = new NotificationWebhooks({
+      database: database.app,
+      box: new SecretBox(randomBytes(32)),
+      fetch: (async (_url: string | URL | Request, init?: RequestInit) => {
+        posts.push(JSON.parse(String(init?.body)).content);
+        return new Response(null, { status: 204 });
+      }) as typeof fetch,
+    });
+    const w = await world({ webhooks });
+    await webhooks.save(
+      w.scope.customerId,
+      `https://discord.com/api/webhooks/123456789012345678/${"T".repeat(68)}`,
+    );
+    await w.place(limit("ct_loop_hook"));
+    w.fake.fillEntry("ct_loop_hook", "0.001", { exits: "drop" });
+    await w.pass();
+    // Due by PostgreSQL's clock, which may be a little ahead of this one.
+    w.advance(5_000);
+    await w.loop.deliverAlerts();
+    await w.loop.deliverAlerts();
+    assert.deepEqual(await notifications(w.scope), [
+      "critical:protection_failed",
+      "info:position_closed",
+    ]);
+    // One post for each, in any order.
+    assert.deepEqual(posts.map((post) => post.split(":")[0]).sort(), [
+      "**Critical",
+      "**Info",
+    ]);
+    // Later passes and rounds post nothing again.
+    await w.pass();
+    await w.loop.deliverAlerts();
+    assert.equal(posts.length, 2);
+    const jobs = await database.admin<{ completed: boolean }[]>`
+      select completed_at is not null as completed from outbox_jobs
+      where customer_id = ${w.scope.customerId} and topic = ${WEBHOOK_TOPIC}
+    `;
+    assert.deepEqual(
+      jobs.map((job) => job.completed),
+      [true, true],
+    );
+  });
+
+  test("exits are never held back by the risk limits", async () => {
+    const w = await world();
+    await w.place(limit("ct_loop_exit_risk"));
+    // Far below what the entry risks: new entries would be refused.
+    await w.risk.change(
+      w.scope,
+      {
+        maxOrderNotional: "1",
+        maxDailyRisk: "0.01",
+        defaultStopLossPercent: "2",
+      },
+      1,
+    );
+    w.fake.fillEntry("ct_loop_exit_risk", "0.001", { exits: "drop" });
+    await w.pass();
+    assert.equal(w.fake.count("placeMarketSell"), 1);
+    assert.equal((await reconciliation("ct_loop_exit_risk"))?.state, "closed");
   });
 
   test("a filled entry whose exits Binance dropped is sold once, with a loud alert", async () => {
@@ -560,6 +642,41 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
     assert.equal(await intentStatus("ct_loop_stop_fail"), "rejected");
     assert.deepEqual(await notifications(w.scope), [
       "warning:stop_limit_failed",
+    ]);
+  });
+
+  test("a stop-limit entry meets the latest risk limits when it triggers, counting its own risk once", async () => {
+    const w = await world();
+    // Each risks 0.001 × (61100 − 59000) = 2.1 at its stop.
+    await w.place(stopLimit("ct_loop_risk_a"));
+    await w.place(stopLimit("ct_loop_risk_b"));
+    await w.place(stopLimit("ct_loop_risk_c"));
+    // Lowered while they are held: room for two, not three.
+    await w.risk.change(
+      w.scope,
+      {
+        maxOrderNotional: "100",
+        maxDailyRisk: "4.2",
+        defaultStopLossPercent: "2",
+      },
+      1,
+    );
+    // Held entries count, so a third, placed now, is refused at once.
+    const refused = await w.place(stopLimit("ct_loop_risk_d"));
+    assert.equal(refused.status, "rejected");
+    w.fake.setPrice("BTC-USDT", "61000");
+    await w.pass();
+    // The first to trigger still sees the other two held, all three over
+    // the limit, and is rejected unsent. The other two then fit exactly:
+    // each counts its own risk once, not twice.
+    assert.equal(w.fake.count("placeProtectedEntry"), 2);
+    const statuses = await Promise.all(
+      ["a", "b", "c"].map((id) => intentStatus(`ct_loop_risk_${id}`)),
+    );
+    assert.deepEqual(statuses.sort(), [
+      "acknowledged",
+      "acknowledged",
+      "rejected",
     ]);
   });
 

@@ -6,6 +6,7 @@ import {
   type BinanceSpotTestnet,
 } from "@crypto-trading/exchanges";
 import type { AccountResolver, AccountScope } from "./accounts";
+import type { ExchangeSource } from "./exchange-credentials";
 
 type Method = "GET" | "POST" | "DELETE";
 
@@ -16,7 +17,8 @@ type Method = "GET" | "POST" | "DELETE";
  *
  * The request acts for the customer the web app names in the X-Customer-Id
  * header, and runs only if that customer owns the exchange account the
- * worker trades on. `account` is that account.
+ * worker trades on. `account` is that account, and `exchange` the Binance
+ * client for its keys: the ones saved in Settings, or else the worker's.
  */
 export interface Handler<Query, Body> {
   query: z.ZodType<Query>;
@@ -26,6 +28,37 @@ export interface Handler<Query, Body> {
     query: Query;
     body: Body;
     account: AccountScope;
+  }): Promise<object>;
+}
+
+/**
+ * A customer's endpoint for their exchange account that does not call
+ * Binance, such as their keys or risk limits. It runs like a `Handler`, but
+ * also without exchange keys.
+ */
+export interface AccountHandler<Query, Body> {
+  needs: "account";
+  query: z.ZodType<Query>;
+  body?: z.ZodType<Body>;
+  handle(context: {
+    query: Query;
+    body: Body;
+    account: AccountScope;
+  }): Promise<object>;
+}
+
+/**
+ * A customer's endpoint that needs no exchange account, such as their
+ * notifications. It runs for the customer named in X-Customer-Id.
+ */
+export interface CustomerHandler<Query, Body> {
+  needs: "customer";
+  query: z.ZodType<Query>;
+  body?: z.ZodType<Body>;
+  handle(context: {
+    query: Query;
+    body: Body;
+    customerId: string;
   }): Promise<object>;
 }
 
@@ -46,6 +79,20 @@ export function handler<Query, Body = undefined>(
   return definition;
 }
 
+/** Infers an account handler's query and body types. */
+export function accountHandler<Query, Body = undefined>(
+  definition: Omit<AccountHandler<Query, Body>, "needs">,
+): AccountHandler<Query, Body> {
+  return { ...definition, needs: "account" };
+}
+
+/** Infers a customer handler's query and body types. */
+export function customerHandler<Query, Body = undefined>(
+  definition: Omit<CustomerHandler<Query, Body>, "needs">,
+): CustomerHandler<Query, Body> {
+  return { ...definition, needs: "customer" };
+}
+
 /** Infers a public handler's query type. */
 export function publicHandler<Query>(
   definition: Omit<PublicHandler<Query>, "public">,
@@ -57,7 +104,7 @@ export interface Route {
   method: Method;
   path: `/${string}`;
   handle(input: {
-    exchange: BinanceSpotTestnet | undefined;
+    exchanges: ExchangeSource;
     accounts: AccountResolver;
     search: string;
     request: IncomingMessage;
@@ -80,14 +127,19 @@ const customerIdSchema = z.uuid();
 /**
  * Why the worker did nothing. The web app treats each as "not sent".
  * - exchange: no Binance credentials.
+ * - credentials: saved credentials the worker cannot open.
  * - database: PostgreSQL is unreachable or misconfigured.
  * - exchange_account: the customer does not own the account the worker
  *   trades on, or it has not been seeded.
  */
-function notConfigured(reason: "exchange" | "database" | "exchange_account") {
+function notConfigured(
+  reason: "exchange" | "credentials" | "database" | "exchange_account",
+) {
   const messages = {
     exchange:
       "Configure Binance Spot Testnet in the execution service to connect your virtual account.",
+    credentials:
+      "The saved exchange keys cannot be opened. Check the execution worker's CREDENTIALS_MASTER_KEY, or save the keys again in Settings.",
     database:
       "The execution service cannot use its database. Check its output, then retry.",
     exchange_account:
@@ -99,30 +151,36 @@ function notConfigured(reason: "exchange" | "database" | "exchange_account") {
 export function route<Query, Body>(
   method: Method,
   path: `/${string}`,
-  definition: Handler<Query, Body> | PublicHandler<Query>,
+  definition:
+    | Handler<Query, Body>
+    | AccountHandler<Query, Body>
+    | CustomerHandler<Query, Body>
+    | PublicHandler<Query>,
 ): Route {
   return {
     method,
     path,
-    async handle({ exchange, accounts, search, request }) {
+    async handle({ exchanges, accounts, search, request }) {
       const query = parse(
         definition.query,
         searchParameters(search),
         "query parameters",
       );
       if ("public" in definition) {
+        const exchange = exchanges.market();
         if (!exchange) return notConfigured("exchange");
         return definition.handle({ exchange, query });
       }
       const body = definition.body
         ? parse(definition.body, await readJson(request), "request body")
         : (undefined as Body);
-      if (!exchange) return notConfigured("exchange");
       const customerId = parse(
         customerIdSchema,
         request.headers["x-customer-id"],
         "customer",
       );
+      if ("needs" in definition && definition.needs === "customer")
+        return definition.handle({ query, body, customerId });
       let account: AccountScope | undefined;
       try {
         account = await accounts(customerId);
@@ -130,7 +188,21 @@ export function route<Query, Body>(
         return notConfigured("database");
       }
       if (!account) return notConfigured("exchange_account");
-      return definition.handle({ exchange, query, body, account });
+      if ("needs" in definition)
+        return definition.handle({ query, body, account });
+      let lookup: Awaited<ReturnType<ExchangeSource["forAccount"]>>;
+      try {
+        lookup = await exchanges.forAccount(account);
+      } catch {
+        return notConfigured("database");
+      }
+      if ("problem" in lookup) return notConfigured(lookup.problem);
+      return definition.handle({
+        exchange: lookup.exchange,
+        query,
+        body,
+        account,
+      });
     },
   };
 }
@@ -142,12 +214,12 @@ export function route<Query, Body>(
  */
 export function createRequestListener({
   token,
-  exchange,
+  exchanges,
   accounts,
   routes,
 }: {
   token: string;
-  exchange: BinanceSpotTestnet | undefined;
+  exchanges: ExchangeSource;
   accounts: AccountResolver;
   routes: readonly Route[];
 }): RequestListener {
@@ -183,7 +255,7 @@ export function createRequestListener({
       send(
         200,
         await route.handle({
-          exchange,
+          exchanges,
           accounts,
           search: queryStart === -1 ? "" : target.slice(queryStart + 1),
           request,

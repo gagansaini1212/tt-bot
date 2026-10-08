@@ -79,7 +79,7 @@ test("when the request was never sent, the order is reported as not placed", asy
   assert.equal((await submitOrder(request)).status, "rejected");
   mock.restoreAll();
   // The worker could not act for this customer, so it sent nothing.
-  for (const reason of ["database", "exchange_account"]) {
+  for (const reason of ["database", "exchange_account", "credentials"]) {
     respond(() => Response.json({ status: "not_configured", reason }));
     assert.equal((await submitOrder(request)).status, "rejected", reason);
     mock.restoreAll();

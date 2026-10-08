@@ -183,6 +183,16 @@ test("maps each failure to a user-facing state", async () => {
       () =>
         Response.json({
           status: "not_configured",
+          reason: "credentials",
+          message: "x",
+        }),
+      "not_configured",
+      "exchange_keys_unusable",
+    ],
+    [
+      () =>
+        Response.json({
+          status: "not_configured",
           reason: "database",
           message: "x",
         }),

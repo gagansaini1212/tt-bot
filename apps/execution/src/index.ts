@@ -13,13 +13,29 @@ import {
   testnetInstrumentSchema,
   type TestnetOrder,
 } from "@crypto-trading/exchanges";
-import { authorizeTradeProposal } from "@crypto-trading/domain";
+import { authorizeTradeProposal, utcDayStart } from "@crypto-trading/domain";
 import { accountResolver } from "./accounts";
+import {
+  ExchangeCredentialStore,
+  privateKeyType,
+  savedOrEnvironmentExchanges,
+} from "./exchange-credentials";
 import { createRequestListener, safeError } from "./http";
 import { ExecutionLoop } from "./execution-loop";
 import { assertNoJournal, importJournal } from "./legacy-journal";
+import {
+  markNotificationsRead,
+  notificationHistory,
+  NotificationWebhooks,
+} from "./notification-webhooks";
 import { PostgresOrderIntents, type Settlement } from "./order-intents";
+import {
+  manualOrderRisk,
+  PostgresRiskLimits,
+  withinPlatformMaximums,
+} from "./risk-limits";
 import { createWorker } from "./routes";
+import { SecretBox } from "./secret-box";
 
 export { authorizeTradeProposal };
 
@@ -82,7 +98,9 @@ async function main() {
       );
     }
   }
-  const exchange =
+  // The worker's own keys, from its .env file. They serve the dev customer's
+  // testnet account until keys are saved for it in Settings.
+  const environment =
     provider === "binance-spot-testnet" &&
     process.env.BINANCE_TESTNET_API_KEY &&
     (privateKey || process.env.BINANCE_TESTNET_API_SECRET)
@@ -92,6 +110,23 @@ async function main() {
           privateKey,
         })
       : undefined;
+  // Throws now if the master key is set but malformed.
+  const box = SecretBox.fromEnvironment(process.env);
+  const exchangeSource = (database: Database) =>
+    savedOrEnvironmentExchanges({
+      store: new ExchangeCredentialStore(database, box),
+      environment,
+      // Market data is public, so it needs no keys.
+      market:
+        environment ??
+        (provider === "binance-spot-testnet"
+          ? new BinanceSpotTestnet({ publicData: true })
+          : undefined),
+    });
+  if (process.env.TESTNET_MAX_ORDER_NOTIONAL_USDT)
+    console.warn(
+      "TESTNET_MAX_ORDER_NOTIONAL_USDT is no longer read. Set the per-order cap in Settings → Risk limits, then remove it from apps/execution/.env.",
+    );
 
   if (command === "serve") {
     const token = process.env.EXECUTION_API_TOKEN;
@@ -106,26 +141,54 @@ async function main() {
     await assertNoJournal(process.env);
     const intents = new PostgresOrderIntents(db);
     const accounts = accountResolver(db);
+    const exchanges = exchangeSource(db);
+    const risk = new PostgresRiskLimits(db);
+    const webhooks = new NotificationWebhooks({ database: db, box });
     let loop: ExecutionLoop | undefined;
     const worker = createWorker({
       intents,
+      risk,
       reader: { state: (scope) => loop!.state(scope) },
+      settings: {
+        keys: new ExchangeCredentialStore(db, box),
+        exchanges,
+        environmentKeys:
+          environment && process.env.BINANCE_TESTNET_API_KEY
+            ? {
+                keyType: privateKey ? privateKeyType(privateKey) : "hmac",
+                apiKeyLast4: process.env.BINANCE_TESTNET_API_KEY.slice(-4),
+              }
+            : undefined,
+        risk,
+        webhooks,
+        notifications: {
+          list: (customerId) => notificationHistory(db, customerId),
+          markRead: (customerId) => markNotificationsRead(db, customerId),
+        },
+      },
     });
     // Watches every customer's orders, independently of any request or AI
-    // call (ADR 0002). Without credentials there is nothing to watch.
-    if (exchange) {
-      loop = new ExecutionLoop({
-        database: db,
-        exchange,
-        accounts,
-        intents,
-        desk: worker.deskFor(exchange),
-        onChange: worker.accountChanged,
-      });
-    }
+    // call (ADR 0002), with each account's own keys: an account without keys
+    // the worker can use is skipped. It also delivers alerts to webhooks.
+    loop = new ExecutionLoop({
+      database: db,
+      clients: async (scope) => {
+        const lookup = await exchanges.forAccount(scope);
+        return "problem" in lookup
+          ? undefined
+          : {
+              exchange: lookup.exchange,
+              desk: worker.deskFor(lookup.exchange),
+            };
+      },
+      accounts,
+      intents,
+      webhooks,
+      onChange: worker.accountChanged,
+    });
     const handle = createRequestListener({
       token,
-      exchange,
+      exchanges,
       accounts,
       routes: worker.routes,
     });
@@ -141,10 +204,14 @@ async function main() {
       },
     );
     if (ipv6) servers.push(ipv6);
-    loop?.start();
+    loop.start();
     console.info(
-      `Execution service on http://127.0.0.1:${port}${ipv6 ? ` and http://[::1]:${port}` : ""}. Provider: ${provider}.${loop ? " Execution loop running." : ""}`,
+      `Execution service on http://127.0.0.1:${port}${ipv6 ? ` and http://[::1]:${port}` : ""}. Provider: ${provider}. Execution loop running.`,
     );
+    if (!box)
+      console.info(
+        "CREDENTIALS_MASTER_KEY is not set, so keys and webhooks cannot be saved in Settings.",
+      );
     const shutdown = () =>
       Promise.all([
         ...servers.map(
@@ -173,10 +240,19 @@ async function main() {
     await database?.end();
     return;
   }
-  if (!exchange)
+  const setup =
+    "Set EXCHANGE_PROVIDER=binance-spot-testnet, and save keys in Settings or set BINANCE_TESTNET_API_KEY and either BINANCE_TESTNET_PRIVATE_KEY_PATH or BINANCE_TESTNET_API_SECRET in apps/execution/.env.";
+  if (provider !== "binance-spot-testnet") throw new Error(setup);
+  // Commands act for the dev customer, with the keys the dashboard uses.
+  const scope = await cliScope();
+  const lookup = await exchangeSource(openDatabase()).forAccount(scope);
+  if ("problem" in lookup)
     throw new Error(
-      "Set EXCHANGE_PROVIDER=binance-spot-testnet, BINANCE_TESTNET_API_KEY, and either BINANCE_TESTNET_PRIVATE_KEY_PATH or BINANCE_TESTNET_API_SECRET in apps/execution/.env.",
+      lookup.problem === "credentials"
+        ? "The keys saved in Settings cannot be opened. Set CREDENTIALS_MASTER_KEY to the key that saved them, or save the keys again."
+        : setup,
     );
+  const { exchange } = lookup;
   let result: unknown;
   switch (command) {
     case "check": {
@@ -184,6 +260,7 @@ async function main() {
       const account = await exchange.getAccount();
       result = {
         provider,
+        keys: lookup.source,
         connected: true,
         canTrade: account.canTrade,
         assets: account.balances.length,
@@ -223,13 +300,29 @@ async function main() {
         price: args[3],
         clientOrderId: args[4],
       });
-      const cap = process.env.TESTNET_MAX_ORDER_NOTIONAL_USDT;
-      if (!cap || !/^\d+(\.\d+)?$/.test(cap) || !new Decimal(cap).gt(0))
+      // The customer's current limits, read before every order.
+      const risk = new PostgresRiskLimits(openDatabase());
+      const limits = await risk.current(scope);
+      if (!limits)
         throw new Error(
-          "Set a positive TESTNET_MAX_ORDER_NOTIONAL_USDT for manual development orders.",
+          "Set your risk limits in Settings → Risk limits before placing manual orders.",
         );
-      if (new Decimal(order.quantity).times(order.price).gt(cap))
-        throw new Error("Order exceeds TESTNET_MAX_ORDER_NOTIONAL_USDT.");
+      const { maxOrderNotional, maxDailyRisk } = withinPlatformMaximums(limits);
+      if (new Decimal(order.quantity).times(order.price).gt(maxOrderNotional))
+        throw new Error(
+          `Order exceeds the ${maxOrderNotional} USDT per-order cap set in Settings.`,
+        );
+      // A sell adds no risk, so it is never refused for it.
+      const orderRisk = manualOrderRisk({ kind: "limit_order", order });
+      const dayRisk = orderRisk.isZero()
+        ? orderRisk
+        : orderRisk.plus(
+            await risk.dailyRiskUsed(scope, utcDayStart(new Date())),
+          );
+      if (dayRisk.gt(maxDailyRisk))
+        throw new Error(
+          `A CLI buy has no stop loss, so all of it counts against the daily risk limit: today's manual orders would risk ${dayRisk.toFixed()} USDT, over the ${maxDailyRisk} USDT set in Settings.`,
+        );
       // Binance validates current price, quantity, notional and account filters.
       await exchange.testLimitOrder(order);
       if (command === "test-order") {
@@ -243,7 +336,6 @@ async function main() {
       // Record intent before sending. Never submit this ID twice, even after restart.
       await assertNoJournal(process.env);
       const intents = new PostgresOrderIntents(openDatabase());
-      const scope = await cliScope();
       const id = order.clientOrderId;
       if (!(await intents.record(scope, { kind: "limit_order", order }, "cli")))
         throw new Error(

@@ -59,7 +59,7 @@ export const manualCancelRequestSchema = z.strictObject({
 export type ManualCancelRequest = z.infer<typeof manualCancelRequestSchema>;
 
 const manualOrderCheckSchema = z.object({
-  name: z.enum(["price", "limits", "cap", "filters", "balance"]),
+  name: z.enum(["price", "limits", "cap", "daily_risk", "filters", "balance"]),
   label: z.string(),
   passed: z.boolean(),
   detail: z.string(),
@@ -97,7 +97,8 @@ export const manualOrderOutcomeSchema = z.object({
 export type ManualOrderOutcome = z.infer<typeof manualOrderOutcomeSchema>;
 
 // Manual orders belong to no strategy, so they share this fixed one. It
-// grants nothing: every limit comes from the worker's configuration.
+// grants nothing: every limit comes from the worker's configuration and the
+// customer's risk limits.
 export const MANUAL_TESTNET_STRATEGY = {
   strategyId: "6d1f3c52-8b7e-4a51-9a0d-2f4e8c1b7a03",
   strategyVersion: 1,
@@ -106,12 +107,69 @@ export const MANUAL_TESTNET_STRATEGY = {
 export const manualTradingConfigSchema = z.object({
   allowedInstruments: z.array(testnetInstrumentSchema).min(1),
   allocation: amount,
+  // From the customer's risk limits; the rest is the worker's configuration.
   maxOrderNotional: amount,
   // Share of the best ask a market entry may pay above it. Null turns
   // market entries off.
   marketSlippage: decimal.nullable(),
 });
 export type ManualTradingConfig = z.infer<typeof manualTradingConfigSchema>;
+
+/**
+ * The customer's limits for their manual orders, set on the Settings page.
+ * Amounts are in USDT, the testnet account's accounting currency. Each change
+ * is a new version; the worker reads the latest one before every order.
+ */
+const usdtLimit = z
+  .string()
+  .max(21)
+  .regex(/^\d{1,12}(\.\d{1,8})?$/)
+  .refine((value) => /[1-9]/.test(value));
+export const manualRiskLimitsSchema = z.strictObject({
+  // The largest order, which is also the largest position.
+  maxOrderNotional: usdtLimit,
+  // The most the day's orders may lose at their stop losses, a CLI buy,
+  // which has no stop, counting in full. Reaching it refuses new orders; it
+  // is not a strategy's loss limit.
+  maxDailyRisk: usdtLimit,
+  // The order drawer suggests a stop loss this far below the entry.
+  defaultStopLossPercent: z
+    .string()
+    .max(5)
+    .regex(/^\d{1,2}(\.\d{1,2})?$/)
+    .refine((value) => /[1-9]/.test(value)),
+});
+export type ManualRiskLimits = z.infer<typeof manualRiskLimitsSchema>;
+
+/** The loss if a protected entry's stop fills at its price, before fees. */
+export function stopLossRisk(
+  entry: Pick<ProtectedEntry, "price" | "stopLossPrice" | "quantity">,
+) {
+  return Decimal.max(
+    new Decimal(entry.price).minus(entry.stopLossPrice),
+    0,
+  ).times(entry.quantity);
+}
+
+/**
+ * The stop loss `percent` below `entryPrice`, rounded up to the tick so it
+ * never risks more than that percentage. Undefined if that leaves no room
+ * below the entry.
+ */
+export function defaultStopLossPrice(
+  entryPrice: string,
+  percent: string,
+  tickSize: string,
+) {
+  const raw = new Decimal(entryPrice).times(
+    new Decimal(1).minus(new Decimal(percent).dividedBy(100)),
+  );
+  const step = new Decimal(tickSize);
+  const stop = step.isZero() ? raw : raw.dividedBy(step).ceil().times(step);
+  return stop.greaterThan(0) && stop.lessThan(entryPrice)
+    ? stop.toFixed()
+    : undefined;
+}
 
 /** The limits for `account`'s manual orders. */
 export function manualTestnetPolicy(
@@ -189,7 +247,16 @@ export function manualExposure(
 export const manualOrderTicketSchema = z.object({
   capturedAt: z.iso.datetime(),
   policy: executionPolicySchema,
-  maxOrderNotional: amount,
+  // The customer's current risk limits, within the platform maximums.
+  riskLimits: z.object({
+    version: z.int().positive(),
+    maxOrderNotional: amount,
+    maxDailyRisk: amount,
+    defaultStopLossPercent: amount,
+  }),
+  // What today's earlier manual entries would lose at their stops, since
+  // midnight UTC.
+  dailyRiskUsed: decimal,
   marketSlippage: decimal.nullable(),
   freeUsdt: decimal,
   // The best ask is the market entry's reference and the preview's price hint.
@@ -331,14 +398,26 @@ export function planManualOrder(
           ? `${authorization.reason} ${allocationLeft}`
           : authorization.reason,
   });
-  const capPassed = notional.lessThanOrEqualTo(ticket.maxOrderNotional);
+  const { riskLimits } = ticket;
+  const capPassed = notional.lessThanOrEqualTo(riskLimits.maxOrderNotional);
   checks.push({
     name: "cap",
     label: "Per-order cap",
     passed: capPassed,
     detail: capPassed
-      ? `${notional.toFixed()} USDT is within the ${ticket.maxOrderNotional} USDT cap.`
-      : `${notional.toFixed()} USDT is over the ${ticket.maxOrderNotional} USDT cap set by TESTNET_MAX_ORDER_NOTIONAL_USDT.`,
+      ? `${notional.toFixed()} USDT is within the ${riskLimits.maxOrderNotional} USDT cap.`
+      : `${notional.toFixed()} USDT is over the ${riskLimits.maxOrderNotional} USDT cap set in Settings.`,
+  });
+  const risk = stopLossRisk(entry);
+  const dayRisk = risk.plus(ticket.dailyRiskUsed);
+  const dailyPassed = dayRisk.lessThanOrEqualTo(riskLimits.maxDailyRisk);
+  checks.push({
+    name: "daily_risk",
+    label: "Daily risk limit",
+    passed: dailyPassed,
+    detail: dailyPassed
+      ? `At its stop loss this order loses about ${risk.toFixed()} USDT, so today's orders risk ${dayRisk.toFixed()} of the ${riskLimits.maxDailyRisk} USDT daily risk limit.`
+      : `At its stop loss this order loses about ${risk.toFixed()} USDT. Today's orders since 00:00 UTC already risk ${new Decimal(ticket.dailyRiskUsed).toFixed()} USDT, so this would go over the ${riskLimits.maxDailyRisk} USDT daily risk limit set in Settings.`,
   });
   const issues = market
     ? protectedEntryFilterIssues(entry, market.rules)

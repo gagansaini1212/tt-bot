@@ -6,7 +6,12 @@ import { test, type TestContext } from "node:test";
 import { z } from "zod";
 import { BinanceSpotTestnet } from "@crypto-trading/exchanges";
 import type { AccountResolver } from "./accounts";
+import { fixedExchanges } from "./fixtures/fixed-exchanges";
 import { MemoryOrderIntents } from "./fixtures/memory-order-intents";
+import {
+  MemoryRiskLimits,
+  TEST_RISK_LIMITS,
+} from "./fixtures/memory-risk-limits";
 import { createRequestListener, handler, route, type Route } from "./http";
 import { createRoutes } from "./routes";
 
@@ -108,11 +113,15 @@ async function serve(
   const server = createServer(
     createRequestListener({
       token,
-      exchange,
+      exchanges: fixedExchanges(exchange),
       accounts,
       routes:
         routes ??
-        createRoutes({ intents: new MemoryOrderIntents(), now: () => now }),
+        createRoutes({
+          intents: new MemoryOrderIntents(),
+          risk: new MemoryRiskLimits({ limits: TEST_RISK_LIMITS }),
+          now: () => now,
+        }),
     }),
   );
   server.listen(0, "127.0.0.1");
@@ -500,7 +509,11 @@ test("order routes stay off until their limits are configured", async (t) => {
   const fake = binance();
   const { call, json } = await serve(t, {
     exchange: fake.exchange,
-    routes: createRoutes({ intents: new MemoryOrderIntents(), env: {} }),
+    routes: createRoutes({
+      intents: new MemoryOrderIntents(),
+      risk: new MemoryRiskLimits({ limits: TEST_RISK_LIMITS }),
+      env: {},
+    }),
   });
   const ticket = await json("/orders/ticket");
   assert.equal(ticket.status, "connected");
@@ -636,10 +649,10 @@ test("a placement runs the worker's checks, clears the snapshot cache and is nev
     exchange: fake.exchange,
     routes: createRoutes({
       intents: new MemoryOrderIntents(),
+      risk: new MemoryRiskLimits({ limits: TEST_RISK_LIMITS }),
       env: {
         TESTNET_MANUAL_INSTRUMENTS: "BTC-USDT",
         TESTNET_MANUAL_ALLOCATION_USDT: "300",
-        TESTNET_MAX_ORDER_NOTIONAL_USDT: "100",
       },
     }),
   });
@@ -699,6 +712,7 @@ test("the execution route reports the loop's view for the requesting customer on
     exchange: fake.exchange,
     routes: createRoutes({
       intents: new MemoryOrderIntents(),
+      risk: new MemoryRiskLimits({ limits: TEST_RISK_LIMITS }),
       reader: {
         state: async (scope) => {
           seen.push(scope.customerId);
@@ -727,10 +741,10 @@ test("a held stop-limit entry is cancelled through its own route", async (t) => 
     exchange: fake.exchange,
     routes: createRoutes({
       intents,
+      risk: new MemoryRiskLimits({ limits: TEST_RISK_LIMITS }),
       env: {
         TESTNET_MANUAL_INSTRUMENTS: "BTC-USDT",
         TESTNET_MANUAL_ALLOCATION_USDT: "300",
-        TESTNET_MAX_ORDER_NOTIONAL_USDT: "100",
       },
     }),
   });

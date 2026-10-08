@@ -166,6 +166,22 @@ test("invalid or conflicting private-key configuration fails without exposing ke
   );
 });
 
+test("a public data client reads market data and refuses account requests unsent", async () => {
+  const requested: string[] = [];
+  const exchange = new BinanceSpotTestnet({
+    publicData: true,
+    fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(String(input));
+      requested.push(url.pathname);
+      assert.equal(new Headers(init?.headers).has("X-MBX-APIKEY"), false);
+      return Response.json({ lastUpdateId: 1, bids: [], asks: [] });
+    }) as typeof fetch,
+  });
+  assert.equal((await exchange.getDepth("BTC-USDT", 5)).lastUpdateId, 1);
+  await assert.rejects(exchange.getAccount(), /public market data only/);
+  assert.deepEqual(requested, ["/api/v3/depth"]);
+});
+
 test("limit order, lookup and cancellation map to Binance's contract", async () => {
   const { exchange, requests } = setup(() => Response.json(orderResponse));
   assert.equal((await exchange.placeLimitOrder(order)).executedQty, "0.0005");

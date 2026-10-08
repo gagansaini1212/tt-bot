@@ -8,7 +8,10 @@ import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { after, before, describe, test } from "node:test";
 import { randomUUID } from "node:crypto";
-import { DEV_CUSTOMER_ID } from "@crypto-trading/database";
+import {
+  DEV_CUSTOMER_ID,
+  DEV_EXCHANGE_ACCOUNT_ID,
+} from "@crypto-trading/database";
 import {
   createTestDatabase,
   databaseTestsSkipped,
@@ -33,7 +36,6 @@ async function fixture(databaseUrl = UNREACHABLE_DATABASE) {
     LIVE_TRADING_ENABLED: "false",
     BINANCE_TESTNET_API_KEY: "test-key",
     BINANCE_TESTNET_API_SECRET: "test-secret",
-    TESTNET_MAX_ORDER_NOTIONAL_USDT: "100",
     TESTNET_ORDER_JOURNAL_DIR: join(directory, "journal"),
     FIXTURE_REQUEST_LOG: log,
     EXECUTION_API_TOKEN: token,
@@ -130,6 +132,51 @@ describe("with PostgreSQL", { skip: databaseTestsSkipped }, () => {
   before(async () => {
     database = await createTestDatabase();
     await seedDevelopment(database.admin);
+    // The CLI's per-order cap comes from the dev customer's risk limits.
+    await database.admin`
+      insert into manual_risk_limits (
+        customer_id, exchange_account_id, version, max_order_notional,
+        max_daily_risk, default_stop_loss_percent
+      )
+      values (${DEV_CUSTOMER_ID}, ${DEV_EXCHANGE_ACCOUNT_ID}, 1, 100, 1000, 2)
+    `;
+  });
+
+  test("CLI buys count in full against the daily risk limit, and sells never do", async () => {
+    const f = await fixture(database.appUrl);
+    const limits = (version: number, dailyRisk: number) => database.admin`
+      insert into manual_risk_limits (
+        customer_id, exchange_account_id, version, max_order_notional,
+        max_daily_risk, default_stop_loss_percent
+      )
+      values (${DEV_CUSTOMER_ID}, ${DEV_EXCHANGE_ACCOUNT_ID}, ${version}, 100, ${dailyRisk}, 2)
+    `;
+    try {
+      await limits(2, 50);
+      const buy = f.run([
+        "test-order",
+        "BTC-USDT",
+        "BUY",
+        "0.001",
+        "60000",
+        "ct_risky",
+      ]);
+      assert.equal(buy.status, 1);
+      assert.match(buy.stderr, /would risk 60 USDT, over the 50 USDT/);
+      const sell = f.run([
+        "test-order",
+        "BTC-USDT",
+        "SELL",
+        "0.001",
+        "60000",
+        "ct_sell",
+      ]);
+      assert.equal(sell.status, 0, sell.stderr);
+    } finally {
+      // Later tests trade under the first limits again.
+      await limits(3, 1000);
+      await f.cleanup();
+    }
   });
   after(() => database?.drop());
 

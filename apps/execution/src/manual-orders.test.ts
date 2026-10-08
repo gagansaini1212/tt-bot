@@ -8,7 +8,11 @@ import {
   type Behaviour,
 } from "./fixtures/fake-exchange";
 import { MemoryOrderIntents } from "./fixtures/memory-order-intents";
-import { loadManualTradingConfig } from "./manual-orders";
+import {
+  MemoryRiskLimits,
+  TEST_RISK_LIMITS,
+} from "./fixtures/memory-risk-limits";
+import { loadManualTradingConfig, RiskLimitsNotSet } from "./manual-orders";
 
 const scope = {
   customerId: "7c0e4a52-1b6d-4f3e-8a9b-0c1d2e3f4a01",
@@ -251,11 +255,75 @@ test("cancelling any leg cancels the list, and leaving a filled quantity bare ne
   );
 });
 
+test("without the customer's risk limits, nothing is sent", async () => {
+  const f = deskFixture({
+    intents: new MemoryOrderIntents(),
+    scope,
+    risk: new MemoryRiskLimits(),
+  });
+  await assert.rejects(f.desk.ticket(), RiskLimitsNotSet);
+  const outcome = await f.desk.place(limit("ct_no_limits"));
+  assert.equal(outcome.status, "rejected");
+  assert.match(outcome.message, /Settings → Risk limits/);
+  assert.equal(f.calls.test + f.calls.place, 0);
+});
+
+test("the latest risk limits are read before every order, within the platform maximums", async () => {
+  const risk = new MemoryRiskLimits({ limits: TEST_RISK_LIMITS });
+  const f = deskFixture({ intents: new MemoryOrderIntents(), scope, risk });
+  const ticket = await f.desk.ticket();
+  assert.deepEqual(ticket.riskLimits, { version: 1, ...TEST_RISK_LIMITS });
+  assert.equal(ticket.policy.maxPositionNotional, "100");
+  assert.equal((await f.desk.place(limit("ct_v1"))).status, "working");
+
+  // Lowered between orders: the next order meets the new cap.
+  await risk.change(scope, { ...TEST_RISK_LIMITS, maxOrderNotional: "50" }, 1);
+  const refused = await f.desk.place(limit("ct_v2"));
+  assert.equal(refused.status, "rejected");
+  assert.deepEqual(
+    refused.checks?.filter((check) => !check.passed).map((check) => check.name),
+    ["limits", "cap"],
+  );
+  assert.equal(f.calls.place, 1);
+
+  // A version saved above today's platform maximum is lowered to it.
+  await risk.change(
+    scope,
+    { ...TEST_RISK_LIMITS, maxOrderNotional: "5000" },
+    2,
+  );
+  assert.equal((await f.desk.ticket()).riskLimits.maxOrderNotional, "1000");
+});
+
+test("the daily risk limit counts today's entries at their stops", async () => {
+  const intents = new MemoryOrderIntents();
+  const risk = new MemoryRiskLimits({
+    // Each test order loses 0.001 × (60000 − 58000) = 2 USDT at its stop.
+    limits: { ...TEST_RISK_LIMITS, maxDailyRisk: "5" },
+    intents,
+  });
+  const f = deskFixture({ intents, scope, risk });
+  assert.equal((await f.desk.place(limit("ct_day_1"))).status, "working");
+  assert.equal((await f.desk.ticket()).dailyRiskUsed, "2");
+  assert.equal((await f.desk.place(limit("ct_day_2"))).status, "working");
+  const third = await f.desk.place(limit("ct_day_3"));
+  assert.equal(third.status, "rejected");
+  assert.deepEqual(
+    third.checks?.filter((check) => !check.passed).map((check) => check.name),
+    ["daily_risk"],
+  );
+  // A tighter stop fits what is left.
+  assert.equal(
+    (await f.desk.place(limit("ct_day_4", { stopLossPrice: "59500" }))).status,
+    "working",
+  );
+  assert.equal(f.calls.place, 3);
+});
+
 test("dashboard orders stay off until every limit is configured explicitly", () => {
   const env = {
     TESTNET_MANUAL_INSTRUMENTS: "BTC-USDT",
     TESTNET_MANUAL_ALLOCATION_USDT: "300",
-    TESTNET_MAX_ORDER_NOTIONAL_USDT: "100",
   };
   const loaded = loadManualTradingConfig(env);
   assert.ok(loaded.ok);
@@ -265,7 +333,6 @@ test("dashboard orders stay off until every limit is configured explicitly", () 
     ["TESTNET_MANUAL_INSTRUMENTS", "BTC-USDT,SOL-USDT"],
     ["TESTNET_MANUAL_ALLOCATION_USDT", ""],
     ["TESTNET_MANUAL_ALLOCATION_USDT", "0"],
-    ["TESTNET_MAX_ORDER_NOTIONAL_USDT", "-5"],
     ["TESTNET_MARKET_MAX_SLIPPAGE_PERCENT", "6"],
     ["TESTNET_MARKET_MAX_SLIPPAGE_PERCENT", "0"],
   ])
@@ -417,13 +484,16 @@ test("a triggered stop-limit entry is claimed once, checked again and sent as a 
   assert.equal(await f.desk.submitTrigger(scope, "ct_stop_send"), undefined);
   assert.equal(f.calls.place, 1);
 
-  // Checks that fail when it triggers reject it; nothing is sent.
+  // Checks that fail when it triggers reject it; nothing is sent. Here the
+  // per-order cap was lowered while it was held.
   await f.desk.place(stopLimit("ct_stop_over"));
-  const other = desk(
-    "rest",
-    { TESTNET_MAX_ORDER_NOTIONAL_USDT: "50" },
+  const other = deskFixture({
     intents,
-  );
+    scope,
+    risk: new MemoryRiskLimits({
+      limits: { ...TEST_RISK_LIMITS, maxOrderNotional: "50" },
+    }),
+  });
   const refused = await other.desk.submitTrigger(scope, "ct_stop_over");
   assert.equal(refused?.status, "rejected");
   assert.equal(other.calls.place, 0);

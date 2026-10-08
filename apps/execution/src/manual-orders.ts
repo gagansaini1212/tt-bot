@@ -26,12 +26,14 @@ import {
   type TestnetOrderList,
   type TestnetOrderListReport,
 } from "@crypto-trading/exchanges";
+import { utcDayStart } from "@crypto-trading/domain";
 import type { AccountScope } from "./accounts";
 import {
   UNCONFIRMED_GRACE_MS,
   type OrderIntentStore,
   type Settlement,
 } from "./order-intents";
+import { withinPlatformMaximums, type RiskLimitStore } from "./risk-limits";
 
 export type ManualOrderExchange = Pick<
   BinanceSpotTestnet,
@@ -52,12 +54,24 @@ const decimalPattern = /^\d+(\.\d+)?$/;
 const MAX_MARKET_SLIPPAGE_PERCENT = 5;
 
 /**
- * Reads the manual-trading limits. Every limit must be set explicitly: a
- * missing value turns dashboard orders off instead of falling back.
+ * The worker's part of the manual-trading limits. The per-order cap comes
+ * from the customer's risk limits instead, read before every order.
+ */
+export type ManualTradingEnvironment = Omit<
+  ManualTradingConfig,
+  "maxOrderNotional"
+>;
+
+/**
+ * Reads the worker's manual-trading limits. Every limit must be set
+ * explicitly: a missing value turns dashboard orders off instead of falling
+ * back.
  */
 export function loadManualTradingConfig(
   env: NodeJS.ProcessEnv,
-): { ok: true; config: ManualTradingConfig } | { ok: false; message: string } {
+):
+  | { ok: true; config: ManualTradingEnvironment }
+  | { ok: false; message: string } {
   const off = (message: string) => ({ ok: false as const, message });
   const instruments = (env.TESTNET_MANUAL_INSTRUMENTS ?? "")
     .split(",")
@@ -77,11 +91,6 @@ export function loadManualTradingConfig(
     return off(
       "Set a positive TESTNET_MANUAL_ALLOCATION_USDT in the execution worker to place orders from the dashboard.",
     );
-  const cap = env.TESTNET_MAX_ORDER_NOTIONAL_USDT ?? "";
-  if (!decimalPattern.test(cap) || !new Decimal(cap).gt(0))
-    return off(
-      "Set a positive TESTNET_MAX_ORDER_NOTIONAL_USDT in the execution worker to place orders from the dashboard.",
-    );
   const slippage = env.TESTNET_MARKET_MAX_SLIPPAGE_PERCENT?.trim();
   if (
     slippage &&
@@ -94,16 +103,36 @@ export function loadManualTradingConfig(
     );
   return {
     ok: true,
-    config: manualTradingConfigSchema.parse({
+    config: manualTradingConfigSchema.omit({ maxOrderNotional: true }).parse({
       allowedInstruments: [...new Set(instruments)],
       allocation,
-      maxOrderNotional: cap,
       marketSlippage: slippage
         ? new Decimal(slippage).dividedBy(100).toFixed()
         : null,
     }),
   };
 }
+
+/** Thrown by a ticket for an account whose customer has set no risk limits. */
+export class RiskLimitsNotSet extends Error {
+  constructor() {
+    super(
+      "Set your risk limits in Settings → Risk limits to place orders from the dashboard.",
+    );
+    this.name = "RiskLimitsNotSet";
+  }
+}
+
+/** Runs tasks one at a time, in the order they are queued. */
+export function serializer() {
+  let queue: Promise<unknown> = Promise.resolve();
+  return <T>(task: () => Promise<T>): Promise<T> => {
+    const run = queue.then(task, task);
+    queue = run.catch(() => {});
+    return run;
+  };
+}
+export type Serializer = ReturnType<typeof serializer>;
 
 // Binance's code for an order or order list that does not exist.
 const NO_SUCH_ORDER = -2013;
@@ -115,36 +144,38 @@ const RULES_TTL_MS = 5 * 60_000;
  * Binance's filters against fresh account data. Placements and cancels run
  * one at a time, so two orders cannot both claim the same allocation. Each
  * call acts for the customer who owns `scope`'s exchange account, and keeps
- * its order intents in that customer's scope.
+ * its order intents in that customer's scope. The customer's risk limits are
+ * read afresh for every ticket, so a change applies to the next order.
  */
 export class ManualOrderDesk {
   readonly #exchange: ManualOrderExchange;
-  readonly #config: ManualTradingConfig;
+  readonly #config: ManualTradingEnvironment;
   readonly #intents: OrderIntentStore;
+  readonly #risk: Pick<RiskLimitStore, "current" | "dailyRiskUsed">;
   readonly #now: () => Date;
   readonly #onChange: () => void;
+  readonly #exclusive: Serializer;
   #rules?: { fetchedAt: number; value: SymbolRules[] };
-  #queue: Promise<unknown> = Promise.resolve();
 
   constructor(options: {
     exchange: ManualOrderExchange;
-    config: ManualTradingConfig;
+    config: ManualTradingEnvironment;
     intents: OrderIntentStore;
+    risk: Pick<RiskLimitStore, "current" | "dailyRiskUsed">;
     now?: () => Date;
     // Called after anything that may have changed the account.
     onChange?: () => void;
+    // Shared by desks that may trade on the same account, such as one per
+    // set of keys, so their placements and cancels still run one at a time.
+    exclusive?: Serializer;
   }) {
     this.#exchange = options.exchange;
     this.#config = options.config;
     this.#intents = options.intents;
+    this.#risk = options.risk;
     this.#now = options.now ?? (() => new Date());
     this.#onChange = options.onChange ?? (() => {});
-  }
-
-  #exclusive<T>(task: () => Promise<T>): Promise<T> {
-    const run = this.#queue.then(task, task);
-    this.#queue = run.catch(() => {});
-    return run;
+    this.#exclusive = options.exclusive ?? serializer();
   }
 
   async #symbolRules() {
@@ -157,8 +188,27 @@ export class ManualOrderDesk {
     return this.#rules.value;
   }
 
-  /** Fresh account limits, balances and market rules for an order. */
-  async ticket(scope: AccountScope): Promise<ManualOrderTicket> {
+  /**
+   * Fresh account limits, risk limits, balances and market rules for an
+   * order. Throws RiskLimitsNotSet if the customer has set no risk limits.
+   */
+  async ticket(
+    scope: AccountScope,
+    // A held stop-limit entry being sent, whose own risk the day already
+    // counts: the plan adds it again.
+    { sending }: { sending?: string } = {},
+  ): Promise<ManualOrderTicket> {
+    const now = this.#now();
+    const [stored, dailyRiskUsed] = await Promise.all([
+      this.#risk.current(scope),
+      this.#risk.dailyRiskUsed(scope, utcDayStart(now), sending),
+    ]);
+    if (!stored) throw new RiskLimitsNotSet();
+    const limits = withinPlatformMaximums(stored);
+    const config = {
+      ...this.#config,
+      maxOrderNotional: limits.maxOrderNotional,
+    };
     const [account, orders, rules, asks] = await Promise.all([
       this.#exchange.getAccount(),
       Promise.all(
@@ -168,7 +218,7 @@ export class ManualOrderDesk {
       ).then((lists) => lists.flat()),
       this.#symbolRules(),
       Promise.all(
-        this.#config.allowedInstruments.map(
+        config.allowedInstruments.map(
           async (instrument) =>
             [
               instrument,
@@ -203,7 +253,7 @@ export class ManualOrderDesk {
       new Decimal(0),
     );
     const policy = manualTestnetPolicy(
-      this.#config,
+      config,
       {
         committedCapital: exposure.committedCapital,
         reservedBudget: held.plus(exposure.reservedBudget).toFixed(),
@@ -211,10 +261,16 @@ export class ManualOrderDesk {
       scope,
     );
     return {
-      capturedAt: this.#now().toISOString(),
+      capturedAt: now.toISOString(),
       policy,
-      maxOrderNotional: this.#config.maxOrderNotional,
-      marketSlippage: this.#config.marketSlippage,
+      riskLimits: {
+        version: limits.version,
+        maxOrderNotional: limits.maxOrderNotional,
+        maxDailyRisk: limits.maxDailyRisk,
+        defaultStopLossPercent: limits.defaultStopLossPercent,
+      },
+      dailyRiskUsed,
+      marketSlippage: config.marketSlippage,
       freeUsdt:
         account.balances.find((balance) => balance.asset === "USDT")?.free ??
         "0",
@@ -242,6 +298,8 @@ export class ManualOrderDesk {
       try {
         ticket = await this.ticket(scope);
       } catch (error) {
+        if (error instanceof RiskLimitsNotSet)
+          return { status: "rejected", message: error.message };
         // Such as the database failing while it reads entry prices.
         if (!(error instanceof BinanceTestnetError))
           return {
@@ -353,7 +411,7 @@ export class ManualOrderDesk {
             stopLossPrice: entry.stopLossPrice,
             listClientOrderId,
           },
-          await this.ticket(scope),
+          await this.ticket(scope, { sending: listClientOrderId }),
           this.#now(),
           { proposalId: randomUUID(), sourceSnapshotId: randomUUID() },
         );

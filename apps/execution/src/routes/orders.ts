@@ -7,38 +7,54 @@ import {
 } from "@crypto-trading/exchanges";
 import { z } from "zod";
 import { handler } from "../http";
-import { loadManualTradingConfig, ManualOrderDesk } from "../manual-orders";
+import {
+  loadManualTradingConfig,
+  ManualOrderDesk,
+  RiskLimitsNotSet,
+  serializer,
+} from "../manual-orders";
 import type { OrderIntentStore } from "../order-intents";
+import type { RiskLimitStore } from "../risk-limits";
 
 /**
- * The worker's one dashboard order desk, or undefined while dashboard orders
- * are off. The exchange is the same for every caller, so the desk and its
- * queue are shared by the routes and the execution loop.
+ * The worker's dashboard order desks, or none while dashboard orders are
+ * off. There is a desk per Binance client, which changes when an account's
+ * keys do. The routes and the execution loop share them, and they share one
+ * queue, so placements and cancels run one at a time.
  */
 export function deskProvider({
   env,
   now,
   onChange,
   intents,
+  risk,
 }: {
   env: NodeJS.ProcessEnv;
   now: () => number;
   onChange: () => void;
   intents: OrderIntentStore;
+  risk: Pick<RiskLimitStore, "current" | "dailyRiskUsed">;
 }) {
   const loaded = loadManualTradingConfig(env);
-  let desk: ManualOrderDesk | undefined;
+  const desks = new WeakMap<BinanceSpotTestnet, ManualOrderDesk>();
+  const exclusive = serializer();
   return {
     disabledMessage: loaded.ok ? "" : loaded.message,
     deskFor(exchange: BinanceSpotTestnet) {
       if (!loaded.ok) return undefined;
-      desk ??= new ManualOrderDesk({
-        exchange,
-        config: loaded.config,
-        intents,
-        now: () => new Date(now()),
-        onChange,
-      });
+      let desk = desks.get(exchange);
+      if (!desk) {
+        desk = new ManualOrderDesk({
+          exchange,
+          config: loaded.config,
+          intents,
+          risk,
+          now: () => new Date(now()),
+          onChange,
+          exclusive,
+        });
+        desks.set(exchange, desk);
+      }
       return desk;
     },
   };
@@ -60,9 +76,14 @@ export function orders({
       query: z.strictObject({}),
       async handle({ exchange, account }) {
         const desk = deskFor(exchange);
-        return desk
-          ? { status: "connected", ticket: await desk.ticket(account) }
-          : { status: "connected", disabled: disabledMessage };
+        if (!desk) return { status: "connected", disabled: disabledMessage };
+        try {
+          return { status: "connected", ticket: await desk.ticket(account) };
+        } catch (error) {
+          if (error instanceof RiskLimitsNotSet)
+            return { status: "connected", disabled: error.message };
+          throw error;
+        }
       },
     }),
     place: handler({

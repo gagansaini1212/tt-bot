@@ -285,8 +285,9 @@ export class BinanceTestnetError extends Error {
 }
 
 export class BinanceSpotTestnet implements SpotTestnetExchange {
-  readonly #apiKey: string;
-  readonly #signPayload: (payload: string) => string;
+  // Unset on a public market data client.
+  readonly #apiKey?: string;
+  readonly #signPayload?: (payload: string) => string;
   readonly #fetch: typeof fetch;
   readonly #now: () => number;
   #clockOffset = 0;
@@ -294,13 +295,17 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
   #clockSync?: Promise<void>;
   #blockedUntil = 0;
 
-  constructor(options: {
-    apiKey: string;
-    apiSecret?: string;
-    privateKey?: string;
-    fetch?: typeof fetch;
-    now?: () => number;
-  }) {
+  constructor(
+    options: (
+      | { apiKey: string; apiSecret?: string; privateKey?: string }
+      // Public market data needs no key. Signed requests then throw before
+      // anything is sent.
+      | { publicData: true }
+    ) & { fetch?: typeof fetch; now?: () => number },
+  ) {
+    this.#fetch = options.fetch ?? fetch;
+    this.#now = options.now ?? Date.now;
+    if ("publicData" in options) return;
     if (
       !options.apiKey.trim() ||
       (!options.apiSecret?.trim() && !options.privateKey?.trim())
@@ -344,8 +349,6 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
       this.#signPayload = (payload) =>
         createHmac("sha256", secret).update(payload).digest("hex");
     }
-    this.#fetch = options.fetch ?? fetch;
-    this.#now = options.now ?? Date.now;
   }
 
   async #syncClock() {
@@ -383,12 +386,16 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
         Math.ceil((this.#blockedUntil - this.#now()) / 1000),
       );
     }
+    if (signed && (!this.#signPayload || !this.#apiKey))
+      throw new Error(
+        "This Binance client serves public market data only. Configure API keys for account requests.",
+      );
     if (signed) await this.#syncClock();
     const query = new URLSearchParams(parameters);
     if (signed) {
       query.set("recvWindow", "5000");
       query.set("timestamp", String(this.#now() + this.#clockOffset));
-      query.set("signature", this.#signPayload(query.toString()));
+      query.set("signature", this.#signPayload!(query.toString()));
     }
     const mutation = method !== "GET" && path !== "/api/v3/order/test";
     let response: Response;
@@ -401,7 +408,7 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
           signal: AbortSignal.timeout(12_000),
           headers: signed
             ? {
-                "X-MBX-APIKEY": this.#apiKey,
+                "X-MBX-APIKEY": this.#apiKey!,
                 "Content-Type": "application/x-www-form-urlencoded",
               }
             : {},

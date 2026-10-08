@@ -51,7 +51,19 @@ import {
   type PostgresOrderIntents,
   type ProtectedEntryOrder,
 } from "./order-intents";
-import { claimDueJobs, completeJob, retryDelay, retryJob } from "./outbox";
+import {
+  settleDelivery,
+  WEBHOOK_TOPIC,
+  type JobOutcome,
+  type NotificationWebhooks,
+} from "./notification-webhooks";
+import {
+  claimDueJobs,
+  completeJob,
+  retryDelay,
+  retryJob,
+  type OutboxJob,
+} from "./outbox";
 
 /** What the loop asks Binance. */
 export type ExecutionExchange = Pick<
@@ -69,6 +81,16 @@ export type ExecutionExchange = Pick<
 
 /** Sends a stop-limit entry whose stop price traded; see ManualOrderDesk. */
 export type TriggerDesk = Pick<ManualOrderDesk, "submitTrigger">;
+
+/**
+ * The Binance client a pass uses for an account, and the desk that sends
+ * its stop-limit entries: the ones for the keys the account trades with.
+ * Without a desk, stop-limit entries wait; dashboard orders are off.
+ */
+export type PassClients = { exchange: ExecutionExchange; desk?: TriggerDesk };
+
+/** Delivers a customer's notification.webhook jobs; see NotificationWebhooks. */
+export type WebhookDelivery = Pick<NotificationWebhooks, "deliver">;
 
 /** How often the worker checks every customer's orders. */
 export const PASS_INTERVAL_MS = 5_000;
@@ -104,12 +126,12 @@ const NOTIFICATIONS_SHOWN_MS = 7 * 24 * 60 * 60_000;
  */
 export class ExecutionLoop {
   readonly #database: Database;
-  readonly #exchange: ExecutionExchange;
+  readonly #clients: (scope: AccountScope) => Promise<PassClients | undefined>;
+  readonly #webhooks?: WebhookDelivery;
   readonly #accounts: AccountResolver;
   readonly #intents: OrderIntentStore &
     Pick<PostgresOrderIntents, "resolveMissing">;
   readonly #store: ExecutionStore;
-  readonly #desk?: TriggerDesk;
   readonly #now: () => Date;
   readonly #onChange: () => void;
   readonly #pause: StrategyPauser;
@@ -118,31 +140,43 @@ export class ExecutionLoop {
   readonly #lastPass = new Map<string, Date>();
   #rules?: { fetchedAt: number; value: Promise<SymbolRules[]> };
   #running?: Promise<void>;
+  #delivering?: Promise<void>;
   #timer?: NodeJS.Timeout;
   #stopped = false;
   #lastLogged?: string;
 
-  constructor(options: {
-    database: Database;
-    exchange: ExecutionExchange;
-    accounts: AccountResolver;
-    intents: OrderIntentStore & Pick<PostgresOrderIntents, "resolveMissing">;
-    // Without one, stop-limit entries wait; dashboard orders are off.
-    desk?: TriggerDesk;
-    now?: () => Date;
-    // Called after anything that may have changed the account.
-    onChange?: () => void;
-    pauseStrategy?: StrategyPauser;
-    log?: (message: string) => void;
-    // Tests turn this off to prove each action is guarded on its own.
-    lockCustomers?: boolean;
-  }) {
+  constructor(
+    options: (
+      | // One client for every account, as in tests.
+        { exchange: ExecutionExchange; desk?: TriggerDesk }
+        // Each account's own, or undefined for an account without keys the
+        // worker can use, which the pass skips.
+      | { clients: (scope: AccountScope) => Promise<PassClients | undefined> }
+    ) & {
+      database: Database;
+      accounts: AccountResolver;
+      intents: OrderIntentStore & Pick<PostgresOrderIntents, "resolveMissing">;
+      // Delivers alerts to customers' webhooks, beside the passes.
+      webhooks?: WebhookDelivery;
+      now?: () => Date;
+      // Called after anything that may have changed the account.
+      onChange?: () => void;
+      pauseStrategy?: StrategyPauser;
+      log?: (message: string) => void;
+      // Tests turn this off to prove each action is guarded on its own.
+      lockCustomers?: boolean;
+    },
+  ) {
     this.#database = options.database;
-    this.#exchange = options.exchange;
+    if ("clients" in options) this.#clients = options.clients;
+    else {
+      const clients = { exchange: options.exchange, desk: options.desk };
+      this.#clients = async () => clients;
+    }
+    this.#webhooks = options.webhooks;
     this.#accounts = options.accounts;
     this.#intents = options.intents;
     this.#store = new ExecutionStore(options.database);
-    this.#desk = options.desk;
     this.#now = options.now ?? (() => new Date());
     this.#onChange = options.onChange ?? (() => {});
     this.#pause = options.pauseStrategy ?? pauseStrategyInDatabase;
@@ -220,20 +254,76 @@ export class ExecutionLoop {
     this.#stopped = true;
     clearTimeout(this.#timer);
     await this.#running;
+    await this.#delivering;
   }
 
   async #pass() {
-    for (const customerId of await listCustomerIds(this.#database)) {
+    const customerIds = await listCustomerIds(this.#database);
+    for (const customerId of customerIds) {
       if (this.#stopped) return;
       try {
         const scope = await this.#accounts(customerId);
         if (!scope) continue;
-        if (await this.#exclusively(customerId, () => this.#customer(scope)))
+        const clients = await this.#clients(scope);
+        if (!clients) continue;
+        if (
+          await this.#exclusively(customerId, () =>
+            this.#customer(scope, clients),
+          )
+        )
           this.#lastPass.set(customerId, this.#now());
       } catch (error) {
         this.#warn(
           `The execution loop could not check a customer's orders: ${describe(error)}`,
         );
+      }
+    }
+    // Not awaited: a slow webhook must never delay protective work.
+    this.deliverAlerts(customerIds).catch((error: unknown) =>
+      this.#warn(`Webhook deliveries failed: ${describe(error)}`),
+    );
+  }
+
+  /**
+   * Delivers each customer's due notification.webhook jobs, which a trigger
+   * queues for every alert, one attempt each. A call while a round runs
+   * waits for that round instead.
+   */
+  deliverAlerts(customerIds?: string[]): Promise<void> {
+    if (!this.#webhooks) return Promise.resolve();
+    this.#delivering ??= this.#deliver(this.#webhooks, customerIds).finally(
+      () => {
+        this.#delivering = undefined;
+      },
+    );
+    return this.#delivering;
+  }
+
+  async #deliver(webhooks: WebhookDelivery, customerIds?: string[]) {
+    for (const customerId of customerIds ??
+      (await listCustomerIds(this.#database))) {
+      if (this.#stopped) return;
+      const now = this.#now();
+      const jobs = await claimDueJobs(
+        this.#database,
+        customerId,
+        WEBHOOK_TOPIC,
+        now,
+        { limit: 10 },
+      );
+      for (const job of jobs) {
+        let outcome: JobOutcome;
+        try {
+          outcome = await webhooks.deliver(customerId, job);
+        } catch {
+          outcome = {
+            status: "retry",
+            error: "The delivery failed unexpectedly.",
+          };
+        }
+        if (outcome.status !== "completed")
+          this.#warn(`Webhook delivery job ${job.id}: ${outcome.error}`);
+        await settleDelivery(this.#database, customerId, job, outcome, now);
       }
     }
   }
@@ -266,10 +356,10 @@ export class ExecutionLoop {
     }
   }
 
-  async #customer(scope: AccountScope) {
-    const reads = new PassReads(this.#exchange);
-    await this.#settleUnknownOutcomes(scope);
-    await this.#sendTriggeredEntries(scope, reads);
+  async #customer(scope: AccountScope, clients: PassClients) {
+    const reads = new PassReads(clients.exchange);
+    await this.#settleUnknownOutcomes(scope, reads);
+    await this.#sendTriggeredEntries(scope, reads, clients.desk);
     await this.#store.startDueExits(scope, this.#now(), deadlineReached);
     for (const entry of await this.#store.trackedEntries(scope)) {
       try {
@@ -288,7 +378,7 @@ export class ExecutionLoop {
    * period is over. Only "does not exist" proves Binance never took it;
    * any other failure leaves it for a later pass. Nothing is resubmitted.
    */
-  async #settleUnknownOutcomes(scope: AccountScope) {
+  async #settleUnknownOutcomes(scope: AccountScope, reads: PassReads) {
     const now = this.#now();
     const jobs = await claimDueJobs(
       this.#database,
@@ -306,7 +396,7 @@ export class ExecutionLoop {
         continue;
       }
       try {
-        const found = await this.#lookUp(intent);
+        const found = await this.#lookUp(intent, reads.exchange);
         if (found) {
           await this.#intents.settle(scope, intent.clientOrderId, {
             status: "acknowledged",
@@ -341,28 +431,35 @@ export class ExecutionLoop {
     }
   }
 
-  async #lookUp(intent: {
-    clientOrderId: string;
-    order: ManualOrder | null;
-  }): Promise<{ orderListId?: number; orders?: TestnetOrder[] } | undefined> {
+  async #lookUp(
+    intent: {
+      clientOrderId: string;
+      order: ManualOrder | null;
+    },
+    exchange: ExecutionExchange,
+  ): Promise<{ orderListId?: number; orders?: TestnetOrder[] } | undefined> {
     const order = intent.order;
     if (!order || order.kind === "protected_entry") {
       const list = await absentIfMissing(
-        this.#exchange.getOrderList(intent.clientOrderId),
+        exchange.getOrderList(intent.clientOrderId),
       );
       return list && { orderListId: list.orderListId };
     }
     const found = await absentIfMissing(
-      this.#exchange.getOrder(order.order.instrument, intent.clientOrderId),
+      exchange.getOrder(order.order.instrument, intent.clientOrderId),
     );
     return found && { orders: [found] };
   }
 
   /** Sends each stop-limit entry whose stop price has traded. */
-  async #sendTriggeredEntries(scope: AccountScope, reads: PassReads) {
+  async #sendTriggeredEntries(
+    scope: AccountScope,
+    reads: PassReads,
+    desk: TriggerDesk | undefined,
+  ) {
     const triggers = await this.#intents.pendingTriggers(scope);
     if (!triggers.length) return;
-    if (!this.#desk) {
+    if (!desk) {
       this.#warn(
         "Stop-limit entries are waiting, but dashboard orders are off in the execution worker, so none can be sent.",
       );
@@ -374,10 +471,7 @@ export class ExecutionLoop {
       try {
         const price = await reads.lastPrice(order.entry.instrument);
         if (new Decimal(price).lt(order.trigger.stopPrice)) continue;
-        const outcome = await this.#desk.submitTrigger(
-          scope,
-          trigger.clientOrderId,
-        );
+        const outcome = await desk.submitTrigger(scope, trigger.clientOrderId);
         if (!outcome) continue;
         this.#onChange();
         await this.#store.notify(scope, triggerSent(order, price, outcome));
@@ -409,7 +503,7 @@ export class ExecutionLoop {
       const live =
         open.get(clientOrderId) ??
         (await absentIfMissing(
-          this.#exchange.getOrder(instrument, clientOrderId),
+          reads.exchange.getOrder(instrument, clientOrderId),
         ));
       if (!live) return undefined;
       reports.push(live);
@@ -437,7 +531,7 @@ export class ExecutionLoop {
     await this.#store.recordOrders(scope, reports);
     // Including legs already final, such as an entry that filled when it
     // was placed, whose fills nothing has read yet.
-    await this.#keepFills(scope, tracked, [
+    await this.#keepFills(scope, reads, tracked, [
       entryLeg,
       takeProfit,
       stopLoss,
@@ -445,7 +539,7 @@ export class ExecutionLoop {
     ]);
 
     let facts = this.#fillFacts(tracked);
-    const rules = await this.#symbolRules(instrument);
+    const rules = await this.#symbolRules(instrument, reads.exchange);
     const observation: EntryObservation = {
       entry: entryLeg,
       takeProfit,
@@ -487,6 +581,7 @@ export class ExecutionLoop {
     if (assessment.cancelList) {
       const cancelled = await this.#cancelList(
         scope,
+        reads,
         tracked,
         [entryLeg, takeProfit, stopLoss],
         assessment.exitReason,
@@ -513,7 +608,7 @@ export class ExecutionLoop {
       sale = await this.#sell(scope, tracked, assessment, reads);
       if (sale.kind === "sent") {
         observation.closes.push(sale.close);
-        await this.#keepFills(scope, tracked, [sale.close.leg]);
+        await this.#keepFills(scope, reads, tracked, [sale.close.leg]);
         assessment = assessEntry(observation);
         // Its exits are cancelled and Binance refused the sale, so what it
         // holds now has no stop loss, whatever the reason for the exit.
@@ -549,6 +644,7 @@ export class ExecutionLoop {
   /** Keeps the fills of every order that has filled more than recorded. */
   async #keepFills(
     scope: AccountScope,
+    reads: PassReads,
     tracked: TrackedEntry,
     legs: (LegState | undefined)[],
   ) {
@@ -558,7 +654,7 @@ export class ExecutionLoop {
         .filter((fill) => fill.clientOrderId === leg.clientOrderId)
         .reduce((total, fill) => total.plus(fill.quantity), new Decimal(0));
       if (new Decimal(leg.executedQty).lte(recorded)) continue;
-      const fills = await this.#exchange.getOrderFills(
+      const fills = await reads.exchange.getOrderFills(
         tracked.entry.instrument,
         leg.orderId,
       );
@@ -604,6 +700,7 @@ export class ExecutionLoop {
   /** Cancels an order list. Resolves its reports, or undefined if it failed. */
   async #cancelList(
     scope: AccountScope,
+    reads: PassReads,
     tracked: TrackedEntry,
     legs: (LegState | undefined)[],
     exitReason: string | null,
@@ -615,7 +712,7 @@ export class ExecutionLoop {
     if (orderListId === undefined) return undefined;
     let orderReports: TestnetOrder[];
     try {
-      ({ orderReports } = await this.#exchange.cancelOrderList(
+      ({ orderReports } = await reads.exchange.cancelOrderList(
         tracked.entry.instrument,
         orderListId,
       ));
@@ -632,7 +729,7 @@ export class ExecutionLoop {
       reason: exitReason,
     });
     await this.#store.recordOrders(scope, orderReports);
-    await this.#keepFills(scope, tracked, orderReports.map(toLeg));
+    await this.#keepFills(scope, reads, tracked, orderReports.map(toLeg));
     return orderReports;
   }
 
@@ -650,7 +747,7 @@ export class ExecutionLoop {
     const { instrument } = tracked.entry;
     const base = baseAsset(instrument);
     const [rules, price, balance] = await Promise.all([
-      this.#symbolRules(instrument),
+      this.#symbolRules(instrument, reads.exchange),
       reads.lastPrice(instrument),
       reads.balance(base),
     ]);
@@ -731,7 +828,7 @@ export class ExecutionLoop {
     });
     let placed: TestnetOrder;
     try {
-      placed = await this.#exchange.placeMarketSell(order);
+      placed = await reads.exchange.placeMarketSell(order);
     } catch (error) {
       const refused =
         error instanceof BinanceTestnetError &&
@@ -772,10 +869,14 @@ export class ExecutionLoop {
     return close("acknowledged", placed);
   }
 
-  async #symbolRules(instrument: TestnetInstrument) {
+  // The rules are public, so any account's client reads them.
+  async #symbolRules(
+    instrument: TestnetInstrument,
+    exchange: ExecutionExchange,
+  ) {
     const now = this.#now().getTime();
     if (!this.#rules || now - this.#rules.fetchedAt > RULES_TTL_MS) {
-      const value = this.#exchange.getSymbolRules();
+      const value = exchange.getSymbolRules();
       this.#rules = { fetchedAt: now, value };
       value.catch(() => {
         this.#rules = undefined;
@@ -959,7 +1060,8 @@ type Sale =
 
 /** What a pass reads from Binance once, however many entries need it. */
 class PassReads {
-  readonly #exchange: ExecutionExchange;
+  // The client for the account this pass is checking.
+  readonly exchange: ExecutionExchange;
   readonly #open = new Map<
     TestnetInstrument,
     Promise<Map<string, TestnetOrder>>
@@ -968,13 +1070,13 @@ class PassReads {
   #account?: ReturnType<ExecutionExchange["getAccount"]>;
 
   constructor(exchange: ExecutionExchange) {
-    this.#exchange = exchange;
+    this.exchange = exchange;
   }
 
   openOrders(instrument: TestnetInstrument) {
     let orders = this.#open.get(instrument);
     if (!orders) {
-      orders = this.#exchange
+      orders = this.exchange
         .getOpenOrders(instrument)
         .then(
           (list) => new Map(list.map((order) => [order.clientOrderId, order])),
@@ -987,14 +1089,14 @@ class PassReads {
   lastPrice(instrument: TestnetInstrument) {
     let price = this.#prices.get(instrument);
     if (!price) {
-      price = this.#exchange.getLastPrice(instrument);
+      price = this.exchange.getLastPrice(instrument);
       this.#prices.set(instrument, price);
     }
     return price;
   }
 
   async balance(asset: string) {
-    this.#account ??= this.#exchange.getAccount();
+    this.#account ??= this.exchange.getAccount();
     const found = (await this.#account).balances.find(
       (balance) => balance.asset === asset,
     );

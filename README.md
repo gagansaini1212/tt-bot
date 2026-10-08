@@ -13,7 +13,8 @@ A Binance Spot Testnet trading application built with Next.js, eve, shadcn/ui, a
 - A PostgreSQL schema for customers, accounts, strategy versions, proposals, reservations, orders, fills, position ownership, deadlines, audit events, and outbox jobs, applied by a migration runner that records each migration.
 - Row-level security for customer-owned records. The apps connect as a role it applies to and work in one customer's scope at a time. See [the database guide](docs/database.md).
 - A local execution service with a Binance Spot Testnet adapter for balances, limit orders, cancellation, order lookup, recent fills, and public market data (24-hour tickers, candles, and order book depth).
-- A testnet Overview with net worth and its 24-hour change in USDT, balances, open orders, recent fills, and automatic refresh every ten seconds. Accounts shows holdings valued in USDT with their 24-hour change and each asset's share of net worth, and can hide zero and dust balances. Activity lists exchange fills. Settings shows the current account connection.
+- A testnet Overview with net worth and its 24-hour change in USDT, balances, open orders, recent fills, and automatic refresh every ten seconds. Accounts shows holdings valued in USDT with their 24-hour change and each asset's share of net worth, and can hide zero and dust balances. Activity lists exchange fills.
+- Settings, in three tabs. **Exchange keys** saves Binance Spot Testnet API keys, which the worker stores encrypted and never shows again, and tests the connection. **Risk limits** sets the per-order cap, a daily risk limit and a default stop loss for orders placed by hand, as versions under platform maximums. **Notifications** lists the worker's in-app alerts and posts them to an optional Discord or Telegram webhook.
 - Markets for BTC/USDT and ETH/USDT: a candlestick chart (TradingView Lightweight Charts) marking your recent fills and open orders, the order book, and a market depth chart, refreshed every three seconds while the tab is visible.
 - Manual development order commands with a notional cap, Binance filter validation, and order intents saved in PostgreSQL before anything is sent, to prevent duplicate submission after restart.
 - Backtesting on Strategies: run a grid, DCA or standing price instruction over up to 30 days of hourly candles, or replay a fixture of recorded AI proposals, with the same planners, execution checks and loss limits as a live strategy. Results show net PnL, fees, maximum drawdown, Sharpe ratio, win and loss rates, trades, an equity curve against buying and holding, and the simulator's limitations. History is read from Binance's public market data and cached on disk. See [Backtesting](docs/backtesting.md).
@@ -86,11 +87,15 @@ Live trading remains locked until the deployment prerequisites in [the implement
 ## Connect Binance Spot Testnet
 
 1. Sign in at [Binance Spot Testnet](https://testnet.binance.vision/) and register an Ed25519 or RSA public key with account-read and trading permissions. Keep the corresponding private key locally. These API keys are separate from production and Demo Trading keys.
-2. Copy `apps/execution/.env.example` to `apps/execution/.env` if it does not already exist. Set `BINANCE_TESTNET_API_KEY` to the API key Binance issues and `BINANCE_TESTNET_PRIVATE_KEY_PATH` to the absolute path of the private PEM file. Leave `BINANCE_TESTNET_API_SECRET` empty. For an existing HMAC API key, set its secret instead of a private-key path. Set `EXECUTION_API_TOKEN` to a random token, generated with `openssl rand -hex 32`.
-3. Copy `apps/web/.env.example` to `apps/web/.env.local`. Copy the same `EXECUTION_API_TOKEN` there. Binance credentials belong only in `apps/execution/.env`, which the execution service loads. Keep both files private.
-4. Run `pnpm exchange check` to verify authenticated connectivity. Then run `pnpm dev:worker` and `pnpm dev` in separate terminals. The worker needs the migrated and seeded database from [Run locally](#run-locally); market data works without it. Open `/` to see virtual balances, open BTC/ETH orders, and recent fills, and `/accounts` for holdings valued in USDT. Restart the processes after changing their environment files.
+2. Copy `apps/execution/.env.example` to `apps/execution/.env` if it does not already exist. Set `CREDENTIALS_MASTER_KEY` to the output of `openssl rand -base64 32`, and `EXECUTION_API_TOKEN` to a random token, generated with `openssl rand -hex 32`.
+3. Copy `apps/web/.env.example` to `apps/web/.env.local`. Copy the same `EXECUTION_API_TOKEN` there. Keep both files private.
+4. Run `pnpm dev:worker` and `pnpm dev` in separate terminals. The worker needs the migrated and seeded database from [Run locally](#run-locally); market data works without it. Open **Settings → Exchange keys**, enter the API key with its private key (Ed25519 or RSA) or HMAC secret key, save, and select **Test connection**. Then set your **Risk limits**. Open `/` to see virtual balances, open BTC/ETH orders, and recent fills, and `/accounts` for holdings valued in USDT. Restart the processes after changing their environment files.
 
-The credentials belong to the development customer's exchange account, so the worker serves account data and orders only for that customer. If you placed orders before order intents moved to PostgreSQL, the worker refuses to start while `.testnet-orders/` holds intents: run `pnpm exchange import-journal` once to copy them into the database, then delete the directory.
+The worker seals saved keys with AES-256-GCM under `CREDENTIALS_MASTER_KEY`, binding each to its customer and exchange account. Keys are never sent back to the browser, logged, or given to the assistant: Settings shows the last four characters of the API key and when it changed. Keep the master key with your backups; without it, saved keys cannot be opened, and the worker refuses to use the account rather than fall back to other keys. Changing or removing keys needs a fresh session: if you signed in more than 10 minutes ago, you confirm your password first.
+
+Keys in `apps/execution/.env` still work: `BINANCE_TESTNET_API_KEY`, with `BINANCE_TESTNET_PRIVATE_KEY_PATH` (the absolute path of the private PEM file) or `BINANCE_TESTNET_API_SECRET`. The worker uses them until keys are saved in Settings, and again if the saved keys are removed. `pnpm exchange check` verifies connectivity with whichever keys the worker would use.
+
+The keys belong to the development customer's exchange account, so the worker serves account data and orders only for that customer. If you placed orders before order intents moved to PostgreSQL, the worker refuses to start while `.testnet-orders/` holds intents: run `pnpm exchange import-journal` once to copy them into the database, then delete the directory.
 
 The worker listens on `127.0.0.1:4001`, and on `[::1]:4001` when IPv6 is available. Its HTTP interface requires the shared token. It serves the account snapshot and market data, places and cancels dashboard orders, and runs the execution loop while it is serving. **The dashboard can place and cancel orders on the connected testnet account, so it must stay on this machine.** It has no customer authentication: never expose it to a network, put it behind a proxy, or reach it through a tunnel. Its order actions refuse requests that are not from `localhost`, `127.0.0.1` or `[::1]`. The Overview assistant receives the displayed testnet account snapshot and cannot access exchange credentials or submit orders. The application has no demo account data or invented strategy/decision records. Strategy management and AI decision persistence are not implemented.
 
@@ -99,7 +104,7 @@ The worker listens on `127.0.0.1:4001`, and on `[::1]:4001` when IPv6 is availab
 Select **Trade** in the top bar, or in the header on a phone, to place a buy on BTC/USDT or ETH/USDT. Spot trading is long only, so the dashboard buys and never opens a short. A take profit above the entry and a stop loss below it are required. The drawer previews every pre-execution check as you type. The execution worker runs them again, with fresh account data, before it sends anything:
 
 - account limits from `authorizeTradeProposal`, with a policy built from the worker's configuration;
-- the per-order cap, `TESTNET_MAX_ORDER_NOTIONAL_USDT`;
+- your risk limits from **Settings → Risk limits**, read immediately before each order: the per-order cap, and a daily risk limit that refuses an order whose loss at its stop, added to that of the day's earlier manual orders since 00:00 UTC, would go over it;
 - Binance's price, quantity and minimum value filters for the entry and both exits, plus Binance's own validation of the entry.
 
 Each order is one Binance order list (OPOCO): a limit buy that, once it fills completely, places a limit-maker take profit and a stop-market stop loss, sized from the quantity received after fees. Either exit cancels the other. Exits are placed only when the entry has filled completely: a partly filled entry's quantity has no exits yet, and the Open orders table flags it.
@@ -108,13 +113,14 @@ Each order is one Binance order list (OPOCO): a limit buy that, once it fills co
 - **Market** entries are fill-or-kill limit buys at the best ask plus `TESTNET_MARKET_MAX_SLIPPAGE_PERCENT`. They fill completely at or below that price, or not at all. A plain market order cannot carry attached exits.
 - **Stop-limit** entries are held by the execution worker, not Binance: Binance attaches exits only to limit working orders, and its order lists still accept no stop working order (checked against the Spot API changelog of 2026-09-18). When the market trades at or above the stop price, the worker runs every check again with fresh account data and sends a limit entry at the limit price with its exits, as one order list. The stop price must be above the best ask and the stop loss below the stop price. A held entry reserves its value in the allocation, is listed in Open orders as **Held by the worker**, and can be cancelled there until it triggers. Binance has no record of it until then.
 
-Dashboard orders stay off until these are set in `apps/execution/.env`; they have no defaults:
+The drawer suggests a stop loss at your default percentage below the entry price, rounded up to the price tick, until you type one.
+
+Dashboard orders stay off until you set your risk limits in Settings, and until these are set in `apps/execution/.env`; they have no defaults:
 
 | Variable                              | Meaning                                                                               |
 | ------------------------------------- | ------------------------------------------------------------------------------------- |
 | `TESTNET_MANUAL_INSTRUMENTS`          | `BTC-USDT`, `ETH-USDT` or both                                                        |
 | `TESTNET_MANUAL_ALLOCATION_USDT`      | Virtual USDT that open entries and the positions their exits protect may hold at once |
-| `TESTNET_MAX_ORDER_NOTIONAL_USDT`     | Per-order cap, also the largest position                                              |
 | `TESTNET_MARKET_MAX_SLIPPAGE_PERCENT` | Optional, at most 5. Empty turns market orders off                                    |
 
 The allocation counts the unfilled value of every open buy, plus the entry value of each position whose exits are still open. Holdings with no open order are outside it.
@@ -123,7 +129,7 @@ Each order gets a new `ct_` client ID in the browser. The worker saves the order
 
 ### The execution loop
 
-The worker checks every customer's orders every five seconds, whether or not the dashboard is open ([ADR 0002](docs/adr/0002-run-execution-controls-independently-of-ai.md)). Each pass:
+The worker checks every customer's orders every five seconds, whether or not the dashboard is open ([ADR 0002](docs/adr/0002-run-execution-controls-independently-of-ai.md)), with the keys each exchange account trades with: those saved in Settings, or the worker's `.env` keys for the development account. An account without keys the worker can use is skipped. Each pass:
 
 - settles orders whose outcome was unknown, by looking them up on Binance by client ID once a minute has passed. It never resubmits one;
 - sends stop-limit entries whose stop price has traded;
@@ -138,11 +144,17 @@ The Overview shows each order whose bought quantity needs attention in red at th
 
 Binance cancels every order in a list together, so cancelling any leg cancels the entry and both exits. The confirmation dialog lists what will be cancelled. If the entry has already bought anything, it names the quantity that will be left without exits and needs a second, explicit confirmation.
 
+### Risk limits and alerts
+
+**Settings → Risk limits** keeps each change as a new version, audited, and never edits an earlier one. A change applies to orders placed after it; open orders keep the limits they were placed under. The platform maximums are 1,000 USDT for the per-order cap and for the daily risk limit, and a default stop loss from 0.1% to 50% below the entry. The daily risk limit counts each dashboard entry's loss if its stop fills at its price, and each CLI buy, which has no stop, at its full value. A stop-market exit can fill lower and fees are extra, so it is not a guaranteed maximum. Reaching it refuses new orders and nothing more: unlike a strategy's loss limit, it measures no realized or unrealized results and pauses nothing. A held stop-limit entry counts its risk while it waits, and when its stop trades it meets the latest per-order cap and daily risk limit, counting its own risk once, or is rejected unsent. Exits are never held back by any of these limits: the sells the execution loop sends to protect or close a position, and CLI sells, are not checked against them.
+
+**Settings → Notifications** lists the in-app alerts the execution worker raises, newest first. An optional Discord webhook URL, or a Telegram `https://api.telegram.org/bot<token>/sendMessage?chat_id=<chat ID>` URL, receives each new alert: the worker queues one outbox job per alert, posts it from the execution loop, and retries failed posts with backoff, from 30 seconds up to 15 minutes, for eight attempts. **Send test** posts straight away. The URL holds a token, so it is stored encrypted like exchange keys and never logged.
+
 ### Manual test orders
 
 These commands are for developer-controlled limit orders on virtual funds. They do not activate automated strategies or attach stop-loss/take-profit protection, and the execution loop does not watch them. Automatic proposal execution still requires persisted reservations.
 
-Set `TESTNET_MAX_ORDER_NOTIONAL_USDT` to your per-order development cap. The example configuration uses 100 virtual USDT. Use a current testnet price and a quantity meeting Binance's filters; the numbers below only illustrate the command syntax.
+They use the per-order cap and daily risk limit from **Settings → Risk limits**, which the worker reads before each order. `TESTNET_MAX_ORDER_NOTIONAL_USDT` is no longer read. A CLI buy has no stop loss, so all of its value counts against the daily risk limit; a sell is never refused for it. Use a current testnet price and a quantity meeting Binance's filters; the numbers below only illustrate the command syntax.
 
 ```bash
 pnpm exchange balances
