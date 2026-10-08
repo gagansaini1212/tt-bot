@@ -31,8 +31,8 @@ import type { AccountScope } from "./accounts";
 import {
   contentId,
   RECORDED_FIXTURE_MODEL,
-  type SignalSource,
-} from "./ai-signals";
+  type DecisionSource,
+} from "./ai-decisions";
 import {
   ProtectedEntrySender,
   serializer,
@@ -141,7 +141,7 @@ export class StrategyRunner {
     "record" | "find" | "reject" | "expire"
   >;
   readonly #intents: Pick<OrderIntentStore, "settle" | "recordOrders">;
-  readonly #signals: SignalSource;
+  readonly #decisions: DecisionSource;
   readonly #now: () => Date;
   readonly #onChange: () => void;
   readonly #log: (message: string) => void;
@@ -157,7 +157,7 @@ export class StrategyRunner {
       "record" | "find" | "reject" | "expire"
     >;
     intents: Pick<OrderIntentStore, "settle" | "recordOrders">;
-    signals: SignalSource;
+    decisions: DecisionSource;
     now?: () => Date;
     onChange?: () => void;
     log?: (message: string) => void;
@@ -168,7 +168,7 @@ export class StrategyRunner {
     this.store = new StrategyStore(options.database);
     this.#proposals = options.proposals;
     this.#intents = options.intents;
-    this.#signals = options.signals;
+    this.#decisions = options.decisions;
     this.#now = options.now ?? (() => new Date());
     this.#onChange = options.onChange ?? (() => {});
     this.#log = options.log ?? ((message) => console.error(message));
@@ -176,7 +176,7 @@ export class StrategyRunner {
   }
 
   get aiSource(): AiSource {
-    return this.#signals.source;
+    return this.#decisions.source;
   }
 
   #context(exchange: ExecutionExchange, reads = new PassReads(exchange)) {
@@ -193,25 +193,33 @@ export class StrategyRunner {
 
   /** One pass over the account's strategies. The execution loop calls it. */
   async run(scope: AccountScope, reads: PassReads) {
-    const strategies = (await this.store.list(scope)).filter(
+    const context = this.#context(reads.exchange, reads);
+    const today = todays(await this.store.list(scope), context.now);
+    if (!today.length) return;
+    const strategies = today.filter(
       (strategy) => strategy.status !== "retired",
     );
-    if (!strategies.length) return;
-    const context = this.#context(reads.exchange, reads);
     const entries = await this.store.entries(
       scope,
-      strategies.map((strategy) => strategy.id),
-    );
-    const measured = await this.#measureAll(
-      scope,
-      context,
-      strategies,
-      entries,
+      today.map((strategy) => strategy.id),
     );
     const notes = new Map<string, string>();
+    // Whatever their losses, entries sent since a pause or close all are
+    // stopped, entries past their expiry are cancelled, and a strategy
+    // whose rules ended completes once it holds nothing.
+    for (const strategy of strategies) {
+      const note = await this.#upkeep(
+        scope,
+        context,
+        strategy,
+        entries.get(strategy.id) ?? [],
+      );
+      if (note) notes.set(strategy.id, note);
+    }
+    const measured = await this.#measureAll(scope, context, today, entries);
     let stopped = false;
     for (const strategy of strategies) {
-      await this.store.settleReservations(scope, strategy.id);
+      if (notes.get(strategy.id)?.startsWith("Completed")) continue;
       const result = measured.get(strategy.id)!;
       if (result.status === "unmeasured") {
         if (isRunning(strategy.status))
@@ -240,15 +248,9 @@ export class StrategyRunner {
         );
         continue;
       }
-      if (strategy.exitRequest)
-        await this.store.applyExitRequest(
-          scope,
-          strategy.id,
-          strategy.exitRequest,
-        );
     }
     if (!stopped) {
-      const portfolio = await this.#portfolio(scope, strategies, measured);
+      const portfolio = await this.#portfolio(scope, today, measured);
       if (portfolio.blocked) {
         for (const strategy of strategies)
           if (isRunning(strategy.status) && !notes.has(strategy.id))
@@ -259,7 +261,9 @@ export class StrategyRunner {
           if (
             !isRunning(strategy.status) ||
             notes.has(strategy.id) ||
-            result.status !== "measured"
+            result.status !== "measured" ||
+            // Upkeep may have just completed or stopped it.
+            strategy.rulesEndedAt
           )
             continue;
           try {
@@ -296,6 +300,53 @@ export class StrategyRunner {
           : "");
       if (note) await this.store.note(scope, strategy.id, note);
     }
+  }
+
+  /**
+   * What every strategy that has not completed needs on each pass, whether
+   * or not it can be measured: its reservations settled, its exit request
+   * applied to entries sent since it was made, unfilled entries past their
+   * entry expiry cancelled, and completion once its rules ended and it
+   * holds nothing. Resolves a note when its rules have ended.
+   */
+  async #upkeep(
+    scope: AccountScope,
+    context: PassContext,
+    strategy: StrategyRecord,
+    entries: StrategyEntry[],
+  ): Promise<string | undefined> {
+    await this.store.settleReservations(scope, strategy.id);
+    if (strategy.exitRequest)
+      await this.store.applyExitRequest(
+        scope,
+        strategy.id,
+        strategy.exitRequest,
+      );
+    const unclosed = entries.filter(isUnclosed);
+    const expired = unclosed.filter(
+      (entry) =>
+        entry.orderIntentId !== null &&
+        entry.intentStatus === "acknowledged" &&
+        entry.exitReason === null &&
+        entry.entryExpiresAt.getTime() <= context.now.getTime() &&
+        new Decimal(entry.filled).lt(entry.quantity),
+    );
+    if (
+      await this.store.expire(
+        scope,
+        expired.map((entry) => entry.orderIntentId!),
+      )
+    )
+      this.#onChange();
+    if (!strategy.rulesEndedAt) return undefined;
+    if (await this.store.complete(scope, strategy.id)) {
+      await this.store.settleReservations(scope, strategy.id);
+      this.#onChange();
+      return "Completed: its rules open no more entries and it holds nothing.";
+    }
+    const reason =
+      ENDED_LABELS[strategy.rulesEndedReason ?? ""] ?? "its rules ended";
+    return `Opens no more entries (${reason}). Waiting for ${plural(unclosed.length, "entry", "entries")} to finish.`;
   }
 
   /**
@@ -347,31 +398,6 @@ export class StrategyRunner {
   ): Promise<string> {
     const { now } = context;
     const unclosed = entries.filter(isUnclosed);
-    const expired = unclosed.filter(
-      (entry) =>
-        entry.orderIntentId !== null &&
-        entry.intentStatus === "acknowledged" &&
-        entry.exitReason === null &&
-        entry.entryExpiresAt.getTime() <= now.getTime() &&
-        new Decimal(entry.filled).lt(entry.quantity),
-    );
-    if (
-      await this.store.expire(
-        scope,
-        expired.map((entry) => entry.orderIntentId!),
-      )
-    )
-      this.#onChange();
-    if (strategy.rulesEndedAt) {
-      if (await this.store.complete(scope, strategy.id)) {
-        await this.store.settleReservations(scope, strategy.id);
-        this.#onChange();
-        return "Completed: its rules open no more entries and it holds nothing.";
-      }
-      const reason =
-        ENDED_LABELS[strategy.rulesEndedReason ?? ""] ?? "its rules ended";
-      return `Opens no more entries (${reason}). Waiting for ${plural(unclosed.length, "entry", "entries")} to finish.`;
-    }
     const { rules } = strategy;
     if (rules.kind === "ai_managed")
       return this.#analyse(scope, context, strategy, rules, unclosed, measured);
@@ -530,7 +556,7 @@ export class StrategyRunner {
     );
     let decision;
     try {
-      decision = await this.#signals.decide({
+      decision = await this.#decisions.decide({
         strategy: { id: strategy.id, name: strategy.name, rules },
         markets,
         entries: unclosed.map((entry) => ({
@@ -622,6 +648,8 @@ export class StrategyRunner {
         holdingPeriodSeconds: strategy.rules.holdingPeriodSeconds,
       },
     });
+    // Nothing was sent either way. If saving the rejection fails, the draft
+    // stays a draft and the checks refuse it again when next approved.
     if (result.status === "skipped" && result.checksRefused)
       await this.#proposals
         .reject(
@@ -666,6 +694,22 @@ export class StrategyRunner {
         checksRefused: true,
       };
     return this.#exclusive(async () => {
+      // Measured again right before the entry, as before every entry.
+      const losses = await this.#measureNow(
+        scope,
+        context,
+        candidate.strategyId,
+      );
+      if (losses.status === "unmeasured")
+        return {
+          status: "skipped",
+          reason: `The worker cannot measure its losses now. ${losses.reason}`,
+        };
+      if (losses.limits.breached)
+        return {
+          status: "skipped",
+          reason: "A loss limit is reached, so it opens no entries.",
+        };
       const free = await this.#freeStopOrders(
         scope,
         context,
@@ -767,6 +811,24 @@ export class StrategyRunner {
     if (!rules)
       throw new Error(`Binance's rules for ${instrument} are missing.`);
     return rules;
+  }
+
+  /** One strategy's results and loss limits, read afresh. */
+  async #measureNow(
+    scope: AccountScope,
+    context: PassContext,
+    strategyId: string,
+  ): Promise<Measured> {
+    const strategy = await this.store.get(scope, strategyId);
+    if (!strategy)
+      return { status: "unmeasured", reason: "There is no such strategy." };
+    const measured = await this.#measureAll(
+      scope,
+      context,
+      [strategy],
+      await this.store.entries(scope, [strategyId]),
+    );
+    return measured.get(strategyId)!;
   }
 
   /** Measures every strategy's results and loss limits. */
@@ -958,7 +1020,7 @@ export class StrategyRunner {
         // Left out: the page says the market's rules are unavailable.
       }
     }
-    const live = strategies.filter((strategy) => strategy.status !== "retired");
+    const live = todays(strategies, context.now);
     const today = limits.current
       ? portfolioToday(live, measured, limits.current.maxDailyDrawdownPercent)
       : portfolioToday(live, measured, "100");
@@ -991,10 +1053,10 @@ export class StrategyRunner {
     strategyId: string,
   ): Promise<string | undefined> {
     const context = this.#context(exchange);
-    const strategies = (await this.store.list(scope)).filter(
-      (strategy) => strategy.status !== "retired",
+    const strategies = todays(await this.store.list(scope), context.now);
+    const strategy = strategies.find(
+      (entry) => entry.id === strategyId && entry.status !== "retired",
     );
-    const strategy = strategies.find((entry) => entry.id === strategyId);
     if (!strategy) return undefined;
     const entries = await this.store.entries(
       scope,
@@ -1054,6 +1116,8 @@ export class StrategyRunner {
             : `This proposal was ${proposal.status}, so nothing was sent.`,
       };
     if (proposal.entryExpiresAt.getTime() <= now.getTime()) {
+      // Only bookkeeping: an expired draft can never be approved, whether
+      // or not its status is saved now.
       await this.#proposals.expire(scope, proposalId, now).catch(() => false);
       return {
         status: "rejected",
@@ -1094,6 +1158,20 @@ export class StrategyRunner {
     this.#lastLogged = message;
     this.#log(message);
   }
+}
+
+/**
+ * The strategies that count today: every one not completed, and those that
+ * completed since midnight UTC, whose results today still count against the
+ * portfolio's drawdown.
+ */
+function todays(strategies: StrategyRecord[], now: Date) {
+  const dayStart = utcDayStart(now).getTime();
+  return strategies.filter(
+    (strategy) =>
+      strategy.status !== "retired" ||
+      (strategy.completedAt?.getTime() ?? 0) >= dayStart,
+  );
 }
 
 /** Every strategy's result since midnight UTC against their allocations. */

@@ -20,10 +20,10 @@ import {
 } from "@crypto-trading/exchanges";
 import type { AccountResolver, AccountScope } from "./accounts";
 import {
-  RecordedSignalSource,
+  RecordedDecisionSource,
   RECORDED_FIXTURE_MODEL,
-  type SignalSource,
-} from "./ai-signals";
+  type DecisionSource,
+} from "./ai-decisions";
 import { ExecutionLoop } from "./execution-loop";
 import { FakeBinance } from "./fixtures/fake-binance";
 import { limit } from "./fixtures/fake-exchange";
@@ -121,18 +121,19 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
    */
   async function world({
     lockCustomers = true,
-    signals = new RecordedSignalSource(),
+    decisions = new RecordedDecisionSource(),
     start,
     drawdownPercent = "50",
   }: {
     lockCustomers?: boolean;
-    signals?: SignalSource;
+    decisions?: DecisionSource;
     start?: Date;
     drawdownPercent?: string;
   } = {}) {
     const scope = await addCustomer();
     let offset = start ? start.getTime() - Date.now() : 0;
-    const now = () => new Date(Date.now() + offset);
+    let frozen: Date | undefined;
+    const now = () => frozen ?? new Date(Date.now() + offset);
     const fake = new FakeBinance(now);
     fake.balances.get("USDT")!.free = new Decimal(10_000);
     const intents = new PostgresOrderIntents(database.app);
@@ -156,7 +157,7 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
         database: database.app,
         proposals,
         intents,
-        signals,
+        decisions,
         now,
         log: (message) => logs.push(message),
         exclusive,
@@ -207,6 +208,10 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
       pass: () => built.loop.runPass(),
       advance(ms: number) {
         offset += ms;
+      },
+      // Stops the clock at `at`, to the millisecond.
+      freeze(at: Date) {
+        frozen = at;
       },
       async create(value: StrategyDraft) {
         const created = await built.runner.store.create(scope, value, now());
@@ -271,7 +276,10 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
       order by occurred_at
     `;
 
-  /** Places a single standing entry and fills it, so the strategy holds BTC. */
+  /**
+   * Places a standing instruction and fills its first entry, so the strategy
+   * holds BTC. Its second entry rests far below, so its rules stay open.
+   */
   async function holding(
     w: World,
     lossLimits = { daily: "3", total: "10" },
@@ -294,6 +302,12 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
               entryPrice: "59900",
               stopLossPrice: "55000",
               takeProfitPrice: "62000",
+            },
+            {
+              quantity: "0.001",
+              entryPrice: "40000",
+              stopLossPrice: "39000",
+              takeProfitPrice: "41000",
             },
           ],
           entryExpiresAt: new Date(w.now().getTime() + DAY).toISOString(),
@@ -605,7 +619,7 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
     };
     const id = await w.create(
       draft({
-        name: "AI signals",
+        name: "AI decisions",
         allocation: "200",
         ai: { proposalApproval: "required", analysisIntervalMinutes: 60 },
         rules,
@@ -994,8 +1008,14 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
       /daily loss limit is still reached today/,
     );
 
-    // After midnight, yesterday's loss does not count against today.
-    w.advance(40 * 60_000);
+    // The last millisecond before midnight still counts the loss; from
+    // midnight, yesterday's loss does not count against today.
+    w.freeze(new Date(midnight.getTime() - 1));
+    assert.match(
+      (await w.runner.resumeProblem(w.scope, w.fake, id)) ?? "",
+      /daily loss limit is still reached today/,
+    );
+    w.freeze(midnight);
     assert.equal(await w.runner.resumeProblem(w.scope, w.fake, id), undefined);
     assert.equal((await w.runner.store.resume(w.scope, id)).result, "saved");
   });
@@ -1080,7 +1100,7 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
     const result = await w.runner.store.killSwitch(w.scope);
     assert.equal(result.pausedStrategies, 2);
     assert.equal(result.cancelledTriggers, 1);
-    assert.equal(result.closingEntries, 5);
+    assert.equal(result.closingEntries, 6);
     await w.pass();
     await w.pass();
     for (const strategyId of [id, gridId]) {
@@ -1159,6 +1179,68 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
     );
     const versions = await auditEvents(w.scope, "strategy.version_created");
     assert.equal(versions.length, 1);
+  });
+
+  test("a loss limit reached while Close all is selling stops and alerts once", async () => {
+    const w = await world();
+    const { id } = await holding(w, { daily: "3", total: "10" });
+    assert.equal((await w.runner.store.closeAll(w.scope, id)).result, "saved");
+    w.fake.setPrice("BTC-USDT", "56900");
+    for (let pass = 0; pass < 4; pass++) await w.pass();
+    assert.equal(
+      (await auditEvents(w.scope, "strategy.loss_limit_reached")).length,
+      1,
+    );
+    assert.deepEqual(
+      (await notifications(w.scope)).filter((kind) =>
+        kind.endsWith("loss_limit_reached"),
+      ),
+      ["critical:loss_limit_reached"],
+    );
+    const strategy = await w.strategy(id);
+    assert.equal(strategy.status, "paused");
+    assert.ok(strategy.lossLimitReachedAt);
+    assert.ok(
+      (await entries(id)).every((entry) =>
+        ["closed", "not_filled"].includes(entry.state ?? ""),
+      ),
+    );
+  });
+
+  test("a grid that left its range runs again under a new version for a new range", async () => {
+    const w = await world();
+    const id = await w.create(grid(w.now()));
+    await w.pass();
+    w.fake.setPrice("BTC-USDT", "63500");
+    for (let pass = 0; pass < 3; pass++) await w.pass();
+    assert.equal((await w.strategy(id)).status, "retired");
+    const saved = await w.runner.store.newVersion(
+      w.scope,
+      id,
+      1,
+      grid(w.now(), {
+        lowerPrice: "62000",
+        upperPrice: "68000",
+        rangeStopPrice: "61000",
+      }),
+    );
+    assert.equal(saved.result, "saved");
+    const running = await w.strategy(id);
+    assert.equal(running.status, "simulation");
+    assert.equal(running.exitRequest, null);
+    assert.equal(running.rulesEndedAt, null);
+    await w.pass();
+    await w.pass();
+    // Buys rest at 63,000 and 62,000, below the market, and stay.
+    const placed = (await entries(id)).filter(
+      (entry) =>
+        entry.intent_status === "acknowledged" && entry.state === "working",
+    );
+    assert.deepEqual(
+      placed.map((entry) => new Decimal(entry.entry_price).toFixed()),
+      ["63000", "62000"],
+    );
+    assert.ok(placed.every((entry) => entry.exit_reason === null));
   });
 
   test("the worker's routes check drafts, create, list and control strategies, and approve a strategy's proposal under its limits", async () => {
@@ -1245,7 +1327,7 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
       database: database.app,
       proposals: new PostgresTradeProposals(database.app),
       intents: new PostgresOrderIntents(database.app),
-      signals: new RecordedSignalSource(),
+      decisions: new RecordedDecisionSource(),
     });
     const created = await runner.store.create(
       scope,

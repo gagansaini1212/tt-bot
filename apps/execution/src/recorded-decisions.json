@@ -1,5 +1,5 @@
 {
-  "id": "recorded-signals-2026-10",
+  "id": "recorded-decisions-2026-10",
   "title": "Recorded decisions for AI-managed strategies",
   "provenance": "Hand-written for this repository so AI-managed strategies run without a model: a cycle of trade proposals priced relative to the market at the time, and decisions not to trade. No model produced them, and they say nothing about how the AI trades.",
   "decisions": [

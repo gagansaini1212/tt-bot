@@ -53,7 +53,7 @@ import {
 const KINDS: { value: StrategyKindName; label: string }[] = [
   { value: "grid", label: "Grid" },
   { value: "dca", label: "DCA" },
-  { value: "ai_managed", label: "AI-managed (AI Signal bot)" },
+  { value: "ai_managed", label: "AI-managed" },
   { value: "standing_price_instruction", label: "Standing price instruction" },
 ];
 
@@ -164,7 +164,9 @@ export function StrategyEditor({
         </CardTitle>
         <CardDescription className="mt-1">
           {editing
-            ? "Saving makes a new version. Entries already open keep the version they were made under."
+            ? editing.status === "retired"
+              ? "Saving makes a new version, and the strategy runs again under it."
+              : "Saving makes a new version. Entries already open keep the version they were made under."
             : "Runs on Binance Spot Testnet with virtual funds. Review its exact effects before it starts."}
         </CardDescription>
       </CardHeader>

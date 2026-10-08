@@ -49,6 +49,7 @@ export type StrategyRecord = {
   pauseReason: string | null;
   pausedAt: Date | null;
   exitRequest: string | null;
+  lossLimitReachedAt: Date | null;
   rulesEndedAt: Date | null;
   rulesEndedReason: string | null;
   completedAt: Date | null;
@@ -141,6 +142,7 @@ type StrategyRow = {
   pause_reason: string | null;
   paused_at: Date | null;
   exit_request: string | null;
+  loss_limit_reached_at: Date | null;
   rules_ended_at: Date | null;
   rules_ended_reason: string | null;
   completed_at: Date | null;
@@ -172,6 +174,7 @@ function toRecord(row: StrategyRow): StrategyRecord | undefined {
     pauseReason: row.pause_reason,
     pausedAt: row.paused_at,
     exitRequest: row.exit_request,
+    lossLimitReachedAt: row.loss_limit_reached_at,
     rulesEndedAt: row.rules_ended_at,
     rulesEndedReason: row.rules_ended_reason,
     completedAt: row.completed_at,
@@ -188,7 +191,8 @@ function selectStrategies(
 ) {
   return tx<StrategyRow[]>`
     select s.id, s.name, s.status, s.current_version, s.created_at,
-      s.pause_reason, s.paused_at, s.exit_request, s.rules_ended_at,
+      s.pause_reason, s.paused_at, s.exit_request, s.loss_limit_reached_at,
+      s.rules_ended_at,
       s.rules_ended_reason, s.completed_at, s.runner_note, s.runner_checked_at,
       s.next_analysis_at, v.rules, v.proposal_approval,
       v.analysis_interval_minutes, a.amount::text as allocation
@@ -402,8 +406,10 @@ export class StrategyStore {
 
   /**
    * Saves `draft` as the next version, made from `baseVersion`, and sets
-   * the allocation. Entries keep the version they were made under. The
-   * kind cannot change, and a completed strategy has no new versions.
+   * the allocation. Entries keep the version they were made under, and the
+   * kind cannot change. Its rules start again: a completed strategy runs
+   * again under the new version, as a grid does to trade a new range, and
+   * entries made after its old rules ended are no longer closed for it.
    */
   newVersion(
     scope: AccountScope,
@@ -419,10 +425,14 @@ export class StrategyStore {
       const current = row && toRecord(row);
       if (!current)
         return { result: "refused", message: "There is no such strategy." };
-      if (current.status === "retired")
+      if (
+        current.status === "retired" &&
+        !(await latestPortfolioLimit(tx, scope))
+      )
         return {
           result: "refused",
-          message: "This strategy has completed. Create a new one instead.",
+          message:
+            "Set the portfolio's daily drawdown limit in Settings → Risk limits before running a strategy again.",
         };
       if (current.version !== baseVersion)
         return {
@@ -437,9 +447,28 @@ export class StrategyStore {
         };
       const version = current.version + 1;
       await insertVersion(tx, scope, strategyId, version, draft);
+      // The old rules' close stays on the entries it already reached.
+      const ended =
+        current.exitRequest && ENDED_EXITS.includes(current.exitRequest);
+      if (ended)
+        await requestStrategyExits(
+          tx,
+          scope,
+          strategyId,
+          current.exitRequest!,
+          {
+            unrequested: true,
+          },
+        );
       await tx`
         update strategies set name = ${draft.name}, current_version = ${version},
-          rules_ended_at = null, rules_ended_reason = null, updated_at = now()
+          rules_ended_at = null, rules_ended_reason = null,
+          exit_request = case when ${ended} then null else exit_request end,
+          status = case when status = 'retired' then 'simulation' else status end,
+          completed_at = null,
+          next_analysis_at = case when status = 'retired'
+            and ${draft.ai !== null} then now() else next_analysis_at end,
+          updated_at = now()
         where id = ${strategyId}
       `;
       await tx`
@@ -458,7 +487,10 @@ export class StrategyStore {
       const [saved] = await selectStrategies(tx, scope, { id: strategyId });
       return {
         result: "saved",
-        message: `Saved version ${version}. Open entries keep the version they were made under.`,
+        message:
+          current.status === "retired"
+            ? `Saved version ${version}. The strategy runs again under it.`
+            : `Saved version ${version}. Open entries keep the version they were made under.`,
         strategy: toRecord(saved)!,
       };
     });
@@ -526,7 +558,8 @@ export class StrategyStore {
         );
       await tx`
         update strategies set status = 'simulation', pause_reason = null,
-          paused_at = null, exit_request = null, updated_at = now(),
+          paused_at = null, exit_request = null, loss_limit_reached_at = null,
+          updated_at = now(),
           next_analysis_at = case when next_analysis_at is null then null
             else greatest(next_analysis_at, now()) end
         where id = ${strategyId}
@@ -595,7 +628,8 @@ export class StrategyStore {
         left join trade_proposals p on p.id = i.proposal_id
         left join entry_reconciliations r on r.order_intent_id = i.id
         where i.exchange_account_id = ${scope.exchangeAccountId}
-          and i.status = 'acknowledged'
+          -- Including entries still being sent: the request waits for them.
+          and i.status in ('submitting', 'unknown', 'acknowledged')
           and i.manual_order ->> 'kind' = 'protected_entry'
           and p.strategy_id is null
           and (r.state is null or r.state not in ${tx(terminal)})
@@ -652,17 +686,17 @@ export class StrategyStore {
       });
       const current = row && toRecord(row);
       if (!current || current.status === "retired") return false;
-      if (current.exitRequest === "loss_limit") {
-        // Already stopped; entries sent since then are stopped too.
-        await requestStrategyExits(tx, scope, strategyId, "loss_limit", {
-          unrequested: true,
-        });
-        return false;
-      }
+      // Stopped and alerted once; the strategy's exit request stops entries
+      // sent since then.
+      if (current.lossLimitReachedAt) return false;
       await stopStrategy(tx, scope, strategyId, {
         pauseReason: isRunning(current.status) ? "loss_limit" : undefined,
         exitRequest: "loss_limit",
       });
+      await tx`
+        update strategies set loss_limit_reached_at = now()
+        where id = ${strategyId}
+      `;
       await audit(tx, scope, strategyId, "strategy.loss_limit_reached", {
         actor: "execution_worker",
         subjectType: "strategy",
@@ -1168,6 +1202,9 @@ export class StrategyStore {
     });
   }
 }
+
+// Exit requests that end a strategy's rules, which a new version lifts.
+const ENDED_EXITS = ["range_stop", "above_range"];
 
 /** Why a strategy's rules open no more entries, for the customer. */
 export const ENDED_LABELS: Record<string, string> = {

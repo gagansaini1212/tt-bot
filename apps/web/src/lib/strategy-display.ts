@@ -1,14 +1,12 @@
 // Browser-safe helpers for the Strategies page.
 import Decimal from "decimal.js";
-import type { StrategyRules } from "@crypto-trading/domain";
+import { ruleLimits, type StrategyRules } from "@crypto-trading/domain";
 import type { StrategyView } from "@crypto-trading/exchanges/strategies";
 
 /** The markets a strategy trades, such as "BTC/USDT, ETH/USDT". */
 export function strategyMarkets(rules: StrategyRules) {
-  const instruments =
-    rules.kind === "ai_managed" ? rules.allowedInstruments : [rules.instrument];
-  return instruments
-    .map((instrument) => instrument.replace("-", "/"))
+  return ruleLimits(rules)
+    .allowedInstruments.map((instrument) => instrument.replace("-", "/"))
     .join(", ");
 }
 

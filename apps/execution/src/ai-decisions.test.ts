@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import type { AiManagedRules } from "@crypto-trading/domain";
 import {
-  EveSignalSource,
+  EveDecisionSource,
   parseEveHost,
   RECORDED_FIXTURE_MODEL,
-  RecordedSignalSource,
+  RecordedDecisionSource,
   STRATEGY_PROMPT_VERSION,
   type EveConnection,
-  type SignalRequest,
-} from "./ai-signals";
+  type AnalysisRequest,
+} from "./ai-decisions";
 
 const rules: AiManagedRules = {
   kind: "ai_managed",
@@ -24,7 +24,7 @@ const rules: AiManagedRules = {
   lossLimits: { daily: "20", total: "50" },
 };
 
-const request = (sequence: number, available = "200"): SignalRequest => ({
+const request = (sequence: number, available = "200"): AnalysisRequest => ({
   strategy: { id: "7b0b4a4e-38a8-4f39-8d1c-1d4b8f0a6c11", name: "AI", rules },
   markets: [
     {
@@ -52,7 +52,7 @@ const request = (sequence: number, available = "200"): SignalRequest => ({
 
 describe("recorded fixture decisions", () => {
   test("take turns, are priced from the market, sized within the limits and labelled", async () => {
-    const source = new RecordedSignalSource();
+    const source = new RecordedDecisionSource();
     assert.equal(source.source.kind, "fixture");
     const first = await source.decide(request(0));
     assert.equal(first.kind, "trade_proposal");
@@ -92,7 +92,7 @@ describe("recorded fixture decisions", () => {
   });
 
   test("decide not to trade when the allocation left is too small", async () => {
-    const decision = await new RecordedSignalSource().decide(request(0, "1"));
+    const decision = await new RecordedDecisionSource().decide(request(0, "1"));
     assert.equal(decision.kind, "no_trade");
     assert.match(decision.rationale, /too little allocation/);
   });
@@ -120,7 +120,7 @@ describe("decisions from the eve assistant", () => {
   };
 
   test("are recorded with the model and the worker's prompt version", async () => {
-    const source = new EveSignalSource({
+    const source = new EveDecisionSource({
       host: "http://127.0.0.1:2000",
       connect: async () => connection(trade),
     });
@@ -131,7 +131,7 @@ describe("decisions from the eve assistant", () => {
     assert.equal(decision.promptVersion, STRATEGY_PROMPT_VERSION);
     if (decision.kind === "trade_proposal")
       assert.equal(decision.proposal.entryPrice, "2990");
-    const none = await new EveSignalSource({
+    const none = await new EveDecisionSource({
       host: "http://127.0.0.1:2000",
       connect: async () =>
         connection({
@@ -150,7 +150,7 @@ describe("decisions from the eve assistant", () => {
 
   test("are refused outside the strategy's instruments, without prices, or unfinished", async () => {
     const decide = (data: unknown, status?: string) =>
-      new EveSignalSource({
+      new EveDecisionSource({
         host: "http://127.0.0.1:2000",
         connect: async () => connection(data, status),
       }).decide({

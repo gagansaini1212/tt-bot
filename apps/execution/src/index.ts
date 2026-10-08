@@ -21,11 +21,11 @@ import {
   savedOrEnvironmentExchanges,
 } from "./exchange-credentials";
 import {
-  EveSignalSource,
+  EveDecisionSource,
   parseEveHost,
-  RecordedSignalSource,
-  type SignalSource,
-} from "./ai-signals";
+  RecordedDecisionSource,
+  type DecisionSource,
+} from "./ai-decisions";
 import { createRequestListener, safeError } from "./http";
 import { ExecutionLoop } from "./execution-loop";
 import { assertNoJournal, importJournal } from "./legacy-journal";
@@ -170,7 +170,7 @@ async function main() {
       database: db,
       proposals,
       intents,
-      signals: signalSource(process.env),
+      decisions: decisionSource(process.env),
       onChange: () => accountChanged?.(),
       exclusive,
     });
@@ -417,15 +417,15 @@ async function main() {
  * STRATEGY_AI_EVE_URL once a model is configured for it, or else a recorded
  * fixture, labelled as one on every decision.
  */
-function signalSource(env: NodeJS.ProcessEnv): SignalSource {
+function decisionSource(env: NodeJS.ProcessEnv): DecisionSource {
   const url = env.STRATEGY_AI_EVE_URL?.trim();
-  if (!url) return new RecordedSignalSource();
+  if (!url) return new RecordedDecisionSource();
   const host = parseEveHost(url);
   if (!host)
     throw new Error(
       "STRATEGY_AI_EVE_URL must point to the eve assistant on this machine, such as http://127.0.0.1:2000. Leave it empty to replay the recorded fixture.",
     );
-  return new EveSignalSource({ host });
+  return new EveDecisionSource({ host });
 }
 
 function listen(handle: RequestListener, port: number, host: string) {

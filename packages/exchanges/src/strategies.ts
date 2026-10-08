@@ -5,6 +5,7 @@ import Decimal from "decimal.js";
 import { z } from "zod";
 import {
   allocationIssues,
+  ruleLimits,
   strategyRulesSchema,
   strategyStatusSchema,
   type StrategyRules,
@@ -69,8 +70,7 @@ export function testnetRuleIssues(
       path: ["marketKind"],
       message: "This exchange account trades spot only.",
     });
-  const instruments =
-    rules.kind === "ai_managed" ? rules.allowedInstruments : [rules.instrument];
+  const instruments = ruleLimits(rules).allowedInstruments;
   if (
     !instruments.every(
       (instrument) => testnetInstrumentSchema.safeParse(instrument).success,

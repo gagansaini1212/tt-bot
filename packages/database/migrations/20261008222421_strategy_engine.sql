@@ -15,6 +15,9 @@ ALTER TABLE strategies
   -- close_all or loss_limit. The worker applies it on every pass, so an
   -- entry sent while the request was made is stopped too.
   ADD COLUMN exit_request text CHECK (exit_request ~ '^[a-z_]{1,40}$'),
+  -- Set when the worker finds a loss limit reached, so it stops and alerts
+  -- once. Resuming clears it.
+  ADD COLUMN loss_limit_reached_at timestamptz,
   -- The rules open no more entries: an expiry, the end of a DCA schedule, a
   -- standing instruction that filled, or a grid that left its range. The
   -- strategy completes once it holds nothing. A new version clears it.

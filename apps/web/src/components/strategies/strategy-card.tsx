@@ -255,7 +255,16 @@ export function StrategyCard({
           </Alert>
         ) : null}
       </CardContent>
-      {strategy.status === "retired" ? null : (
+      {strategy.status === "retired" ? (
+        // A new version runs a completed strategy again, as a grid does to
+        // trade a new range.
+        <CardFooter className="mt-auto flex flex-wrap gap-2">
+          <Button onClick={onEdit} size="sm" variant="outline">
+            <PencilLine />
+            New version
+          </Button>
+        </CardFooter>
+      ) : (
         <CardFooter className="mt-auto flex flex-wrap gap-2">
           {strategy.status === "paused" ? (
             <Button disabled={pending} onClick={() => act("resume")} size="sm">

@@ -425,10 +425,7 @@ export function strategyEffects(
   now: number,
 ): Effects {
   const { rules } = draft;
-  const instrument =
-    rules.kind === "ai_managed"
-      ? rules.allowedInstruments[0]
-      : rules.instrument;
+  const instrument = ruleLimits(rules).allowedInstruments[0];
   const market = markets.find((entry) => entry.instrument === instrument);
   const steps = market && {
     tickSize: market.tickSize,

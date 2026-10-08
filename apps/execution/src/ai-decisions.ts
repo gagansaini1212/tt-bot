@@ -19,10 +19,10 @@ import {
   type AiSource,
   type TestnetInstrument,
 } from "@crypto-trading/exchanges";
-import recordedSignals from "./recorded-signals.json" with { type: "json" };
+import recordedDecisions from "./recorded-decisions.json" with { type: "json" };
 
 /** A market an AI-managed strategy may trade, as the worker read it. */
-export type SignalMarket = {
+export type AnalysisMarket = {
   instrument: TestnetInstrument;
   lastPrice: string;
   bestAsk: string | null;
@@ -32,9 +32,9 @@ export type SignalMarket = {
 };
 
 /** What the worker gives the AI for one scheduled analysis. */
-export type SignalRequest = {
+export type AnalysisRequest = {
   strategy: { id: string; name: string; rules: AiManagedRules };
-  markets: SignalMarket[];
+  markets: AnalysisMarket[];
   // What the strategy holds now, pending or open.
   entries: {
     instrument: TestnetInstrument;
@@ -49,15 +49,15 @@ export type SignalRequest = {
 };
 
 /** A decision to record, without its idempotency key. */
-export type SignalDecision = AiDecisionRequest extends infer Request
+export type AnalysisDecision = AiDecisionRequest extends infer Request
   ? Request extends AiDecisionRequest
     ? Omit<Request, "idempotencyKey">
     : never
   : never;
 
-export interface SignalSource {
+export interface DecisionSource {
   readonly source: AiSource;
-  decide(request: SignalRequest): Promise<SignalDecision>;
+  decide(request: AnalysisRequest): Promise<AnalysisDecision>;
 }
 
 export { RECORDED_FIXTURE_MODEL };
@@ -66,7 +66,7 @@ const percent = z
   .string()
   .regex(/^\d+(\.\d+)?$/)
   .refine((value) => new Decimal(value).gt(0) && new Decimal(value).lt(100));
-const recordedSignalsSchema = z.strictObject({
+const recordedDecisionsSchema = z.strictObject({
   id: z.string().regex(/^[a-z0-9-]{1,64}$/),
   title: z.string().min(1).max(120),
   provenance: z.string().min(1).max(500),
@@ -95,9 +95,10 @@ const recordedSignalsSchema = z.strictObject({
     )
     .min(1),
 });
-export type RecordedSignals = z.infer<typeof recordedSignalsSchema>;
+export type RecordedDecisions = z.infer<typeof recordedDecisionsSchema>;
 
-export const RECORDED_SIGNALS = recordedSignalsSchema.parse(recordedSignals);
+export const RECORDED_DECISIONS =
+  recordedDecisionsSchema.parse(recordedDecisions);
 
 /**
  * A stable ID for exactly this content, shaped as a UUID, so a decision can
@@ -112,7 +113,7 @@ export function contentId(content: unknown): string {
 }
 
 /** The input a decision was based on, by its content. */
-function snapshotId(request: SignalRequest) {
+function snapshotId(request: AnalysisRequest) {
   return contentId({
     strategyId: request.strategy.id,
     markets: request.markets,
@@ -129,11 +130,11 @@ const FIXTURE_LABEL = "Recorded fixture, not an AI analysis:";
  * made and sized within the strategy's position limit. Every decision is
  * recorded with the model `recorded-fixture` and says it is a fixture.
  */
-export class RecordedSignalSource implements SignalSource {
-  readonly #fixture: RecordedSignals;
+export class RecordedDecisionSource implements DecisionSource {
+  readonly #fixture: RecordedDecisions;
   readonly source: AiSource;
 
-  constructor(fixture: RecordedSignals = RECORDED_SIGNALS) {
+  constructor(fixture: RecordedDecisions = RECORDED_DECISIONS) {
     this.#fixture = fixture;
     this.source = {
       kind: "fixture",
@@ -141,7 +142,7 @@ export class RecordedSignalSource implements SignalSource {
     };
   }
 
-  async decide(request: SignalRequest): Promise<SignalDecision> {
+  async decide(request: AnalysisRequest): Promise<AnalysisDecision> {
     const { decisions } = this.#fixture;
     const step = decisions[request.sequence % decisions.length];
     const instruments = request.strategy.rules.allowedInstruments;
@@ -151,7 +152,7 @@ export class RecordedSignalSource implements SignalSource {
       promptVersion: this.#fixture.id,
       sourceSnapshotId: snapshotId(request),
     };
-    const noTrade = (why: string): SignalDecision => ({
+    const noTrade = (why: string): AnalysisDecision => ({
       kind: "no_trade",
       instrument: testnetInstrumentSchema.safeParse(instrument).data ?? null,
       ...common,
@@ -218,7 +219,7 @@ export class RecordedSignalSource implements SignalSource {
 }
 
 /** The structured answer the worker asks the assistant for. */
-const signalOutputSchema = z.object({
+const decisionOutputSchema = z.object({
   decision: z.enum(["trade", "no_trade"]),
   instrument: testnetInstrumentSchema.nullable(),
   quantity: z.string().nullable(),
@@ -230,7 +231,7 @@ const signalOutputSchema = z.object({
 });
 
 // The same, as the JSON Schema eve hands the model.
-const SIGNAL_OUTPUT_JSON_SCHEMA = {
+const DECISION_OUTPUT_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
   properties: {
@@ -322,7 +323,7 @@ export function parseEveHost(value: string): string | undefined {
  * customer in their own conversation, and this is the worker's analysis.
  * Throws if the assistant cannot answer; nothing is recorded then.
  */
-export class EveSignalSource implements SignalSource {
+export class EveDecisionSource implements DecisionSource {
   readonly source: AiSource;
   readonly #connect: () => Promise<EveConnection>;
   #connection?: Promise<EveConnection>;
@@ -341,7 +342,7 @@ export class EveSignalSource implements SignalSource {
     };
   }
 
-  async decide(request: SignalRequest): Promise<SignalDecision> {
+  async decide(request: AnalysisRequest): Promise<AnalysisDecision> {
     this.#connection ??= this.#connect().catch((error: unknown) => {
       this.#connection = undefined;
       throw error;
@@ -362,7 +363,7 @@ export class EveSignalSource implements SignalSource {
           availableAllocation: request.availableAllocation,
           capturedAt: request.now.toISOString(),
         },
-        outputSchema: SIGNAL_OUTPUT_JSON_SCHEMA as unknown as Record<
+        outputSchema: DECISION_OUTPUT_JSON_SCHEMA as unknown as Record<
           string,
           unknown
         >,
@@ -370,7 +371,7 @@ export class EveSignalSource implements SignalSource {
     ]);
     if (answer.status !== "completed")
       throw new Error("The analysis assistant did not finish its analysis.");
-    const output = signalOutputSchema.safeParse(answer.data);
+    const output = decisionOutputSchema.safeParse(answer.data);
     if (!output.success)
       throw new Error("The analysis assistant's answer was not a decision.");
     const common = {
@@ -407,7 +408,7 @@ export class EveSignalSource implements SignalSource {
   }
 }
 
-function analysisPrompt(request: SignalRequest) {
+function analysisPrompt(request: AnalysisRequest) {
   const { rules } = request.strategy;
   return [
     `Scheduled analysis for the AI-managed strategy "${request.strategy.name}". Do not call any tool: answer with the structured decision only. The execution worker records it and checks it against the strategy's limits.`,
