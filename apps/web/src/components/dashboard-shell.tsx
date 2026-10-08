@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -35,13 +35,19 @@ const navigation = [
 
 const settings = { href: "/settings", label: "Settings", icon: Settings2 };
 
+// Tailwind's md breakpoint, where the sidebar replaces the mobile menu.
+const desktopQuery = "(min-width: 48rem)";
+
 function NavigationLink({
   href,
   label,
   icon: Icon,
   active,
-  onClick,
-}: (typeof navigation)[number] & { active: boolean; onClick?: () => void }) {
+  onNavigate,
+}: (typeof navigation)[number] & {
+  active: boolean;
+  onNavigate?: () => void;
+}) {
   return (
     <Link
       aria-current={active ? "page" : undefined}
@@ -50,7 +56,7 @@ function NavigationLink({
         "w-full justify-start",
       )}
       href={href}
-      onClick={onClick}
+      onNavigate={onNavigate}
     >
       <Icon className="size-4" />
       {label}
@@ -62,6 +68,22 @@ export function DashboardShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
   const closeMenu = () => setMenuOpen(false);
+
+  // Close the menu on every route change, including back and forward.
+  const [menuPathname, setMenuPathname] = useState(pathname);
+  if (menuPathname !== pathname) {
+    setMenuPathname(pathname);
+    setMenuOpen(false);
+  }
+
+  useEffect(() => {
+    const desktop = window.matchMedia(desktopQuery);
+    const closeOnDesktop = () => {
+      if (desktop.matches) setMenuOpen(false);
+    };
+    desktop.addEventListener("change", closeOnDesktop);
+    return () => desktop.removeEventListener("change", closeOnDesktop);
+  }, []);
 
   return (
     <div className="min-h-screen bg-background">
@@ -135,7 +157,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
                     <NavigationLink
                       active={pathname === item.href}
                       key={item.href}
-                      onClick={closeMenu}
+                      onNavigate={closeMenu}
                       {...item}
                     />
                   ))}
@@ -144,7 +166,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
                   <Separator />
                   <NavigationLink
                     active={pathname === settings.href}
-                    onClick={closeMenu}
+                    onNavigate={closeMenu}
                     {...settings}
                   />
                   <ThemeToggle />
