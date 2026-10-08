@@ -71,7 +71,8 @@
   --destructive: oklch(0.505 0.213 27.518);
   --border: oklch(0.922 0 0);
   --input: oklch(0.922 0 0);
-  /* Focus rings are drawn at 50% opacity; this keeps them at 3:1 on white. */
+  /* Most focus rings are drawn at 50% opacity; this keeps them at 3:1 on
+     white. */
   --ring: oklch(0.205 0 0);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
