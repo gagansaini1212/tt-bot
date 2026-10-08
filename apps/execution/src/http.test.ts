@@ -1,0 +1,408 @@
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { once } from "node:events";
+import { test, type TestContext } from "node:test";
+import { z } from "zod";
+import { BinanceSpotTestnet } from "@crypto-trading/exchanges";
+import { createRequestListener, handler, route, type Route } from "./http";
+import { createRoutes } from "./routes";
+
+const token = "http-test-token-at-least-32-characters";
+const ticker = (symbol: string) => ({
+  symbol,
+  priceChange: "-1.50000000",
+  priceChangePercent: "-2.500",
+  lastPrice: "58.50000000",
+  openPrice: "60.00000000",
+  highPrice: "61.00000000",
+  lowPrice: "57.00000000",
+  volume: "1000.00000000",
+  quoteVolume: "59000.00000000",
+  openTime: 1_799_913_600_000,
+  closeTime: 1_800_000_000_000,
+});
+const kline = (index: number) => [
+  1_800_000_000_000 + index * 60_000,
+  "60000.00000000",
+  "60100.00000000",
+  "59900.00000000",
+  `${60000 + index}.00000000`,
+  "1.00000000",
+  1_800_000_059_999 + index * 60_000,
+  "60000.00000000",
+  10,
+  "0.5",
+  "30000",
+  "0",
+];
+
+/** A Binance testnet adapter whose network is a fixture. */
+function binance(respond?: (url: URL) => Response) {
+  const calls: URL[] = [];
+  const exchange = new BinanceSpotTestnet({
+    apiKey: "test-key",
+    apiSecret: "test-secret",
+    fetch: (async (input) => {
+      const url = new URL(String(input));
+      calls.push(url);
+      if (respond) return respond(url);
+      switch (url.pathname) {
+        case "/api/v3/time":
+          return Response.json({ serverTime: Date.now() });
+        case "/api/v3/account":
+          return Response.json({ canTrade: true, balances: [] });
+        case "/api/v3/openOrders":
+        case "/api/v3/myTrades":
+          return Response.json([]);
+        case "/api/v3/ticker/24hr":
+          return Response.json(["BTCUSDT", "ETHUSDT", "XRPUSDT"].map(ticker));
+        case "/api/v3/klines":
+          return Response.json([0, 1, 2, 3, 4].map(kline));
+        case "/api/v3/depth":
+          return Response.json({
+            lastUpdateId: 7,
+            bids: [
+              ["60000.00", "1.0"],
+              ["59999.00", "2.0"],
+              ["59998.00", "3.0"],
+            ],
+            asks: [
+              ["60001.00", "1.0"],
+              ["60002.00", "2.0"],
+              ["60003.00", "3.0"],
+            ],
+          });
+      }
+      throw new Error("Unexpected fixture endpoint");
+    }) as typeof fetch,
+  });
+  const count = (path: string) =>
+    calls.filter((url) => url.pathname === path).length;
+  return { exchange, calls, count };
+}
+
+async function serve(
+  t: TestContext,
+  {
+    exchange,
+    routes,
+  }: { exchange?: BinanceSpotTestnet; routes?: Route[] } = {},
+) {
+  let now = 1_800_000_000_000;
+  const server = createServer(
+    createRequestListener({
+      token,
+      exchange,
+      routes: routes ?? createRoutes(() => now),
+    }),
+  );
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => {
+    server.closeAllConnections();
+    server.close();
+  });
+  const { port } = server.address() as AddressInfo;
+  const call = (path: string, init: RequestInit = {}) =>
+    fetch(`http://127.0.0.1:${port}${path}`, {
+      ...init,
+      headers: { Authorization: `Bearer ${token}`, ...init.headers },
+    });
+  return {
+    call,
+    json: async (path: string) => {
+      const response = await call(path);
+      assert.equal(response.status, 200, path);
+      return response.json();
+    },
+    advance: (ms: number) => {
+      now += ms;
+    },
+  };
+}
+
+const paths = [
+  "/snapshot",
+  "/market/tickers",
+  "/market/klines?instrument=BTC-USDT&interval=1m",
+  "/market/depth?instrument=ETH-USDT",
+];
+
+test("every route requires the token, refuses browsers and is never cached", async (t) => {
+  const fake = binance();
+  const { call } = await serve(t, { exchange: fake.exchange });
+  for (const path of [...paths, "/unknown"]) {
+    for (const headers of [
+      { Authorization: "" } as Record<string, string>,
+      { Authorization: `Bearer ${token.slice(1)}x` },
+      { Authorization: `Bearer ${token}x` },
+      { Origin: "http://localhost:3000" },
+    ]) {
+      const response = await call(path, { headers });
+      assert.equal(response.status, 401, `${path} ${JSON.stringify(headers)}`);
+      assert.equal(response.headers.get("cache-control"), "no-store");
+      assert.deepEqual(await response.json(), { status: "unauthorized" });
+    }
+  }
+  assert.equal(fake.calls.length, 0);
+  for (const path of paths) {
+    const response = await call(path);
+    assert.equal(response.status, 200, path);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal((await response.json()).status, "connected");
+  }
+});
+
+test("unknown paths return 404 and other methods 405", async (t) => {
+  const fake = binance();
+  const { call } = await serve(t, { exchange: fake.exchange });
+  for (const path of [
+    "/",
+    "/unknown",
+    "/snapshot/",
+    "//snapshot",
+    "/market",
+    "/market/tickers/",
+    "/SNAPSHOT",
+  ]) {
+    const response = await call(path);
+    assert.equal(response.status, 404, path);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await response.json(), { status: "not_found" });
+  }
+  for (const [method, path] of [
+    ["POST", "/snapshot"],
+    ["DELETE", "/snapshot"],
+    ["HEAD", "/market/tickers"],
+    ["POST", "/market/depth?instrument=BTC-USDT"],
+  ]) {
+    const response = await call(path, { method });
+    assert.equal(response.status, 405, `${method} ${path}`);
+    assert.equal(response.headers.get("allow"), "GET");
+    assert.equal(response.headers.get("cache-control"), "no-store");
+  }
+  assert.equal(fake.calls.length, 0);
+});
+
+test("query parameters are validated strictly", async (t) => {
+  const fake = binance();
+  const { call } = await serve(t, { exchange: fake.exchange });
+  for (const path of [
+    "/snapshot?refresh=1",
+    "/market/tickers?symbols=",
+    "/market/tickers?symbols=BTCUSDT,",
+    "/market/tickers?symbols=btcusdt",
+    "/market/tickers?symbols=BTC-USDT",
+    "/market/tickers?symbols=BTCUSDT&symbols=ETHUSDT",
+    `/market/tickers?symbols=${Array.from({ length: 501 }, (_, i) => `T${i}USDT`)}`,
+    "/market/tickers?symbol=BTCUSDT",
+    "/market/klines?instrument=BTC-USDT",
+    "/market/klines?interval=1m",
+    "/market/klines?instrument=SOL-USDT&interval=1m",
+    "/market/klines?instrument=BTCUSDT&interval=1m",
+    "/market/klines?instrument=BTC-USDT&interval=1s",
+    "/market/klines?instrument=BTC-USDT&interval=7m",
+    "/market/klines?instrument=BTC-USDT&interval=1m&limit=0",
+    "/market/klines?instrument=BTC-USDT&interval=1m&limit=1001",
+    "/market/klines?instrument=BTC-USDT&interval=1m&limit=01",
+    "/market/klines?instrument=BTC-USDT&interval=1m&limit=1e2",
+    "/market/klines?instrument=BTC-USDT&interval=1m&limit=2.5",
+    "/market/klines?instrument=BTC-USDT&interval=1m&limit=",
+    "/market/klines?instrument=BTC-USDT&interval=1m&limit=-1",
+    "/market/klines?instrument=BTC-USDT&interval=1m&startTime=0",
+    "/market/depth",
+    "/market/depth?instrument=BTC-USDT&limit=101",
+    "/market/depth?instrument=BTC-USDT&instrument=ETH-USDT",
+  ]) {
+    const response = await call(path);
+    assert.equal(response.status, 400, path);
+    assert.equal((await response.json()).status, "invalid_request", path);
+  }
+  assert.equal(fake.calls.length, 0);
+  for (const path of [
+    "/market/tickers?symbols=BTCUSDT",
+    `/market/tickers?symbols=${encodeURIComponent("币安人生USDT,1000SATSUSDT")}`,
+    "/market/klines?instrument=ETH-USDT&interval=1M&limit=1000",
+    "/market/depth?instrument=BTC-USDT&limit=1",
+  ])
+    assert.equal((await call(path)).status, 200, path);
+});
+
+test("market routes filter and trim cached Binance data", async (t) => {
+  const fake = binance();
+  const { json } = await serve(t, { exchange: fake.exchange });
+  const all = await json("/market/tickers");
+  assert.deepEqual(
+    all.tickers.map(({ symbol }: { symbol: string }) => symbol),
+    ["BTCUSDT", "ETHUSDT", "XRPUSDT"],
+  );
+  assert.equal(all.tickers[0].priceChangePercent, "-2.500");
+  const listed = await json("/market/tickers?symbols=XRPUSDT,NOPEUSDT,BTCUSDT");
+  assert.deepEqual(
+    listed.tickers.map(({ symbol }: { symbol: string }) => symbol),
+    ["BTCUSDT", "XRPUSDT"],
+  );
+
+  const { klines } = await json(
+    "/market/klines?instrument=BTC-USDT&interval=1h&limit=2",
+  );
+  assert.deepEqual(
+    klines.map(({ close }: { close: string }) => close),
+    ["60003.00000000", "60004.00000000"],
+  );
+  assert.equal(
+    (await json("/market/klines?instrument=BTC-USDT&interval=1h")).klines
+      .length,
+    5,
+  );
+  const { depth } = await json("/market/depth?instrument=ETH-USDT&limit=2");
+  assert.deepEqual(depth, {
+    lastUpdateId: 7,
+    bids: [
+      { price: "60000.00", quantity: "1.0" },
+      { price: "59999.00", quantity: "2.0" },
+    ],
+    asks: [
+      { price: "60001.00", quantity: "1.0" },
+      { price: "60002.00", quantity: "2.0" },
+    ],
+  });
+
+  // Every symbol list, and every limit, was served from one Binance request.
+  assert.equal(fake.count("/api/v3/ticker/24hr"), 1);
+  assert.equal(fake.count("/api/v3/klines"), 1);
+  assert.equal(fake.count("/api/v3/depth"), 1);
+  const [tickers, klinesRequest, depthRequest] = fake.calls;
+  assert.equal(tickers.search, "");
+  assert.equal(klinesRequest.searchParams.get("limit"), "1000");
+  assert.equal(klinesRequest.searchParams.get("symbol"), "BTCUSDT");
+  assert.equal(klinesRequest.searchParams.get("interval"), "1h");
+  assert.equal(depthRequest.searchParams.get("limit"), "100");
+  assert.equal(depthRequest.searchParams.get("symbol"), "ETHUSDT");
+});
+
+test("caches expire per route and coalesce concurrent requests", async (t) => {
+  const fake = binance();
+  const { json, advance } = await serve(t, { exchange: fake.exchange });
+  const burst = (path: string) =>
+    Promise.all(Array.from({ length: 5 }, () => json(path)));
+
+  await burst("/market/tickers");
+  advance(5_000);
+  await json("/market/tickers?symbols=BTCUSDT");
+  assert.equal(fake.count("/api/v3/ticker/24hr"), 1);
+  advance(1);
+  await json("/market/tickers");
+  assert.equal(fake.count("/api/v3/ticker/24hr"), 2);
+
+  await burst("/market/klines?instrument=BTC-USDT&interval=1m");
+  await json("/market/klines?instrument=BTC-USDT&interval=1m&limit=1");
+  assert.equal(fake.count("/api/v3/klines"), 1);
+  // Each instrument and interval has its own entry.
+  await json("/market/klines?instrument=BTC-USDT&interval=5m");
+  await json("/market/klines?instrument=ETH-USDT&interval=1m");
+  assert.equal(fake.count("/api/v3/klines"), 3);
+  advance(5_001);
+  await json("/market/klines?instrument=BTC-USDT&interval=1m");
+  assert.equal(fake.count("/api/v3/klines"), 4);
+
+  await burst("/market/depth?instrument=BTC-USDT");
+  await json("/market/depth?instrument=BTC-USDT&limit=5");
+  advance(1_000);
+  await json("/market/depth?instrument=BTC-USDT");
+  assert.equal(fake.count("/api/v3/depth"), 1);
+  await json("/market/depth?instrument=ETH-USDT");
+  assert.equal(fake.count("/api/v3/depth"), 2);
+  advance(1);
+  await json("/market/depth?instrument=BTC-USDT");
+  assert.equal(fake.count("/api/v3/depth"), 3);
+
+  await burst("/snapshot");
+  advance(10_000);
+  await json("/snapshot");
+  assert.equal(fake.count("/api/v3/account"), 1);
+  advance(1);
+  await json("/snapshot");
+  assert.equal(fake.count("/api/v3/account"), 2);
+});
+
+test("without an exchange, valid requests report not_configured", async (t) => {
+  const { call, json } = await serve(t);
+  for (const path of paths)
+    assert.deepEqual(await json(path), {
+      status: "not_configured",
+      message:
+        "Configure Binance Spot Testnet in the execution service to connect your virtual account.",
+    });
+  assert.equal((await call("/market/depth?limit=5")).status, 400);
+});
+
+test("exchange failures return 503 with a safe message and are not cached", async (t) => {
+  let fail = true;
+  const fake = binance((url) => {
+    if (fail) throw new Error(`${url} test-secret`);
+    return Response.json([]);
+  });
+  const { call } = await serve(t, { exchange: fake.exchange });
+  const failed = await call("/market/tickers");
+  assert.equal(failed.status, 503);
+  const body = await failed.json();
+  assert.equal(body.status, "unavailable");
+  assert.match(body.message, /Binance testnet request unavailable/);
+  assert.doesNotMatch(
+    JSON.stringify(body),
+    /test-secret|test-key|binance\.vision/,
+  );
+  fail = false;
+  assert.equal((await call("/market/tickers")).status, 200);
+
+  const rejected = binance(() =>
+    Response.json({ code: -1121, msg: "Invalid symbol." }, { status: 400 }),
+  );
+  const other = await serve(t, { exchange: rejected.exchange });
+  const response = await other.call("/market/depth?instrument=BTC-USDT");
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    status: "unavailable",
+    message: "Binance testnet request rejected (code -1121).",
+  });
+});
+
+test("routes that declare a body receive it validated", async (t) => {
+  const echo = route(
+    "POST",
+    "/echo",
+    handler({
+      query: z.strictObject({}),
+      body: z.strictObject({ value: z.string() }),
+      handle: async ({ body }) => ({ status: "connected", value: body.value }),
+    }),
+  );
+  const { call } = await serve(t, {
+    exchange: binance().exchange,
+    routes: [echo],
+  });
+  const post = (body: string, type = "application/json") =>
+    call("/echo", {
+      method: "POST",
+      body,
+      headers: { "Content-Type": type },
+    });
+  const ok = await post(
+    JSON.stringify({ value: "a" }),
+    "application/json; charset=utf-8",
+  );
+  assert.equal(ok.status, 200);
+  assert.deepEqual(await ok.json(), { status: "connected", value: "a" });
+  for (const [body, type] of [
+    [JSON.stringify({ value: "a" }), "text/plain"],
+    ["{", "application/json"],
+    [JSON.stringify({ value: 1 }), "application/json"],
+    [JSON.stringify({ value: "a", extra: true }), "application/json"],
+  ])
+    assert.equal((await post(body, type)).status, 400, body);
+  const large = await post(JSON.stringify({ value: "a".repeat(16 * 1024) }));
+  assert.equal(large.status, 413);
+  assert.equal((await call("/echo", { method: "GET" })).status, 405);
+});

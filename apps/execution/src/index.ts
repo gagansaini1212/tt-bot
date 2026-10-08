@@ -1,15 +1,15 @@
 import { createServer, type RequestListener, type Server } from "node:http";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { timingSafeEqual } from "node:crypto";
 import { resolve } from "node:path";
 import Decimal from "decimal.js";
 import {
   BinanceSpotTestnet,
-  BinanceTestnetError,
   limitOrderSchema,
   testnetInstrumentSchema,
 } from "@crypto-trading/exchanges";
 import { authorizeTradeProposal } from "@crypto-trading/domain";
+import { createRequestListener, safeError } from "./http";
+import { createRoutes } from "./routes";
 
 export { authorizeTradeProposal };
 
@@ -71,58 +71,11 @@ async function main() {
     const port = Number(process.env.EXECUTION_PORT ?? "4001");
     if (!Number.isInteger(port) || port < 1024 || port > 65535)
       throw new Error("EXECUTION_PORT must be between 1024 and 65535.");
-    let snapshot:
-      Awaited<ReturnType<BinanceSpotTestnet["getSnapshot"]>> | undefined;
-    let pending: ReturnType<BinanceSpotTestnet["getSnapshot"]> | undefined;
-    const handle: RequestListener = async (request, response) => {
-      response.setHeader("Cache-Control", "no-store");
-      response.setHeader("Content-Type", "application/json");
-      const received = Buffer.from(request.headers.authorization ?? "");
-      const expected = Buffer.from(`Bearer ${token}`);
-      if (
-        request.headers.origin ||
-        received.length !== expected.length ||
-        !timingSafeEqual(received, expected)
-      ) {
-        response.writeHead(401).end(JSON.stringify({ status: "unauthorized" }));
-        return;
-      }
-      // The HTTP service exposes reads only. Order commands run locally via CLI.
-      if (request.method !== "GET" || request.url !== "/snapshot") {
-        response.writeHead(404).end(JSON.stringify({ status: "not_found" }));
-        return;
-      }
-      if (!exchange) {
-        response.end(
-          JSON.stringify({
-            status: "not_configured",
-            message:
-              "Configure Binance Spot Testnet in the execution service to connect your virtual account.",
-          }),
-        );
-        return;
-      }
-      try {
-        const age = snapshot
-          ? Date.now() - Date.parse(snapshot.capturedAt)
-          : Infinity;
-        // A negative age means the clock stepped back since the capture.
-        if (age > 10_000 || age < 0) {
-          pending ??= exchange.getSnapshot().finally(() => {
-            pending = undefined;
-          });
-          snapshot = await pending;
-        }
-        response.end(JSON.stringify({ status: "connected", snapshot }));
-      } catch (error) {
-        response.writeHead(503).end(
-          JSON.stringify({
-            status: "unavailable",
-            message: safeError(error),
-          }),
-        );
-      }
-    };
+    const handle = createRequestListener({
+      token,
+      exchange,
+      routes: createRoutes(),
+    });
     const servers = [await listen(handle, port, "127.0.0.1")];
     // `localhost` usually resolves to [::1] first, so hold it too: no other local
     // process may receive the token there. Skip it only without IPv6 loopback.
@@ -257,11 +210,6 @@ function listen(handle: RequestListener, port: number, host: string) {
       resolve(server);
     });
   });
-}
-
-function safeError(error: unknown): string {
-  if (error instanceof BinanceTestnetError) return error.message;
-  return "Execution service could not complete the request. Check the local configuration.";
 }
 
 main().catch((error: unknown) => {

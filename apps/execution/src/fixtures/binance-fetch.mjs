@@ -40,6 +40,22 @@ globalThis.fetch = async (input, init = {}) => {
       side: "BUY",
     });
   }
+  if (url.pathname === "/api/v3/ticker/24hr")
+    return Response.json([
+      {
+        symbol: "BTCUSDT",
+        priceChange: "-10.00",
+        priceChangePercent: "-0.017",
+        lastPrice: "60000.01",
+        openPrice: "60010.01",
+        highPrice: "60100.00",
+        lowPrice: "59900.00",
+        volume: "12.5",
+        quoteVolume: "750000.12",
+        openTime: Date.now() - 86_400_000,
+        closeTime: Date.now(),
+      },
+    ]);
   if (
     url.pathname === "/api/v3/openOrders" ||
     url.pathname === "/api/v3/myTrades"

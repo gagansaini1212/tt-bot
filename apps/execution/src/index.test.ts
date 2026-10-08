@@ -154,7 +154,7 @@ test("production mode and unsupported providers cannot start", async () => {
   }
 });
 
-test("worker HTTP requires a token, rejects browser origins and writes, caches account snapshots", async () => {
+test("worker HTTP requires a token, rejects browser origins and writes, caches account snapshots, serves market data", async () => {
   const f = await fixture();
   const socket = createServer();
   socket.listen(0, "127.0.0.1");
@@ -197,7 +197,7 @@ test("worker HTTP requires a token, rejects browser origins and writes, caches a
       ).status,
       401,
     );
-    assert.equal((await fetch(url, { method: "POST", headers })).status, 404);
+    assert.equal((await fetch(url, { method: "POST", headers })).status, 405);
     const first = await fetch(url, { headers });
     assert.equal(first.headers.get("cache-control"), "no-store");
     const data = await first.json();
@@ -223,6 +223,11 @@ test("worker HTTP requires a token, rejects browser origins and writes, caches a
       2,
       "a snapshot dated in the future is refetched, not served from cache",
     );
+    const market = await fetch(
+      `http://127.0.0.1:${port}/market/tickers?symbols=BTCUSDT`,
+      { headers },
+    );
+    assert.equal((await market.json()).tickers[0].lastPrice, "60000.01");
   } finally {
     const exited = once(worker, "exit");
     worker.kill("SIGTERM");
