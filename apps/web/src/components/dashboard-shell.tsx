@@ -64,6 +64,24 @@ function NavigationLink({
   );
 }
 
+function Brand() {
+  return (
+    <>
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+        <ChartCandlestick className="size-5" />
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold tracking-tight">
+          Crypto Trading Agent
+        </span>
+        <span className="block text-xs text-muted-foreground">
+          Testnet workspace
+        </span>
+      </span>
+    </>
+  );
+}
+
 export function DashboardShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -90,17 +108,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
       <div className="mx-auto min-h-screen max-w-[1600px] md:grid md:grid-cols-[228px_1fr]">
         <aside className="hidden border-r border-border/70 bg-card/35 px-4 py-5 md:flex md:flex-col">
           <Link className="flex items-center gap-3 px-2" href="/">
-            <span className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <ChartCandlestick className="size-5" />
-            </span>
-            <span>
-              <span className="block text-sm font-semibold tracking-tight">
-                Crypto Trading Agent
-              </span>
-              <span className="block text-xs text-muted-foreground">
-                Testnet workspace
-              </span>
-            </span>
+            <Brand />
           </Link>
 
           <nav className="mt-8 space-y-1 text-sm" aria-label="Main navigation">
@@ -131,12 +139,8 @@ export function DashboardShell({ children }: { children: ReactNode }) {
 
         <div className="min-w-0">
           <header className="flex items-center justify-between gap-3 border-b border-border/70 bg-card/35 px-4 py-2 md:hidden">
-            <Link
-              aria-label="Overview"
-              className="flex size-9 items-center justify-center rounded-lg bg-primary text-primary-foreground"
-              href="/"
-            >
-              <ChartCandlestick className="size-5" />
+            <Link className="flex min-w-0 items-center gap-3" href="/">
+              <Brand />
             </Link>
             <Sheet onOpenChange={setMenuOpen} open={menuOpen}>
               <SheetTrigger asChild>
@@ -146,8 +150,9 @@ export function DashboardShell({ children }: { children: ReactNode }) {
                 </Button>
               </SheetTrigger>
               <SheetContent aria-describedby={undefined} side="left">
-                <SheetHeader>
-                  <SheetTitle>Menu</SheetTitle>
+                <SheetHeader className="flex-row items-center gap-3 pr-12">
+                  <SheetTitle className="sr-only">Menu</SheetTitle>
+                  <Brand />
                 </SheetHeader>
                 <nav
                   className="space-y-1 px-4 text-sm"
