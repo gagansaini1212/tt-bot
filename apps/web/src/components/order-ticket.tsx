@@ -54,10 +54,11 @@ import {
 import type { OrderTicketState } from "@/lib/orders";
 import { cn } from "@/lib/utils";
 
-type OrderType = "limit" | "market";
+type OrderType = "limit" | "market" | "stop_limit";
 type Draft = {
   instrument?: TestnetInstrument;
   type: OrderType;
+  stopPrice: string;
   price: string;
   quantity: string;
   takeProfitPrice: string;
@@ -93,6 +94,7 @@ export function OrderTicket({
   const [submitting, startSubmitting] = useTransition();
   const [draft, setDraft] = useState<Draft>({
     type: "limit",
+    stopPrice: "",
     price: "",
     quantity: "",
     takeProfitPrice: "",
@@ -191,9 +193,11 @@ export function OrderTicket({
               {submitting ? <LoaderCircle className="animate-spin" /> : null}
               {submitting
                 ? "Sending to the worker…"
-                : form?.base
-                  ? `Buy ${form.base} with exits`
-                  : "Buy with exits"}
+                : draft.type === "stop_limit"
+                  ? `Place stop-limit buy${form?.base ? ` of ${form.base}` : ""}`
+                  : form?.base
+                    ? `Buy ${form.base} with exits`
+                    : "Buy with exits"}
             </Button>
           )}
           <p className="text-xs text-muted-foreground">
@@ -223,18 +227,22 @@ function orderForm(draft: Draft, ticket: ManualOrderTicket) {
           market.rules.tickSize,
         )
       : undefined;
-  const entryPrice = draft.type === "limit" ? draft.price : marketPrice;
+  const entryPrice = draft.type === "market" ? marketPrice : draft.price;
   const parsed = manualOrderRequestSchema.safeParse({
     type: draft.type,
     instrument,
     quantity: draft.quantity,
-    ...(draft.type === "limit" ? { price: draft.price } : {}),
+    ...(draft.type === "market" ? {} : { price: draft.price }),
+    ...(draft.type === "stop_limit" ? { stopPrice: draft.stopPrice } : {}),
     takeProfitPrice: draft.takeProfitPrice,
     stopLossPrice: draft.stopLossPrice,
     listClientOrderId: PREVIEW.listClientOrderId,
   });
   const missing = [
-    draft.type === "limit" && !isDecimal(draft.price) && "a limit price",
+    draft.type === "stop_limit" &&
+      !isDecimal(draft.stopPrice) &&
+      "a stop price",
+    draft.type !== "market" && !isDecimal(draft.price) && "a limit price",
     !isDecimal(draft.quantity) && "a quantity",
     !isDecimal(draft.takeProfitPrice) && "a take-profit price",
     !isDecimal(draft.stopLossPrice) && "a stop-loss price",
@@ -307,16 +315,16 @@ function OrderFields({
           options={[
             { value: "limit", label: "Limit" },
             { value: "market", label: "Market" },
-            { value: "stop_limit", label: "Stop-limit", disabled: true },
+            { value: "stop_limit", label: "Stop-limit" },
           ]}
           value={draft.type}
         />
         <p className="text-xs leading-5 text-muted-foreground">
           {draft.type === "limit"
             ? "Rests on the book until it fills or you cancel it."
-            : "Fills completely now at up to the price shown, or not at all."}{" "}
-          Stop-limit entries are not offered: Binance attaches exits only to
-          limit entries, so a filled stop-limit buy would have none.
+            : draft.type === "market"
+              ? "Fills completely now at up to the price shown, or not at all."
+              : "The execution worker holds it until the market trades at or above the stop price, checks it again, then sends a limit buy with its exits. Binance attaches exits only to limit entries, so it never holds a stop-limit buy itself."}
         </p>
       </div>
 
@@ -325,7 +333,26 @@ function OrderFields({
         <span className="text-muted-foreground">· spot is long only</span>
       </p>
 
-      {draft.type === "limit" ? (
+      {draft.type === "stop_limit" ? (
+        <div className="grid gap-4 sm:grid-cols-2">
+          <PriceField
+            hint={
+              market?.bestAsk
+                ? `Above the best ask of ${market.bestAsk}`
+                : undefined
+            }
+            label="Stop price"
+            onChange={(stopPrice) => onChange({ stopPrice })}
+            value={draft.stopPrice}
+          />
+          <PriceField
+            hint="The most the buy pays once triggered"
+            label="Limit price"
+            onChange={(price) => onChange({ price })}
+            value={draft.price}
+          />
+        </div>
+      ) : draft.type === "limit" ? (
         <PriceField
           hint={market?.bestAsk ? `Best ask ${market.bestAsk}` : undefined}
           label="Limit price"
@@ -418,9 +445,20 @@ function OrderFields({
       {plan?.entry ? (
         <section aria-labelledby="order-legs" className="space-y-2 text-sm">
           <h3 className="font-medium" id="order-legs">
-            Sent to Binance as one order list
+            {draft.type === "stop_limit"
+              ? "Held by the worker, then sent to Binance as one order list"
+              : "Sent to Binance as one order list"}
           </h3>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+            {draft.type === "stop_limit" ? (
+              <>
+                <dt className="text-muted-foreground">Trigger</dt>
+                <dd>
+                  When {form.instrument.replace("-", "/")} trades at or above{" "}
+                  {draft.stopPrice}
+                </dd>
+              </>
+            ) : null}
             <dt className="text-muted-foreground">Entry</dt>
             <dd>
               {plan.entry.timeInForce === "FOK"
@@ -576,6 +614,7 @@ const OUTCOME_TITLES: Record<ManualOrderOutcome["status"], string> = {
   not_open: "No longer open",
   unknown: "Outcome unknown",
   unverified: "Placed, not yet verified",
+  held: "Held by the worker",
   working: "Order placed",
   protected: "Bought, exits active",
   closed: "Filled and closed",
@@ -594,7 +633,7 @@ export function OutcomeAlert({
   const danger = ["invalid", "rejected", "protection_failed"].includes(
     outcome.status,
   );
-  const success = ["working", "protected", "cancelled"].includes(
+  const success = ["held", "working", "protected", "cancelled"].includes(
     outcome.status,
   );
   const Icon = danger ? AlertTriangle : success ? CheckCircle2 : Info;

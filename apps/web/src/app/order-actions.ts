@@ -11,6 +11,7 @@ import { listClientOrderIdSchema } from "@crypto-trading/exchanges/order-rules";
 import { isLocalRequest } from "@/lib/local-request";
 import {
   cancelOrder,
+  cancelTrigger,
   getOrderStatus,
   getOrderTicket,
   submitOrder,
@@ -64,6 +65,19 @@ export async function cancelOpenOrder(
   if (!request.success)
     return { status: "invalid", message: "The cancel request is invalid." };
   const outcome = await cancelOrder(request.data);
+  refresh();
+  return outcome;
+}
+
+export async function cancelStopLimit(
+  input: unknown,
+): Promise<ManualOrderOutcome> {
+  if (!(await isLocalRequest()))
+    return { status: "rejected", message: REFUSED };
+  const id = listClientOrderIdSchema.safeParse(input);
+  if (!id.success)
+    return { status: "invalid", message: "The order ID is invalid." };
+  const outcome = await cancelTrigger(id.data);
   refresh();
   return outcome;
 }

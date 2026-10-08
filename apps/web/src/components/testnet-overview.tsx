@@ -9,6 +9,10 @@ import {
 
 import { AccountRefresh } from "@/components/account-refresh";
 import { AssistantPanel } from "@/components/assistant-panel";
+import {
+  ExecutionAlerts,
+  NotificationsCard,
+} from "@/components/execution-alerts";
 import { FillsTable } from "@/components/fills-table";
 import { OpenOrders } from "@/components/open-orders";
 import { PageHeader } from "@/components/page-header";
@@ -25,14 +29,17 @@ import {
 } from "@/components/ui/card";
 import { WelcomeCard } from "@/components/welcome-card";
 import type { PortfolioState } from "@/lib/account-portfolio";
+import type { ExecutionView } from "@/lib/execution";
 import type { TestnetAccountState } from "@/lib/testnet-account";
 
 export function TestnetOverview({
   account,
   portfolio,
+  execution,
 }: {
   account: TestnetAccountState;
   portfolio: PortfolioState;
+  execution: ExecutionView;
 }) {
   const connected = account.status === "connected";
   return (
@@ -74,8 +81,16 @@ export function TestnetOverview({
         </AlertDescription>
       </Alert>
 
+      {execution.status === "connected" ? (
+        <ExecutionAlerts alerts={execution.execution.alerts} />
+      ) : null}
+
       {account.status === "connected" ? (
-        <AccountContent account={account} portfolio={portfolio} />
+        <AccountContent
+          account={account}
+          execution={execution}
+          portfolio={portfolio}
+        />
       ) : (
         <Card className="mt-6">
           <CardHeader>
@@ -94,9 +109,11 @@ export function TestnetOverview({
 function AccountContent({
   account,
   portfolio,
+  execution,
 }: {
   account: Extract<TestnetAccountState, { status: "connected" }>;
   portfolio: PortfolioState;
+  execution: ExecutionView;
 }) {
   const { snapshot } = account;
   const available = (asset: string) =>
@@ -119,7 +136,9 @@ function AccountContent({
     openOrders: snapshot.orders,
     recentFills: fills,
     strategyManagement:
-      "Manual development trades. Strategy ownership, protection and profit/loss are not tracked for these holdings.",
+      "Manual development trades. The execution worker watches each order's exits and sells any bought quantity left without a stop loss. Strategy ownership and profit/loss are not tracked for these holdings.",
+    positionsNeedingAttention:
+      execution.status === "connected" ? execution.execution.alerts : [],
   };
 
   return (
@@ -175,8 +194,9 @@ function AccountContent({
             <CardHeader>
               <CardTitle>Open orders</CardTitle>
               <CardDescription>
-                Open and pending orders on the connected testnet account. Orders
-                in a list, such as an entry with its exits, are grouped.
+                Open and pending orders on the connected testnet account, and
+                stop-limit entries the worker holds. Orders in a list, such as
+                an entry with its exits, are grouped.
               </CardDescription>
             </CardHeader>
             {/* Focusable so keyboard users can scroll the table sideways. */}
@@ -186,7 +206,14 @@ function AccountContent({
               role="region"
               tabIndex={0}
             >
-              <OpenOrders snapshot={snapshot} />
+              <OpenOrders
+                execution={
+                  execution.status === "connected"
+                    ? execution.execution
+                    : undefined
+                }
+                snapshot={snapshot}
+              />
             </CardContent>
           </Card>
         </div>
@@ -196,13 +223,14 @@ function AccountContent({
             accountSnapshot={accountSnapshot}
             accountLabel="Binance Spot Testnet"
           />
+          <NotificationsCard execution={execution} />
           <Card>
             <CardHeader>
               <CardTitle>Account status</CardTitle>
               <CardDescription>
-                Manual trades use virtual funds. Strategy allocations, position
-                protection, and P&amp;L tracking are not configured for this
-                account.
+                Manual trades use virtual funds. The execution worker watches
+                every order&apos;s exits. Strategy allocations and P&amp;L
+                tracking are not configured for this account.
               </CardDescription>
             </CardHeader>
             <CardContent className="text-sm">

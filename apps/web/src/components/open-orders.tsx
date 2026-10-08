@@ -4,12 +4,16 @@ import { Fragment, useState, useTransition } from "react";
 import Decimal from "decimal.js";
 import { AlertTriangle, LoaderCircle } from "lucide-react";
 import type { TestnetOrder, TestnetSnapshot } from "@crypto-trading/exchanges";
+import type {
+  ExecutionState,
+  StopTrigger,
+} from "@crypto-trading/exchanges/execution";
 import {
   cancelImpact,
   type ManualOrderOutcome,
 } from "@crypto-trading/exchanges/manual-order";
 
-import { cancelOpenOrder } from "@/app/order-actions";
+import { cancelOpenOrder, cancelStopLimit } from "@/app/order-actions";
 import { OutcomeAlert } from "@/components/order-ticket";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -32,6 +36,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import {
+  alertHeadline,
+  isUrgent,
+  triggerSummary,
+} from "@/lib/execution-display";
+import {
   baseAsset,
   groupOpenOrders,
   instrumentOf,
@@ -45,10 +54,20 @@ import {
 
 type Snapshot = Pick<TestnetSnapshot, "orders" | "pendingOrders">;
 
-export function OpenOrders({ snapshot }: { snapshot: Snapshot }) {
+export function OpenOrders({
+  snapshot,
+  execution,
+}: {
+  snapshot: Snapshot;
+  // What the worker's execution loop holds or is selling, when it reports.
+  execution?: Pick<ExecutionState, "alerts" | "triggers">;
+}) {
   const groups = groupOpenOrders(snapshot);
   const all = groups.flatMap((group) => group.orders);
+  const alerts = execution?.alerts ?? [];
+  const triggers = execution?.triggers ?? [];
   const [target, setTarget] = useState<TestnetOrder>();
+  const [trigger, setTrigger] = useState<StopTrigger>();
   const [outcome, setOutcome] = useState<ManualOrderOutcome>();
   return (
     <>
@@ -70,6 +89,71 @@ export function OpenOrders({ snapshot }: { snapshot: Snapshot }) {
           </TableRow>
         </TableHeader>
         <TableBody>
+          {alerts.map((alert) => (
+            <TableRow
+              className="bg-destructive/5 hover:bg-destructive/5"
+              key={`alert-${alert.listClientOrderId}`}
+            >
+              <TableCell className="whitespace-normal text-xs" colSpan={5}>
+                <div className="sticky left-3 max-w-[calc(100vw-6rem)] md:max-w-[calc(100vw-22rem)] xl:max-w-none">
+                  <span
+                    className={
+                      isUrgent(alert)
+                        ? "flex items-start gap-1.5 font-medium text-destructive"
+                        : "flex items-start gap-1.5 font-medium"
+                    }
+                  >
+                    <AlertTriangle
+                      aria-hidden
+                      className="mt-px size-3.5 shrink-0"
+                    />
+                    {alertHeadline(alert)} · order {alert.listClientOrderId}
+                  </span>
+                  <span className="mt-1 block text-foreground">
+                    {alert.detail}
+                  </span>
+                </div>
+              </TableCell>
+            </TableRow>
+          ))}
+          {triggers.map((held) => (
+            <TableRow key={`trigger-${held.listClientOrderId}`}>
+              <TableCell>
+                <span className="flex items-center gap-1.5">
+                  <Badge variant="outline">Entry</Badge>
+                  <span className="font-medium">
+                    {held.instrument.replace("-", "")}
+                  </span>
+                </span>
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  Stop limit buy
+                </span>
+              </TableCell>
+              <TableCell className="font-mono text-xs">
+                0 / {plain(held.quantity)}
+              </TableCell>
+              <TableCell className="font-mono text-xs">
+                {plain(held.price)} · stop {plain(held.stopPrice)}
+              </TableCell>
+              <TableCell>
+                Held by the worker
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  TP {plain(held.takeProfitPrice)} · SL{" "}
+                  {plain(held.stopLossPrice)}
+                </span>
+              </TableCell>
+              <TableCell className="text-right">
+                <Button
+                  aria-label={`Cancel stop-limit buy ${held.instrument.split("-")[0]}, stop ${plain(held.stopPrice)}`}
+                  onClick={() => setTrigger(held)}
+                  size="sm"
+                  variant="destructive"
+                >
+                  Cancel
+                </Button>
+              </TableCell>
+            </TableRow>
+          ))}
           {groups.map((group) => (
             <Fragment key={group.key}>
               {group.orderListId !== undefined ? (
@@ -119,7 +203,7 @@ export function OpenOrders({ snapshot }: { snapshot: Snapshot }) {
               ))}
             </Fragment>
           ))}
-          {groups.length === 0 ? (
+          {groups.length + triggers.length + alerts.length === 0 ? (
             <TableRow>
               <TableCell colSpan={5}>No open orders.</TableCell>
             </TableRow>
@@ -138,7 +222,60 @@ export function OpenOrders({ snapshot }: { snapshot: Snapshot }) {
           target={target}
         />
       ) : null}
+      {trigger ? (
+        <TriggerCancelDialog
+          key={trigger.listClientOrderId}
+          onClose={() => setTrigger(undefined)}
+          onDone={(result) => {
+            setOutcome(result);
+            setTrigger(undefined);
+          }}
+          trigger={trigger}
+        />
+      ) : null}
     </>
+  );
+}
+
+function TriggerCancelDialog({
+  trigger,
+  onClose,
+  onDone,
+}: {
+  trigger: StopTrigger;
+  onClose: () => void;
+  onDone: (outcome: ManualOrderOutcome) => void;
+}) {
+  const [pending, startTransition] = useTransition();
+  const confirm = () =>
+    startTransition(async () => {
+      onDone(await cancelStopLimit(trigger.listClientOrderId));
+    });
+  return (
+    <AlertDialog onOpenChange={(open) => !open && !pending && onClose()} open>
+      <AlertDialogContent className="data-[size=default]:sm:max-w-md">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Cancel this stop-limit buy?</AlertDialogTitle>
+          <AlertDialogDescription>
+            {triggerSummary(trigger)}. The worker holds it, so nothing is on
+            Binance yet. If its stop price trades first, it is sent before the
+            cancel arrives: then cancel it from this table.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={pending}>Keep order</AlertDialogCancel>
+          <Button
+            className="dark:bg-destructive/10"
+            disabled={pending}
+            onClick={confirm}
+            variant="destructive"
+          >
+            {pending ? <LoaderCircle className="animate-spin" /> : null}
+            Cancel stop-limit buy
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
@@ -267,6 +404,11 @@ function CancelDialog({
       </AlertDialogContent>
     </AlertDialog>
   );
+}
+
+// Like Binance's own rows: exact, without separators.
+function plain(value: string) {
+  return new Decimal(value).toFixed();
 }
 
 function describe(order: TestnetOrder) {

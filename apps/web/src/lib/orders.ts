@@ -93,6 +93,21 @@ export async function getOrderStatus(
       };
 }
 
+/** Cancels a stop-limit entry the worker holds; nothing is on Binance yet. */
+export async function cancelTrigger(
+  listClientOrderId: string,
+): Promise<ManualOrderOutcome> {
+  const result = await callWorkerForCustomer({
+    method: "POST",
+    path: "/orders/triggers/cancel",
+    body: { listClientOrderId },
+    schema: outcomeResponse,
+  });
+  return result.status === "connected"
+    ? result.data.outcome
+    : writeFailure(result);
+}
+
 export async function cancelOrder(
   request: ManualCancelRequest,
 ): Promise<ManualOrderOutcome> {
