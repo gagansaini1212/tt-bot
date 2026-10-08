@@ -19,7 +19,6 @@ import { requestEntryExit } from "./execution-store";
 import { FakeBinance } from "./fixtures/fake-binance";
 import { limit } from "./fixtures/fake-exchange";
 import { loadManualTradingConfig, ManualOrderDesk } from "./manual-orders";
-import { NOTIFICATION_TOPIC } from "./notifications";
 import { PostgresOrderIntents, RECONCILE_TOPIC } from "./order-intents";
 
 const config = (() => {
@@ -298,13 +297,6 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
       "critical:protection_failed",
       "info:position_closed",
     ]);
-    // Each notification is queued for delivery, such as to a webhook.
-    const [{ count }] = await database.admin<{ count: string }[]>`
-      select count(*) from outbox_jobs
-      where customer_id = ${w.scope.customerId} and topic = ${NOTIFICATION_TOPIC}
-    `;
-    assert.equal(count, "2");
-
     await w.pass();
     assert.equal(w.fake.count("placeMarketSell"), 1);
     assert.equal((await notifications(w.scope)).length, 2);

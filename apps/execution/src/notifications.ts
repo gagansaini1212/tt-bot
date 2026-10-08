@@ -5,15 +5,6 @@ import type {
 } from "@crypto-trading/exchanges";
 
 /**
- * Outbox topic for delivering notifications elsewhere, such as to webhooks.
- * Every notification the worker raises queues one job with this topic, in
- * the same transaction, whose payload is `{ notificationId }`. A consumer
- * claims due jobs with `claimDueJobs` in outbox.ts, delivers the
- * notification, and completes the job.
- */
-export const NOTIFICATION_TOPIC = "notification.created";
-
-/**
  * What the execution worker tells a customer about:
  * - protection_failed (critical): an entry holds quantity no stop loss
  *   protects, and the worker is selling it.
@@ -49,9 +40,11 @@ export type NewNotification = {
 };
 
 /**
- * Saves an in-app notification and queues its delivery, in the caller's
- * customer-scoped transaction. Raise it in the same transaction as the change
- * it reports, so it is raised exactly once.
+ * Saves an in-app notification in the caller's customer-scoped transaction.
+ * Raise it in the same transaction as the change it reports, so it is raised
+ * exactly once. Delivery elsewhere, such as to webhooks, subscribes to inserts
+ * into `notifications`: a trigger on insert can queue it in `outbox_jobs` in
+ * that same transaction, whoever writes the row.
  */
 export async function raiseNotification(
   tx: Transaction,
@@ -65,13 +58,6 @@ export async function raiseNotification(
       ${notification.title}, ${notification.body}, ${tx.json(notification.data ?? {})}
     )
     returning id
-  `;
-  await tx`
-    insert into outbox_jobs (customer_id, topic, deduplication_key, payload)
-    values (
-      ${customerId}, ${NOTIFICATION_TOPIC}, ${`${NOTIFICATION_TOPIC}:${row.id}`},
-      ${tx.json({ notificationId: row.id })}
-    )
   `;
   return row.id;
 }
