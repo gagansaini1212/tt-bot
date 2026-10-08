@@ -16,6 +16,7 @@ A Binance Spot Testnet trading application built with Next.js, eve, shadcn/ui, a
 - A testnet Overview with net worth and its 24-hour change in USDT, balances, open orders, recent fills, and automatic refresh every ten seconds. Accounts shows holdings valued in USDT with their 24-hour change and each asset's share of net worth, and can hide zero and dust balances. Activity lists exchange fills. Settings shows the current account connection.
 - Markets for BTC/USDT and ETH/USDT: a candlestick chart (TradingView Lightweight Charts) marking your recent fills and open orders, the order book, and a market depth chart, refreshed every three seconds while the tab is visible.
 - Manual development order commands with a notional cap, Binance filter validation, and order intents saved in PostgreSQL before anything is sent, to prevent duplicate submission after restart.
+- Backtesting on Strategies: run a grid, DCA or standing price instruction over up to 30 days of hourly candles, or replay a fixture of recorded AI proposals, with the same planners, execution checks and loss limits as a live strategy. Results show net PnL, fees, maximum drawdown, Sharpe ratio, win and loss rates, trades, an equity curve against buying and holding, and the simulator's limitations. History is read from Binance's public market data and cached on disk. See [Backtesting](docs/backtesting.md).
 - Testnet order placement from the dashboard: limit, market and stop-limit buys with a required take profit and stop loss that Binance attaches to the entry, a pre-execution check preview, and a confirmed Cancel button on every open order.
 - An execution loop in the worker that reconciles every protected entry with Binance, records its orders and fills, sells any bought quantity left without a stop loss, enforces holding deadlines, sends stop-limit entries when their stop price trades, and raises in-app notifications. See [the execution loop](#the-execution-loop).
 
@@ -74,6 +75,8 @@ agent/                eve instructions, channel, and proposal tool
 apps/web/             Next.js dashboard
 apps/execution/       independent execution worker
 packages/domain/      trading rules and exact arithmetic
+packages/exchanges/   Binance adapters: testnet trading, and read-only history
+packages/backtest/    deterministic backtest simulator and metrics
 packages/database/    PostgreSQL client, migrations and development seed
 docs/                 accepted product and architecture decisions
 ```

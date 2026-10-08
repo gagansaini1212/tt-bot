@@ -1,0 +1,22 @@
+/* Colors for the backtest's equity chart. The strategy is the accent, blue,
+   and buy-and-hold a recessive grey. The pair passes the dataviz palette's
+   colour-vision and contrast checks against the card in both themes; the
+   grey is below the chroma floor on purpose, as the de-emphasised series.
+   Both lines are named in the legend and the readout, so colour is never
+   the only cue. */
+.colors {
+  --equity-strategy: #2a78d6;
+  --equity-baseline: #898781;
+  --equity-reference: #c3c2b7;
+  --equity-grid: #f0f0f0;
+  --equity-axis: #e5e5e5;
+  --equity-crosshair: #a1a1a1;
+}
+
+:global(.dark) .colors {
+  --equity-strategy: #3987e5;
+  --equity-reference: #4a4945;
+  --equity-grid: #1a1e24;
+  --equity-axis: #2a2f36;
+  --equity-crosshair: #5f6670;
+}

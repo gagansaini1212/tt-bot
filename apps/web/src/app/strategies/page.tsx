@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
+import { BacktestSection } from "@/components/backtest/backtest-section";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -38,6 +39,7 @@ export default function StrategiesPage() {
           </Link>
         </CardHeader>
       </Card>
+      <BacktestSection />
     </>
   );
 }
