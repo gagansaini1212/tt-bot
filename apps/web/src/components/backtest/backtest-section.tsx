@@ -12,7 +12,9 @@ export function BacktestSection() {
   return (
     <Card aria-labelledby="backtest-title" className="mt-6" role="region">
       <CardHeader>
-        <CardTitle id="backtest-title">Backtest</CardTitle>
+        <CardTitle>
+          <h2 id="backtest-title">Backtest</h2>
+        </CardTitle>
         <CardDescription className="mt-1">
           Replay a strategy&apos;s rules over up to 30 days of hourly candles,
           with the same entry planners, execution checks and loss limits as a

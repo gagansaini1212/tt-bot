@@ -339,71 +339,81 @@ function EquityTable({ result }: { result: BacktestResult }) {
 
 function TradesTable({ result }: { result: BacktestResult }) {
   const base = result.instrument.split("-")[0];
+  // Scrolls sideways on narrow screens, so it takes keyboard focus.
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Entry</TableHead>
-          <TableHead>Opened</TableHead>
-          <TableHead className="text-right">Price</TableHead>
-          <TableHead className="text-right">Quantity</TableHead>
-          <TableHead className="text-right">Stop / target</TableHead>
-          <TableHead>Closed</TableHead>
-          <TableHead className="text-right">Exit price</TableHead>
-          <TableHead className="text-right">Fees</TableHead>
-          <TableHead className="text-right">PnL</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {result.trades.map((trade, index) => {
-          const pnl = formatSigned(trade.pnl);
-          return (
-            <TableRow key={`${trade.key} ${index}`}>
-              <TableCell className="font-medium">
-                {entryName(trade.key)}
-              </TableCell>
-              <TableCell className="tabular-nums">
-                {formatHour(trade.entryAt)}
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {formatPriceText(trade.entryPrice)}
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {formatQuantity(trade.quantity)} {base}
-              </TableCell>
-              <TableCell className="text-right tabular-nums text-muted-foreground">
-                {formatPriceText(trade.stopLossPrice)} /{" "}
-                {formatPriceText(trade.takeProfitPrice)}
-              </TableCell>
-              <TableCell>
-                {trade.exit ? (
-                  <>
-                    <span className="tabular-nums">
-                      {formatHour(trade.exit.at)}
+    <div
+      aria-label="Trades"
+      className="relative w-full overflow-x-auto rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+      role="region"
+      tabIndex={0}
+    >
+      <table className="w-full caption-bottom text-sm">
+        <TableHeader>
+          <TableRow>
+            <TableHead>Entry</TableHead>
+            <TableHead>Opened</TableHead>
+            <TableHead className="text-right">Price</TableHead>
+            <TableHead className="text-right">Quantity</TableHead>
+            <TableHead className="text-right">Stop / target</TableHead>
+            <TableHead>Closed</TableHead>
+            <TableHead className="text-right">Exit price</TableHead>
+            <TableHead className="text-right">Fees</TableHead>
+            <TableHead className="text-right">PnL</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {result.trades.map((trade, index) => {
+            const pnl = formatSigned(trade.pnl);
+            return (
+              <TableRow key={`${trade.key} ${index}`}>
+                <TableCell className="font-medium">
+                  {entryName(trade.key)}
+                </TableCell>
+                <TableCell className="tabular-nums">
+                  {formatHour(trade.entryAt)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {formatPriceText(trade.entryPrice)}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {formatQuantity(trade.quantity)} {base}
+                </TableCell>
+                <TableCell className="text-right tabular-nums text-muted-foreground">
+                  {formatPriceText(trade.stopLossPrice)} /{" "}
+                  {formatPriceText(trade.takeProfitPrice)}
+                </TableCell>
+                <TableCell>
+                  {trade.exit ? (
+                    <>
+                      <span className="tabular-nums">
+                        {formatHour(trade.exit.at)}
+                      </span>
+                      <span className="block text-xs text-muted-foreground">
+                        {EXIT_REASONS[trade.exit.reason]}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-muted-foreground">
+                      Open at the end
                     </span>
-                    <span className="block text-xs text-muted-foreground">
-                      {EXIT_REASONS[trade.exit.reason]}
-                    </span>
-                  </>
-                ) : (
-                  <span className="text-muted-foreground">Open at the end</span>
-                )}
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {trade.exit ? formatPriceText(trade.exit.price) : "–"}
-              </TableCell>
-              <TableCell className="text-right tabular-nums">
-                {formatDecimal(trade.fees, 4)}
-              </TableCell>
-              <TableCell
-                className={cn("text-right tabular-nums", changeTone(pnl))}
-              >
-                {pnl}
-              </TableCell>
-            </TableRow>
-          );
-        })}
-      </TableBody>
-    </Table>
+                  )}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {trade.exit ? formatPriceText(trade.exit.price) : "–"}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {formatDecimal(trade.fees, 4)}
+                </TableCell>
+                <TableCell
+                  className={cn("text-right tabular-nums", changeTone(pnl))}
+                >
+                  {pnl}
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </table>
+    </div>
   );
 }

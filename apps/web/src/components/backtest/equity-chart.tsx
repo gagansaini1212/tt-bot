@@ -142,7 +142,7 @@ export function EquityChart({
             aria-label={`Equity of the strategy and of buying and holding ${label}, from ${formatUsdt(allocation)} USDT to ${formatUsdt(last.strategy)} and ${formatUsdt(last.baseline)} USDT.`}
             className="block text-[11px]"
             height={HEIGHT}
-            role="img"
+            role="figure"
             width={width}
           >
             <defs>
