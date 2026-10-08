@@ -130,6 +130,10 @@ test("failures keep the account's wording", async () => {
   process.env.EXECUTION_API_TOKEN = "web-test-token-at-least-32-characters";
   for (const [response, pattern] of [
     [Response.json({ status: "unauthorized" }, { status: 401 }), /credentials/],
+    [
+      Response.json({ status: "invalid_request" }, { status: 400 }),
+      /credentials/,
+    ],
     [Response.json({ status: "not_configured" }), /restart it/],
     [Response.json({ status: "connected", snapshot: {} }), /Start the/],
   ] as const) {

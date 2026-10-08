@@ -71,6 +71,9 @@ export const tickerSymbolSchema = z
   .string()
   .regex(/^[\p{Lu}\p{Lo}\p{Nd}]{2,20}$/u);
 export const MAX_TICKER_SYMBOLS = 100;
+// Symbols per worker /market/tickers request, which filters its list of all
+// tickers. Shared here so the web client can stay under it.
+export const MAX_TICKER_FILTER = 500;
 export const klineIntervalSchema = z.enum([
   "1m",
   "3m",

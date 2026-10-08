@@ -2,6 +2,7 @@ import {
   klineIntervalSchema,
   MAX_DEPTH_LIMIT,
   MAX_KLINE_LIMIT,
+  MAX_TICKER_FILTER,
   testnetInstrumentSchema,
   tickerSymbolSchema,
   type TestnetDepth,
@@ -12,7 +13,6 @@ import { z } from "zod";
 import { createCache } from "../cache";
 import { handler } from "../http";
 
-export const MAX_TICKER_FILTER = 500;
 export const DEFAULT_KLINE_LIMIT = 500;
 
 function limit(max: number) {
@@ -25,7 +25,7 @@ function limit(max: number) {
 }
 
 /**
- * 24h statistics, at most 5 seconds old, for every symbol or the
+ * 24h statistics, cached for up to 5 seconds, for every symbol or the
  * comma-separated `symbols`. Symbols without a market are left out.
  */
 export function tickers(now: () => number) {
@@ -51,7 +51,7 @@ export function tickers(now: () => number) {
   });
 }
 
-/** The latest `limit` candles, oldest first, at most 5 seconds old. */
+/** The latest `limit` candles, oldest first, cached for up to 5 seconds. */
 export function klines(now: () => number) {
   const cache = createCache<TestnetKline[]>(5_000, now);
   return handler({
@@ -72,7 +72,7 @@ export function klines(now: () => number) {
   });
 }
 
-/** The best `limit` bids and asks, at most 1 second old. */
+/** The best `limit` bids and asks, cached for up to 1 second. */
 export function depth(now: () => number) {
   const cache = createCache<TestnetDepth>(1_000, now);
   return handler({

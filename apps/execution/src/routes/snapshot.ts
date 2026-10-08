@@ -3,7 +3,7 @@ import { z } from "zod";
 import { createCache } from "../cache";
 import { handler } from "../http";
 
-/** Balances, open orders and recent fills, at most 10 seconds old. */
+/** Balances, open orders and recent fills, cached for up to 10 seconds. */
 export function snapshot(now: () => number) {
   const cache = createCache<TestnetSnapshot>(10_000, now);
   return handler({

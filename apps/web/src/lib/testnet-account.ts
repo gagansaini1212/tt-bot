@@ -15,14 +15,16 @@ export type TestnetAccountState = WorkerState<{ snapshot: TestnetSnapshot }>;
 const MAX_SNAPSHOT_AGE_MS = 30_000;
 // Covers the Date header's one-second resolution and small clock adjustments.
 const MAX_SNAPSHOT_LEAD_MS = 5_000;
+const REJECTED =
+  "The testnet account is unavailable. Check the execution worker and its credentials, then refresh.";
 const UNREACHABLE =
   "The testnet account is unavailable. Start the execution worker and refresh to reconnect.";
 // Account wording for some failures. The others keep the worker client's.
 const MESSAGES: Partial<Record<WorkerFailureReason, string>> = {
   missing_token:
     "Set up Binance Spot Testnet to view virtual balances, orders, and fills here. Follow the testnet setup in README.md.",
-  rejected:
-    "The testnet account is unavailable. Check the execution worker and its credentials, then refresh.",
+  invalid_request: REJECTED,
+  rejected: REJECTED,
   unreachable: UNREACHABLE,
   timeout: UNREACHABLE,
   invalid_response: UNREACHABLE,

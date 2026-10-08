@@ -72,6 +72,28 @@ test("tickers are requested for every symbol or a list", async () => {
   assert.equal(fetch.mock.callCount(), 2);
 });
 
+test("a list longer than the worker's filter is filtered here", async () => {
+  const fetch = worker({
+    tickers: ["BTCUSDT", "ETHUSDT", "XRPUSDT"].map((symbol) => ({
+      ...ticker,
+      symbol,
+    })),
+  });
+  const symbols = [
+    "XRPUSDT",
+    "BTCUSDT",
+    ...Array.from({ length: 499 }, (_, index) => `T${index}USDT`),
+  ];
+  const result = await getMarketTickers(symbols);
+  assert.equal(requested(fetch), "/market/tickers");
+  assert.deepEqual(
+    result.status === "connected" && result.tickers.map(({ symbol }) => symbol),
+    ["BTCUSDT", "XRPUSDT"],
+  );
+  await getMarketTickers(symbols.slice(0, 500));
+  assert.match(requested(fetch, 1), /^\/market\/tickers\?symbols=XRPUSDT%2C/);
+});
+
 test("klines and depth pass their parameters and keep decimal strings", async () => {
   const klines = worker({ klines: [kline] });
   const result = await getMarketKlines("ETH-USDT", "4h", 200);
