@@ -2,6 +2,7 @@ import {
   listClientOrderIdSchema,
   manualCancelRequestSchema,
   manualOrderRequestSchema,
+  triggerCancelRequestSchema,
   type BinanceSpotTestnet,
 } from "@crypto-trading/exchanges";
 import { z } from "zod";
@@ -10,11 +11,11 @@ import { loadManualTradingConfig, ManualOrderDesk } from "../manual-orders";
 import type { OrderIntentStore } from "../order-intents";
 
 /**
- * Dashboard orders: a ticket for the preview, placement, lookup by client ID
- * and cancellation. Every placement is checked again here. Without explicit
- * limits in the environment, orders stay off and these routes say why.
+ * The worker's one dashboard order desk, or undefined while dashboard orders
+ * are off. The exchange is the same for every caller, so the desk and its
+ * queue are shared by the routes and the execution loop.
  */
-export function orders({
+export function deskProvider({
   env,
   now,
   onChange,
@@ -27,19 +28,32 @@ export function orders({
 }) {
   const loaded = loadManualTradingConfig(env);
   let desk: ManualOrderDesk | undefined;
-  // The exchange is the same for every request; the desk keeps its queue.
-  const deskFor = (exchange: BinanceSpotTestnet) => {
-    if (!loaded.ok) return undefined;
-    desk ??= new ManualOrderDesk({
-      exchange,
-      config: loaded.config,
-      intents,
-      now: () => new Date(now()),
-      onChange,
-    });
-    return desk;
+  return {
+    disabledMessage: loaded.ok ? "" : loaded.message,
+    deskFor(exchange: BinanceSpotTestnet) {
+      if (!loaded.ok) return undefined;
+      desk ??= new ManualOrderDesk({
+        exchange,
+        config: loaded.config,
+        intents,
+        now: () => new Date(now()),
+        onChange,
+      });
+      return desk;
+    },
   };
-  const disabledMessage = loaded.ok ? "" : loaded.message;
+}
+
+/**
+ * Dashboard orders: a ticket for the preview, placement, lookup by client ID
+ * and cancellation, including of stop-limit entries the worker holds. Every
+ * placement is checked again here. Without explicit limits in the
+ * environment, orders stay off and these routes say why.
+ */
+export function orders({
+  deskFor,
+  disabledMessage,
+}: ReturnType<typeof deskProvider>) {
   const disabled = { status: "rejected" as const, message: disabledMessage };
   return {
     ticket: handler({
@@ -70,6 +84,19 @@ export function orders({
           status: "connected",
           outcome: desk
             ? await desk.status(account, query.listClientOrderId)
+            : disabled,
+        };
+      },
+    }),
+    cancelTrigger: handler({
+      query: z.strictObject({}),
+      body: triggerCancelRequestSchema,
+      async handle({ exchange, body, account }) {
+        const desk = deskFor(exchange);
+        return {
+          status: "connected",
+          outcome: desk
+            ? await desk.cancelTrigger(account, body.listClientOrderId)
             : disabled,
         };
       },

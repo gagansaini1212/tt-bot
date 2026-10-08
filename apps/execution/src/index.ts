@@ -16,9 +16,10 @@ import {
 import { authorizeTradeProposal } from "@crypto-trading/domain";
 import { accountResolver } from "./accounts";
 import { createRequestListener, safeError } from "./http";
+import { ExecutionLoop } from "./execution-loop";
 import { assertNoJournal, importJournal } from "./legacy-journal";
 import { PostgresOrderIntents, type Settlement } from "./order-intents";
-import { createRoutes } from "./routes";
+import { createWorker } from "./routes";
 
 export { authorizeTradeProposal };
 
@@ -103,11 +104,30 @@ async function main() {
       throw new Error("EXECUTION_PORT must be between 1024 and 65535.");
     const db = openDatabase();
     await assertNoJournal(process.env);
+    const intents = new PostgresOrderIntents(db);
+    const accounts = accountResolver(db);
+    let loop: ExecutionLoop | undefined;
+    const worker = createWorker({
+      intents,
+      reader: { state: (scope) => loop!.state(scope) },
+    });
+    // Watches every customer's orders, independently of any request or AI
+    // call (ADR 0002). Without credentials there is nothing to watch.
+    if (exchange) {
+      loop = new ExecutionLoop({
+        database: db,
+        exchange,
+        accounts,
+        intents,
+        desk: worker.deskFor(exchange),
+        onChange: worker.accountChanged,
+      });
+    }
     const handle = createRequestListener({
       token,
       exchange,
-      accounts: accountResolver(db),
-      routes: createRoutes({ intents: new PostgresOrderIntents(db) }),
+      accounts,
+      routes: worker.routes,
     });
     const servers = [await listen(handle, port, "127.0.0.1")];
     // `localhost` usually resolves to [::1] first, so hold it too: no other local
@@ -121,13 +141,17 @@ async function main() {
       },
     );
     if (ipv6) servers.push(ipv6);
+    loop?.start();
     console.info(
-      `Execution service on http://127.0.0.1:${port}${ipv6 ? ` and http://[::1]:${port}` : ""}. Provider: ${provider}.`,
+      `Execution service on http://127.0.0.1:${port}${ipv6 ? ` and http://[::1]:${port}` : ""}. Provider: ${provider}.${loop ? " Execution loop running." : ""}`,
     );
     const shutdown = () =>
-      Promise.all(
-        servers.map((server) => new Promise((closed) => server.close(closed))),
-      )
+      Promise.all([
+        ...servers.map(
+          (server) => new Promise((closed) => server.close(closed)),
+        ),
+        loop?.stop(),
+      ])
         .then(() => db.end({ timeout: 5 }))
         .then(() => process.exit(0));
     process.once("SIGINT", shutdown);

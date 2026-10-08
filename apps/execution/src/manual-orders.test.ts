@@ -366,3 +366,66 @@ test("an unexpected error after sending leaves the outcome unknown", async () =>
   assert.equal(f.intent("ct_odd")?.status, "unknown");
   assert.equal((await f.desk.place(limit("ct_odd"))).status, "duplicate");
 });
+
+const stopLimit = (id: string, overrides = {}) => ({
+  type: "stop_limit",
+  instrument: "BTC-USDT",
+  quantity: "0.001",
+  stopPrice: "61000",
+  price: "61100",
+  takeProfitPrice: "64000",
+  stopLossPrice: "59000",
+  listClientOrderId: id,
+  ...overrides,
+});
+
+test("a stop-limit entry is checked and held by the worker, with nothing sent to Binance", async () => {
+  const f = desk();
+  const outcome = await f.desk.place(stopLimit("ct_stop"));
+  assert.equal(outcome.status, "held");
+  assert.match(outcome.message, /at or above 61000/);
+  assert.deepEqual(f.calls, {
+    test: 1,
+    place: 0,
+    cancelList: 0,
+    cancelOrder: 0,
+  });
+  assert.equal(f.intent("ct_stop")?.status, "pending");
+  assert.equal((await f.desk.status("ct_stop")).status, "held");
+  assert.equal((await f.desk.place(stopLimit("ct_stop"))).status, "duplicate");
+  // It reserves its value, so later orders cannot claim the same allocation.
+  const ticket = await f.desk.ticket();
+  assert.equal(ticket.policy.reservedBudget, "61.1");
+
+  // A stop at or below the ask would trigger at once, so it is refused.
+  const refused = await f.desk.place(
+    stopLimit("ct_stop_low", { stopPrice: "59900" }),
+  );
+  assert.equal(refused.status, "rejected");
+  assert.equal(f.intent("ct_stop_low"), undefined);
+});
+
+test("a triggered stop-limit entry is claimed once, checked again and sent as a limit entry", async () => {
+  const intents = new MemoryOrderIntents();
+  const f = desk("rest", {}, intents);
+  await f.desk.place(stopLimit("ct_stop_send"));
+  const sent = await f.desk.submitTrigger(scope, "ct_stop_send");
+  assert.equal(sent?.status, "working");
+  assert.equal(f.calls.place, 1);
+  assert.equal(f.intent("ct_stop_send")?.status, "acknowledged");
+  // Another worker, or a second pass, finds it no longer pending.
+  assert.equal(await f.desk.submitTrigger(scope, "ct_stop_send"), undefined);
+  assert.equal(f.calls.place, 1);
+
+  // Checks that fail when it triggers reject it; nothing is sent.
+  await f.desk.place(stopLimit("ct_stop_over"));
+  const other = desk(
+    "rest",
+    { TESTNET_MAX_ORDER_NOTIONAL_USDT: "50" },
+    intents,
+  );
+  const refused = await other.desk.submitTrigger(scope, "ct_stop_over");
+  assert.equal(refused?.status, "rejected");
+  assert.equal(other.calls.place, 0);
+  assert.equal(intents.intents.get("ct_stop_over")?.status, "rejected");
+});

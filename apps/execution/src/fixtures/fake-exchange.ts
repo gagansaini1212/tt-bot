@@ -242,11 +242,17 @@ export function deskFixture({
     status: (id: unknown) => desk.status(customer, id),
     cancel: (request: unknown) => desk.cancel(customer, request),
     ticket: () => desk.ticket(customer),
+    cancelTrigger: (id: unknown) => desk.cancelTrigger(customer, id),
   });
   return {
     ...fake,
     changes: () => changes,
-    desk: { ...as(scope), as },
+    desk: {
+      ...as(scope),
+      as,
+      submitTrigger: (customer: AccountScope, id: string) =>
+        desk.submitTrigger(customer, id),
+    },
     advance: (ms: number) => {
       offset += ms;
     },

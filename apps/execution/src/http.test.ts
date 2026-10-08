@@ -685,3 +685,86 @@ test("a placement runs the worker's checks, clears the snapshot cache and is nev
   const status = await json("/orders/status?listClientOrderId=ct_http_001");
   assert.equal(status.outcome.status, "working");
 });
+
+test("the execution route reports the loop's view for the requesting customer only", async (t) => {
+  const fake = binance();
+  const seen: string[] = [];
+  const state = {
+    checkedAt: "2027-01-15T08:00:00.000Z",
+    alerts: [],
+    triggers: [],
+    notifications: [],
+  };
+  const { call, json } = await serve(t, {
+    exchange: fake.exchange,
+    routes: createRoutes({
+      intents: new MemoryOrderIntents(),
+      reader: {
+        state: async (scope) => {
+          seen.push(scope.customerId);
+          return state;
+        },
+      },
+    }),
+  });
+  assert.deepEqual(await json("/execution"), {
+    status: "connected",
+    execution: state,
+  });
+  assert.deepEqual(seen, [owner.customerId]);
+  const stranger = await call("/execution", {
+    headers: { "X-Customer-Id": "5a3b2c1d-0e9f-4a8b-9c7d-6e5f4a3b2c99" },
+  });
+  assert.equal((await stranger.json()).reason, "exchange_account");
+  assert.deepEqual(seen, [owner.customerId]);
+  assert.equal(fake.calls.length, 0);
+});
+
+test("a held stop-limit entry is cancelled through its own route", async (t) => {
+  const fake = binance();
+  const intents = new MemoryOrderIntents();
+  const { call } = await serve(t, {
+    exchange: fake.exchange,
+    routes: createRoutes({
+      intents,
+      env: {
+        TESTNET_MANUAL_INSTRUMENTS: "BTC-USDT",
+        TESTNET_MANUAL_ALLOCATION_USDT: "300",
+        TESTNET_MAX_ORDER_NOTIONAL_USDT: "100",
+      },
+    }),
+  });
+  await intents.hold(
+    owner,
+    {
+      kind: "protected_entry",
+      entry: {
+        instrument: "BTC-USDT",
+        quantity: "0.001",
+        price: "61100",
+        timeInForce: "GTC",
+        takeProfitPrice: "64000",
+        stopLossPrice: "59000",
+        listClientOrderId: "ct_http_stop",
+      },
+      trigger: { stopPrice: "61000" },
+    },
+    "dashboard",
+  );
+  const path = "/orders/triggers/cancel";
+  assert.equal(
+    (await call(path, post(path, { listClientOrderId: "../x" }))).status,
+    400,
+  );
+  assert.equal((await call(path)).status, 405);
+  const cancel = async () =>
+    (
+      await (
+        await call(path, post(path, { listClientOrderId: "ct_http_stop" }))
+      ).json()
+    ).outcome.status;
+  assert.equal(await cancel(), "cancelled");
+  assert.equal(await cancel(), "not_open");
+  assert.equal(intents.intents.get("ct_http_stop")?.status, "cancelled");
+  assert.equal(fake.calls.length, 0);
+});

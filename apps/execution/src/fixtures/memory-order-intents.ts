@@ -6,6 +6,7 @@ import {
   SETTLES_FROM,
   type OrderIntent,
   type OrderIntentStore,
+  type ProtectedEntryOrder,
   type Settlement,
 } from "../order-intents";
 
@@ -17,6 +18,8 @@ export class MemoryOrderIntents implements OrderIntentStore {
   readonly intents = new Map<string, OrderIntent & { scope: AccountScope }>();
   readonly orders = new Map<string, TestnetOrder>();
   readonly cancelled: TestnetOrder[] = [];
+  // List client order IDs the customer cancelled, accepting no exits.
+  readonly customerCancels = new Set<string>();
 
   async record(
     scope: AccountScope,
@@ -34,6 +37,46 @@ export class MemoryOrderIntents implements OrderIntentStore {
       createdAt,
     });
     return true;
+  }
+
+  async hold(scope: AccountScope, order: ProtectedEntryOrder, source: string) {
+    const recorded = await this.record(scope, order, source);
+    if (recorded) this.intents.get(clientOrderIdOf(order))!.status = "pending";
+    return recorded;
+  }
+
+  async pendingTriggers(scope: AccountScope) {
+    return [...this.intents.values()]
+      .filter(
+        (intent) =>
+          intent.scope.customerId === scope.customerId &&
+          intent.status === "pending",
+      )
+      .map(({ scope: _owner, ...intent }) => structuredClone(intent));
+  }
+
+  async claimTrigger(scope: AccountScope, clientOrderId: string) {
+    const intent = this.#owned(scope, clientOrderId);
+    if (intent?.status !== "pending") return undefined;
+    intent.status = "submitting";
+    return this.find(scope, clientOrderId);
+  }
+
+  async cancelTrigger(scope: AccountScope, clientOrderId: string) {
+    const intent = this.#owned(scope, clientOrderId);
+    if (intent?.status !== "pending") return false;
+    intent.status = "cancelled";
+    return true;
+  }
+
+  async noteCustomerCancel(
+    scope: AccountScope,
+    listClientOrderId: string,
+    accepted: boolean,
+  ) {
+    if (!this.#owned(scope, listClientOrderId)) return;
+    if (accepted) this.customerCancels.add(listClientOrderId);
+    else this.customerCancels.delete(listClientOrderId);
   }
 
   async settle(

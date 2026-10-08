@@ -188,9 +188,26 @@ export class ManualOrderDesk {
         ),
       ),
     ]);
+    const exposure = manualExposure(orders, (id) => entryPrices.get(id));
+    // Stop-limit entries the worker holds will spend their value when they
+    // trigger, so they reserve it now.
+    const held = (await this.#intents.pendingTriggers(scope)).reduce(
+      (total, intent) =>
+        intent.order.kind === "protected_entry"
+          ? total.plus(
+              new Decimal(intent.order.entry.quantity).times(
+                intent.order.entry.price,
+              ),
+            )
+          : total,
+      new Decimal(0),
+    );
     const policy = manualTestnetPolicy(
       this.#config,
-      manualExposure(orders, (id) => entryPrices.get(id)),
+      {
+        committedCapital: exposure.committedCapital,
+        reservedBudget: held.plus(exposure.reservedBudget).toFixed(),
+      },
       scope,
     );
     return {
@@ -250,6 +267,8 @@ export class ManualOrderDesk {
       } catch (error) {
         return failure(error, "Binance rejected the entry. Nothing was sent.");
       }
+      if (request.type === "stop_limit")
+        return this.#hold(scope, entry, request.stopPrice);
       let recorded: boolean;
       try {
         recorded = await this.#intents.record(
@@ -271,48 +290,177 @@ export class ManualOrderDesk {
           message:
             "This order ID was used before, so it was not sent again. Check its status before placing another order.",
         };
-      let list: TestnetOrderList | TestnetOrderListReport | undefined;
+      return this.#send(scope, entry);
+    });
+  }
+
+  /** Saves a stop-limit entry for the worker to send once its stop trades. */
+  async #hold(
+    scope: AccountScope,
+    entry: ProtectedEntry,
+    stopPrice: string,
+  ): Promise<ManualOrderOutcome> {
+    const id = entry.listClientOrderId;
+    let held: boolean;
+    try {
+      held = await this.#intents.hold(
+        scope,
+        { kind: "protected_entry", entry, trigger: { stopPrice } },
+        "dashboard",
+      );
+    } catch {
+      return {
+        status: "rejected",
+        message:
+          "The stop-limit entry could not be saved, so the worker is not holding it. Check the execution worker's database and try again.",
+      };
+    }
+    if (!held)
+      return {
+        status: "duplicate",
+        listClientOrderId: id,
+        message:
+          "This order ID was used before, so it was not saved again. Check its status before placing another order.",
+      };
+    this.#onChange();
+    return heldOutcome(entry, stopPrice);
+  }
+
+  /**
+   * Sends a stop-limit entry whose stop price has traded. Only one worker can
+   * claim it. Every check runs again with fresh account data first; if one
+   * fails, nothing is sent and the entry is rejected. Resolves undefined if
+   * the entry was no longer pending.
+   */
+  submitTrigger(
+    scope: AccountScope,
+    listClientOrderId: string,
+  ): Promise<ManualOrderOutcome | undefined> {
+    return this.#exclusive(async () => {
+      const intent = await this.#intents.claimTrigger(scope, listClientOrderId);
+      if (intent?.order.kind !== "protected_entry") return undefined;
+      const { entry } = intent.order;
+      let plan: ReturnType<typeof planManualOrder>;
       try {
-        list = await this.#exchange.placeProtectedEntry(entry);
-      } catch (error) {
-        // Binance refused the request outright, so nothing was placed.
-        if (
-          error instanceof BinanceTestnetError &&
-          (error.kind === "rejected" || error.kind === "rate_limited")
-        ) {
-          await this.#settle(scope, id, {
-            status: "rejected",
-            reason: error.message,
-          });
-          return failure(
-            error,
-            "Binance rejected the order. Nothing was placed.",
-          );
-        }
-        if (!(error instanceof BinanceTestnetError)) {
-          await this.#settle(scope, id, { status: "unknown" });
-          throw error;
-        }
-        // Never resubmit. Look the order up by its client ID instead.
-        list = await this.#find(id).catch(() => undefined);
-      }
-      this.#onChange();
-      if (!list) {
-        await this.#settle(scope, id, { status: "unknown" });
+        plan = planManualOrder(
+          {
+            type: "limit",
+            instrument: entry.instrument,
+            quantity: entry.quantity,
+            price: entry.price,
+            takeProfitPrice: entry.takeProfitPrice,
+            stopLossPrice: entry.stopLossPrice,
+            listClientOrderId,
+          },
+          await this.ticket(scope),
+          this.#now(),
+          { proposalId: randomUUID(), sourceSnapshotId: randomUUID() },
+        );
+      } catch {
+        // The intent stays submitting with its reconciliation due. Binance
+        // has no such order, so reconciliation rejects it.
         return {
           status: "unknown",
-          listClientOrderId: id,
+          listClientOrderId,
           message:
-            "Binance did not confirm the order, so it may or may not have been placed. Check its status before placing another order.",
+            "The stop price traded, but the worker could not check the entry. Reconciliation will settle it shortly.",
         };
       }
-      await this.#settle(scope, id, {
-        status: "acknowledged",
-        orderListId: list.orderListId,
-        orders: "orderReports" in list ? list.orderReports : undefined,
-      });
-      return this.#describe(scope, entry);
+      if (!plan.passed) {
+        const failed = plan.checks.filter((check) => !check.passed);
+        await this.#settle(scope, listClientOrderId, {
+          status: "rejected",
+          reason: failed.map((check) => check.detail).join(" "),
+        });
+        return {
+          status: "rejected",
+          listClientOrderId,
+          message:
+            "The stop price traded, but the entry failed the worker's checks, so nothing was sent.",
+          checks: plan.checks,
+        };
+      }
+      return this.#send(scope, entry);
     });
+  }
+
+  /** Cancels a stop-limit entry the worker holds. */
+  cancelTrigger(
+    scope: AccountScope,
+    listClientOrderId: unknown,
+  ): Promise<ManualOrderOutcome> {
+    const id = listClientOrderIdSchema.safeParse(listClientOrderId);
+    if (!id.success)
+      return Promise.resolve({
+        status: "invalid",
+        message: "The order ID is invalid.",
+      });
+    return this.#exclusive(async () => {
+      if (await this.#intents.cancelTrigger(scope, id.data)) {
+        this.#onChange();
+        return {
+          status: "cancelled",
+          listClientOrderId: id.data,
+          message:
+            "Cancelled the stop-limit entry. Nothing had been sent to Binance.",
+        };
+      }
+      return {
+        status: "not_open",
+        listClientOrderId: id.data,
+        message:
+          "This stop-limit entry is no longer held. If its stop price traded, it is on Binance now: refresh and cancel it from the Open orders table.",
+      };
+    });
+  }
+
+  /** Sends a saved entry and records Binance's answer. */
+  async #send(
+    scope: AccountScope,
+    entry: ProtectedEntry,
+  ): Promise<ManualOrderOutcome> {
+    const id = entry.listClientOrderId;
+    let list: TestnetOrderList | TestnetOrderListReport | undefined;
+    try {
+      list = await this.#exchange.placeProtectedEntry(entry);
+    } catch (error) {
+      // Binance refused the request outright, so nothing was placed.
+      if (
+        error instanceof BinanceTestnetError &&
+        (error.kind === "rejected" || error.kind === "rate_limited")
+      ) {
+        await this.#settle(scope, id, {
+          status: "rejected",
+          reason: error.message,
+        });
+        return failure(
+          error,
+          "Binance rejected the order. Nothing was placed.",
+        );
+      }
+      if (!(error instanceof BinanceTestnetError)) {
+        await this.#settle(scope, id, { status: "unknown" });
+        throw error;
+      }
+      // Never resubmit. Look the order up by its client ID instead.
+      list = await this.#find(id).catch(() => undefined);
+    }
+    this.#onChange();
+    if (!list) {
+      await this.#settle(scope, id, { status: "unknown" });
+      return {
+        status: "unknown",
+        listClientOrderId: id,
+        message:
+          "Binance did not confirm the order, so it may or may not have been placed. Check its status before placing another order.",
+      };
+    }
+    await this.#settle(scope, id, {
+      status: "acknowledged",
+      orderListId: list.orderListId,
+      orders: "orderReports" in list ? list.orderReports : undefined,
+    });
+    return this.#describe(scope, entry);
   }
 
   /**
@@ -372,6 +520,15 @@ export class ManualOrderDesk {
         status: "not_found",
         listClientOrderId,
         message: "This dashboard has no record of that order.",
+      };
+    if (intent.status === "pending" && intent.order.trigger)
+      return heldOutcome(intent.order.entry, intent.order.trigger.stopPrice);
+    if (intent.status === "cancelled")
+      return {
+        status: "cancelled",
+        listClientOrderId,
+        message:
+          "The stop-limit entry was cancelled before its stop price traded, so nothing was sent.",
       };
     let list: TestnetOrderList | undefined;
     try {
@@ -567,6 +724,13 @@ export class ManualOrderDesk {
           unprotectedQuantity,
           message: `Cancelling this order list leaves ${unprotectedQuantity} without a take profit or stop loss. Confirm to cancel anyway.`,
         };
+      // Noted first, so the worker's loop never mistakes this cancel for a
+      // failure and sells what the customer chose to keep.
+      const listClientOrderId = new Decimal(unprotectedQuantity).gt(0)
+        ? protectedLeg(target.clientOrderId)?.listClientOrderId
+        : undefined;
+      if (listClientOrderId)
+        await this.#intents.noteCustomerCancel(scope, listClientOrderId, true);
       let cancelled: TestnetOrder[];
       try {
         cancelled =
@@ -585,6 +749,14 @@ export class ManualOrderDesk {
               ];
       } catch (error) {
         this.#onChange();
+        if (
+          listClientOrderId &&
+          error instanceof BinanceTestnetError &&
+          error.kind !== "unknown_outcome"
+        )
+          await this.#intents
+            .noteCustomerCancel(scope, listClientOrderId, false)
+            .catch(() => {});
         return failure(
           error,
           "Binance did not cancel the order. It may have filled or been cancelled already.",
@@ -605,6 +777,17 @@ export class ManualOrderDesk {
       };
     });
   }
+}
+
+function heldOutcome(
+  entry: ProtectedEntry,
+  stopPrice: string,
+): ManualOrderOutcome {
+  return {
+    status: "held",
+    listClientOrderId: entry.listClientOrderId,
+    message: `The worker holds this stop-limit entry. When ${entry.instrument.replace("-", "/")} trades at or above ${new Decimal(stopPrice).toFixed()}, it checks the order again and sends a limit buy at ${new Decimal(entry.price).toFixed()} with its take profit and stop loss.`,
+  };
 }
 
 function resolveTarget(
