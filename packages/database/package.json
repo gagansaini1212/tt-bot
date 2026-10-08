@@ -4,17 +4,21 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./dev-seed": "./src/dev-seed.ts",
+    "./testing": "./src/testing.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "check": "tsc -p tsconfig.json"
+    "check": "tsc -p tsconfig.json",
+    "test": "tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "postgres": "^3.4.7"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   }
 }

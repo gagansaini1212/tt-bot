@@ -11,6 +11,7 @@
     "test": "tsx --conditions=react-server --test \"src/**/*.test.ts\""
   },
   "dependencies": {
+    "@crypto-trading/database": "workspace:*",
     "@crypto-trading/exchanges": "workspace:*",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.4.0",
