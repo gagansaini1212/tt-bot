@@ -1,6 +1,12 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type UIEvent,
+} from "react";
 import { Bot, Send, Square } from "lucide-react";
 import { useEveAgent } from "eve/react";
 
@@ -25,6 +31,10 @@ type AssistantPanelProps = {
   accountLabel: string;
 };
 
+// Distance from the bottom, in pixels, that still counts as following the
+// conversation.
+const FOLLOW_THRESHOLD_PX = 48;
+
 export function AssistantPanel({
   accountSnapshot,
   accountLabel,
@@ -32,13 +42,31 @@ export function AssistantPanel({
   const [draft, setDraft] = useState("");
   const agent = useEveAgent();
   const busy = agent.status === "submitted" || agent.status === "streaming";
-  const messages = agent.data.messages.slice(-3);
+  const messages = agent.data.messages;
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  const followLatest = useRef(true);
+
+  // Keep the newest message in view while the reader is following along,
+  // but leave the scroll position alone once they scroll up to read history.
+  useEffect(() => {
+    const transcript = transcriptRef.current;
+    if (transcript && followLatest.current) {
+      transcript.scrollTop = transcript.scrollHeight;
+    }
+  }, [messages, agent.error]);
+
+  function handleTranscriptScroll(event: UIEvent<HTMLDivElement>) {
+    const { clientHeight, scrollHeight, scrollTop } = event.currentTarget;
+    followLatest.current =
+      scrollHeight - scrollTop - clientHeight <= FOLLOW_THRESHOLD_PX;
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const message = draft.trim();
     if (!message || busy) return;
 
+    followLatest.current = true;
     setDraft("");
     await agent.send(message, {
       clientContext: {
@@ -66,7 +94,14 @@ export function AssistantPanel({
         </div>
       </CardHeader>
       <CardContent>
-        <div className="mb-4 min-h-32 space-y-3 rounded-lg border border-border bg-background/45 p-3">
+        <div
+          aria-label="Conversation with the analysis assistant"
+          className="mb-4 max-h-[28rem] min-h-32 space-y-3 overflow-y-auto overscroll-contain rounded-lg border border-border bg-background/45 p-3"
+          onScroll={handleTranscriptScroll}
+          ref={transcriptRef}
+          role="log"
+          tabIndex={0}
+        >
           {messages.length === 0 ? (
             <p className="text-sm leading-6 text-muted-foreground">
               Ask about your balances, recent trades, or open orders. The
