@@ -51,3 +51,24 @@ test("failed loads, even synchronous throws, are not cached", async () => {
   );
   assert.equal(await c.get(), 1);
 });
+
+test("clear drops values, and a load started before it is not stored", async () => {
+  const c = setup();
+  assert.equal(await c.get(), 1);
+  c.cache.clear();
+  assert.equal(await c.get(), 2);
+  c.cache.clear();
+  let release!: (value: number) => void;
+  const old = c.cache(
+    "key",
+    () => new Promise<number>((done) => (release = done)),
+  );
+  await new Promise(setImmediate);
+  c.cache.clear();
+  // A request after the clear loads afresh instead of joining the old load.
+  const fresh = c.get();
+  release(99);
+  assert.equal(await old, 99);
+  assert.equal(await fresh, 3);
+  assert.equal(await c.get(), 3, "the old load's value is not stored");
+});

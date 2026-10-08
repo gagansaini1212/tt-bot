@@ -3,9 +3,15 @@ import { z } from "zod";
 import { createCache } from "../cache";
 import { handler } from "../http";
 
-/** Balances, open orders and recent fills, cached for up to 10 seconds. */
-export function snapshot(now: () => number) {
-  const cache = createCache<TestnetSnapshot>(10_000, now);
+export function createSnapshotCache(now: () => number) {
+  return createCache<TestnetSnapshot>(10_000, now);
+}
+
+/**
+ * Balances, open orders and recent fills, cached for up to 10 seconds. Order
+ * routes clear the cache, so a placement or cancel shows on the next read.
+ */
+export function snapshot(cache: ReturnType<typeof createSnapshotCache>) {
   return handler({
     query: z.strictObject({}),
     handle: async ({ exchange }) => ({

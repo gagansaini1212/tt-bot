@@ -1,6 +1,5 @@
 import { createServer, type RequestListener, type Server } from "node:http";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { readFile } from "node:fs/promises";
 import Decimal from "decimal.js";
 import {
   BinanceSpotTestnet,
@@ -9,6 +8,7 @@ import {
 } from "@crypto-trading/exchanges";
 import { authorizeTradeProposal } from "@crypto-trading/domain";
 import { createRequestListener, safeError } from "./http";
+import { OrderJournal } from "./order-journal";
 import { createRoutes } from "./routes";
 
 export { authorizeTradeProposal };
@@ -167,32 +167,22 @@ async function main() {
         break;
       }
       // Record intent before sending. Never submit this ID twice, even after restart.
-      const directory = resolve(
-        process.env.TESTNET_ORDER_JOURNAL_DIR ?? ".testnet-orders",
-      );
-      await mkdir(directory, { recursive: true, mode: 0o700 });
-      const intent = resolve(directory, `${order.clientOrderId}.json`);
-      try {
-        await writeFile(
-          intent,
-          JSON.stringify({
-            order,
-            status: "submission_pending",
-            createdAt: new Date().toISOString(),
-          }),
-          { flag: "wx", mode: 0o600 },
-        );
-      } catch {
+      const journal = new OrderJournal();
+      const intent = {
+        order,
+        status: "submission_pending",
+        createdAt: new Date().toISOString(),
+      };
+      if (!(await journal.reserve(order.clientOrderId, intent)))
         throw new Error(
           "Could not record a new order intent. If this client ID was used already, query it with the order command before taking further action.",
         );
-      }
       result = await exchange.placeLimitOrder(order);
-      await writeFile(
-        intent,
-        JSON.stringify({ order, status: "acknowledged", result }),
-        { mode: 0o600 },
-      );
+      await journal.update(order.clientOrderId, {
+        order,
+        status: "acknowledged",
+        result,
+      });
       break;
     }
     default:

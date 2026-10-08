@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { once } from "node:events";
 import { test, type TestContext } from "node:test";
@@ -53,6 +56,7 @@ function binance(respond?: (url: URL) => Response) {
         case "/api/v3/account":
           return Response.json({ canTrade: true, balances: [] });
         case "/api/v3/openOrders":
+        case "/api/v3/openOrderList":
         case "/api/v3/myTrades":
           return Response.json([]);
         case "/api/v3/ticker/24hr":
@@ -405,4 +409,207 @@ test("routes that declare a body receive it validated", async (t) => {
   const large = await post(JSON.stringify({ value: "a".repeat(16 * 1024) }));
   assert.equal(large.status, 413);
   assert.equal((await call("/echo", { method: "GET" })).status, 405);
+});
+
+const order = {
+  type: "limit",
+  instrument: "BTC-USDT",
+  quantity: "0.001",
+  price: "59000",
+  takeProfitPrice: "62000",
+  stopLossPrice: "57000",
+  listClientOrderId: "ct_http_001",
+};
+const post = (path: string, body: unknown) => ({
+  method: "POST",
+  body: JSON.stringify(body),
+  headers: { "Content-Type": "application/json" },
+});
+
+test("order routes stay off until their limits are configured", async (t) => {
+  const fake = binance();
+  const { call, json } = await serve(t, {
+    exchange: fake.exchange,
+    routes: createRoutes(Date.now, {}),
+  });
+  const ticket = await json("/orders/ticket");
+  assert.equal(ticket.status, "connected");
+  assert.match(ticket.disabled, /TESTNET_MANUAL_INSTRUMENTS/);
+  const placed = await call("/orders", post("/orders", order));
+  assert.equal(placed.status, 200);
+  assert.equal((await placed.json()).outcome.status, "rejected");
+  assert.equal(fake.calls.length, 0);
+});
+
+test("order routes take validated POST bodies and refuse other methods", async (t) => {
+  const fake = binance();
+  const { call } = await serve(t, { exchange: fake.exchange });
+  for (const [path, body] of [
+    ["/orders", { ...order, side: "SELL" }],
+    ["/orders", { ...order, stopLossPrice: undefined }],
+    ["/orders", { ...order, type: "stop_limit" }],
+    ["/orders", { ...order, listClientOrderId: "web_1" }],
+    [
+      "/orders/cancel",
+      { instrument: "BTC-USDT", orderId: "7", acceptUnprotected: false },
+    ],
+    ["/orders/cancel", { instrument: "SOL-USDT", orderId: 7 }],
+  ] as const)
+    assert.equal(
+      (await call(path, post(path, body))).status,
+      400,
+      JSON.stringify(body),
+    );
+  for (const path of ["/orders", "/orders/cancel"]) {
+    const response = await call(path);
+    assert.equal(response.status, 405, path);
+    assert.equal(response.headers.get("allow"), "POST");
+  }
+  assert.equal(
+    (await call("/orders/status?listClientOrderId=../../etc")).status,
+    400,
+  );
+  assert.equal((await call("/orders/ticket", { method: "POST" })).status, 405);
+  assert.equal(fake.calls.length, 0);
+});
+
+test("a placement runs the worker's checks, clears the snapshot cache and is never sent twice", async (t) => {
+  const journal = await mkdtemp(join(tmpdir(), "http-orders-"));
+  t.after(() => rm(journal, { recursive: true, force: true }));
+  let placed = false;
+  const list = {
+    orderListId: 7,
+    contingencyType: "OTO",
+    listStatusType: "EXEC_STARTED",
+    listOrderStatus: "EXECUTING",
+    listClientOrderId: "ct_http_001",
+    symbol: "BTCUSDT",
+    orders: ["en", "sl", "tp"].map((leg, index) => ({
+      symbol: "BTCUSDT",
+      orderId: 20 + index,
+      clientOrderId: `ct_http_001_${leg}`,
+    })),
+  };
+  const fake = binance((url) => {
+    switch (url.pathname) {
+      case "/api/v3/time":
+        return Response.json({ serverTime: Date.now() });
+      case "/api/v3/account":
+        return Response.json({
+          canTrade: true,
+          balances: [{ asset: "USDT", free: "1000", locked: "0" }],
+        });
+      case "/api/v3/exchangeInfo":
+        return Response.json({
+          symbols: ["BTCUSDT", "ETHUSDT"].map((symbol) => ({
+            symbol,
+            status: "TRADING",
+            orderTypes: ["LIMIT", "LIMIT_MAKER", "STOP_LOSS"],
+            ocoAllowed: true,
+            otoAllowed: true,
+            opoAllowed: true,
+            filters: [
+              {
+                filterType: "PRICE_FILTER",
+                minPrice: "0.01",
+                maxPrice: "1000000",
+                tickSize: "0.01",
+              },
+              {
+                filterType: "LOT_SIZE",
+                minQty: "0.00001",
+                maxQty: "9000",
+                stepSize: "0.00001",
+              },
+              {
+                filterType: "NOTIONAL",
+                minNotional: "5",
+                maxNotional: "9000000",
+              },
+            ],
+          })),
+        });
+      case "/api/v3/depth":
+        return Response.json({
+          lastUpdateId: 1,
+          bids: [["59999.00", "1"]],
+          asks: [["60000.00", "1"]],
+        });
+      case "/api/v3/order/test":
+        return Response.json({});
+      case "/api/v3/orderList/opoco":
+        placed = true;
+        return Response.json({ ...list, orderReports: [] });
+      case "/api/v3/orderList":
+        return Response.json(list);
+      case "/api/v3/order":
+        return Response.json({
+          symbol: "BTCUSDT",
+          orderId: 20,
+          orderListId: 7,
+          clientOrderId: "ct_http_001_en",
+          price: "59000",
+          origQty: "0.001",
+          executedQty: "0",
+          cummulativeQuoteQty: "0",
+          status: "NEW",
+          type: "LIMIT",
+          side: "BUY",
+        });
+      case "/api/v3/openOrders":
+        return Response.json([]);
+      case "/api/v3/openOrderList":
+      case "/api/v3/myTrades":
+        return Response.json([]);
+    }
+    throw new Error(`Unexpected fixture endpoint ${url.pathname}`);
+  });
+  const { call, json } = await serve(t, {
+    exchange: fake.exchange,
+    routes: createRoutes(Date.now, {
+      TESTNET_MANUAL_INSTRUMENTS: "BTC-USDT",
+      TESTNET_MANUAL_ALLOCATION_USDT: "300",
+      TESTNET_MAX_ORDER_NOTIONAL_USDT: "100",
+      TESTNET_ORDER_JOURNAL_DIR: journal,
+    }),
+  });
+  const ticket = await json("/orders/ticket");
+  assert.equal(ticket.ticket.policy.tradingMode, "simulation");
+  assert.equal(ticket.ticket.policy.liveTradingEnabled, false);
+  assert.equal(ticket.ticket.markets[0].bestAsk, "60000.00");
+  await json("/snapshot");
+  const snapshots = fake.count("/api/v3/account");
+
+  // Over the cap: the worker refuses whatever the browser previewed.
+  const refused = await call(
+    "/orders",
+    post("/orders", { ...order, quantity: "0.002" }),
+  );
+  const refusal = (await refused.json()).outcome;
+  assert.equal(refusal.status, "rejected");
+  assert.ok(
+    refusal.checks.some(
+      (check: { name: string; passed: boolean }) =>
+        check.name === "cap" && !check.passed,
+    ),
+  );
+  assert.equal(placed, false);
+
+  const response = await call("/orders", post("/orders", order));
+  assert.equal((await response.json()).outcome.status, "working");
+  assert.equal(fake.count("/api/v3/orderList/opoco"), 1);
+  const accountReads = fake.count("/api/v3/account");
+  await json("/snapshot");
+  assert.equal(
+    fake.count("/api/v3/account"),
+    accountReads + 1,
+    "the snapshot is read afresh after an order",
+  );
+  assert.ok(accountReads > snapshots);
+
+  const repeat = await call("/orders", post("/orders", order));
+  assert.equal((await repeat.json()).outcome.status, "duplicate");
+  assert.equal(fake.count("/api/v3/orderList/opoco"), 1);
+  const status = await json("/orders/status?listClientOrderId=ct_http_001");
+  assert.equal(status.outcome.status, "working");
 });

@@ -6,23 +6,37 @@
 export function createCache<T>(ttlMs: number, now: () => number = Date.now) {
   const entries = new Map<string, { value: T; loadedAt: number }>();
   const pending = new Map<string, Promise<T>>();
-  return (key: string, load: () => Promise<T>): Promise<T> => {
+  // Loads started before the last clear() are served but not stored.
+  let generation = 0;
+  const cache = (key: string, load: () => Promise<T>): Promise<T> => {
     const entry = entries.get(key);
     const age = entry ? now() - entry.loadedAt : Infinity;
     // A negative age means the clock stepped back since the load.
     if (entry && age >= 0 && age <= ttlMs) return Promise.resolve(entry.value);
     let request = pending.get(key);
     if (!request) {
+      const started = generation;
       // Starts after `pending.set`, so even a synchronous throw clears it.
-      request = Promise.resolve()
+      const loading: Promise<T> = Promise.resolve()
         .then(load)
         .then((value) => {
-          entries.set(key, { value, loadedAt: now() });
+          if (started === generation)
+            entries.set(key, { value, loadedAt: now() });
           return value;
         })
-        .finally(() => pending.delete(key));
+        .finally(() => {
+          if (pending.get(key) === loading) pending.delete(key);
+        });
+      request = loading;
       pending.set(key, request);
     }
     return request;
   };
+  /** Drops every value, so the next request loads afresh. */
+  cache.clear = () => {
+    generation++;
+    entries.clear();
+    pending.clear();
+  };
+  return cache;
 }
