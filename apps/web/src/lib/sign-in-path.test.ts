@@ -20,6 +20,10 @@ test("never to another site, or back to sign-in", () => {
     "https://example.com/",
     "//example.com/accounts",
     "/\\example.com",
+    "/.//example.com",
+    "/%2e//example.com",
+    "/a/..//example.com",
+    "/\\/example.com",
     "/sign-in",
     "/sign-in?next=/accounts",
   ])

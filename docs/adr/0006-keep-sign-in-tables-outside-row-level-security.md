@@ -1,0 +1,5 @@
+# Keep sign-in tables outside row-level security
+
+Status: accepted, 2026-10-08. An exception to [ADR 0005](0005-isolate-customers-with-row-level-security.md).
+
+Better Auth's tables (`auth_users`, `auth_sessions`, `auth_accounts`, `auth_verifications`) hold no customer policies, although each login names its customer. Better Auth finds a session by its token and a login by its email before anyone knows which customer is asking, so there is no customer to scope the query to. Instead only the `trading_auth` role may use these tables, and the roles that handle trading data, `trading_app` and `trading_worker`, cannot. `trading_auth` cannot read trading data, create logins, or change the customer a login acts for. We chose this over a `SECURITY DEFINER` lookup for sessions, which ADR 0005 rules out for customer rows, and over policies keyed to the session token, which Better Auth's adapter cannot set. The cost is that code holding `trading_auth` can read every login and session, so only the web app's sign-in code gets it in a deployment. Locally the web app and the worker share `DATABASE_URL`, which `pnpm db:seed` gives both roles.

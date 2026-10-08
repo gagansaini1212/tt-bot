@@ -81,9 +81,9 @@ GRANT USAGE ON SCHEMA public TO trading_auth;
 
 -- There is no sign-up: logins are created by the schema owner (pnpm db:seed
 -- locally). Better Auth may change a login's profile and password, but never
--- the customer it acts for.
+-- the customer it acts for, or which login a password belongs to.
 GRANT SELECT, UPDATE (name, email, email_verified, image, updated_at)
   ON auth_users TO trading_auth;
-GRANT SELECT, UPDATE ON auth_accounts TO trading_auth;
+GRANT SELECT, UPDATE (password, updated_at) ON auth_accounts TO trading_auth;
 GRANT SELECT, INSERT, UPDATE, DELETE ON auth_sessions, auth_verifications
   TO trading_auth;

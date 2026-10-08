@@ -2,7 +2,6 @@ import "server-only";
 import { headers } from "next/headers";
 import { cache } from "react";
 import { getAuth } from "./auth";
-import { FRESH_SESSION_SECONDS } from "./auth-options";
 
 export type CurrentCustomer = {
   /** The customer every worker call and query acts for. */
@@ -12,12 +11,15 @@ export type CurrentCustomer = {
   email: string;
 };
 
-type SignedIn = { customer: CurrentCustomer; signedInAt: Date };
+export type SignedIn = { customer: CurrentCustomer; signedInAt: Date };
 
-// Better Auth reads the session from the database, so a session signed out
-// elsewhere ends at once. Once per request: the layout, the page and every
-// worker call share it.
-const readSession = cache(async (): Promise<SignedIn | null> => {
+/**
+ * The signed-in customer and when they signed in, or null. Better Auth reads
+ * the session from the database, so a session signed out elsewhere ends at
+ * once. Once per request: the layout, the page and every worker call share
+ * it.
+ */
+export const readSession = cache(async (): Promise<SignedIn | null> => {
   // First, so a build renders the page on each request rather than at build
   // time, when there is neither a database nor a secret.
   const requestHeaders = await headers();
@@ -42,31 +44,4 @@ const readSession = cache(async (): Promise<SignedIn | null> => {
  */
 export async function getCurrentCustomer(): Promise<CurrentCustomer | null> {
   return (await readSession())?.customer ?? null;
-}
-
-/** Whether a session that started at `signedInAt` is still fresh at `now`. */
-export function isFreshSession(signedInAt: Date, now = Date.now()): boolean {
-  return now - signedInAt.getTime() < FRESH_SESSION_SECONDS * 1000;
-}
-
-export type FreshSessionCheck =
-  | { status: "fresh"; customer: CurrentCustomer }
-  | { status: "signed_out" | "stale" };
-
-/**
- * Sensitive actions, such as changing exchange credentials or activating live
- * trading, need a customer who signed in within the last
- * `FRESH_SESSION_SECONDS`. Call this on the server at the start of every such
- * action and refuse unless it returns "fresh". Send a "stale" customer to
- * `signInPath(next, { reauthenticate: true })`: confirming their password
- * there starts a fresh session.
- */
-export async function checkFreshSession(
-  now = Date.now(),
-): Promise<FreshSessionCheck> {
-  const session = await readSession();
-  if (!session) return { status: "signed_out" };
-  return isFreshSession(session.signedInAt, now)
-    ? { status: "fresh", customer: session.customer }
-    : { status: "stale" };
 }

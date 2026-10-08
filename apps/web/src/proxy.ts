@@ -6,6 +6,28 @@ import { signInPath } from "@/lib/sign-in-path";
 
 const UNAVAILABLE = "Sign-in is unavailable. Check the web server's output.";
 
+function refuse(status: 401 | 503, code: string, error: string) {
+  return NextResponse.json(
+    { ok: false, code, error },
+    { status, headers: { "cache-control": "no-store" } },
+  );
+}
+
+/**
+ * Whether Next.js would send this path to the eve assistant. Its rewrite of
+ * /eve/v1/… ignores case, so this does too, and it looks through
+ * percent-encoding and repeated slashes. Erring wide only refuses more.
+ */
+export function isAssistantPath(pathname: string): boolean {
+  let path = pathname;
+  try {
+    path = decodeURIComponent(pathname);
+  } catch {
+    // Malformed encoding: judge the path as it is.
+  }
+  return path.toLowerCase().replace(/\/+/g, "/").startsWith("/eve/");
+}
+
 // Read-only: the proxy cannot set the refreshed cookie.
 async function signedInCustomerId(request: NextRequest) {
   const session = await getAuth().api.getSession({
@@ -23,14 +45,7 @@ async function signedInCustomerId(request: NextRequest) {
 async function forwardToAssistant(request: NextRequest) {
   const customerId = await signedInCustomerId(request);
   if (!customerId)
-    return NextResponse.json(
-      {
-        ok: false,
-        code: "unauthorized",
-        error: "Sign in to use the assistant.",
-      },
-      { status: 401, headers: { "cache-control": "no-store" } },
-    );
+    return refuse(401, "unauthorized", "Sign in to use the assistant.");
   const headers = new Headers(request.headers);
   headers.set("authorization", `Bearer ${signAssistantToken(customerId)}`);
   headers.delete("cookie");
@@ -44,22 +59,22 @@ async function forwardToAssistant(request: NextRequest) {
  */
 export async function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
+  const assistant = isAssistantPath(pathname);
   try {
-    if (pathname.startsWith("/eve/")) return await forwardToAssistant(request);
+    if (assistant) return await forwardToAssistant(request);
     if (pathname === "/sign-in") return NextResponse.next();
     if (await signedInCustomerId(request)) return NextResponse.next();
   } catch (error) {
     console.error("Could not check the session.", error);
-    return pathname.startsWith("/eve/")
-      ? NextResponse.json(
-          { ok: false, code: "unavailable", error: UNAVAILABLE },
-          { status: 503, headers: { "cache-control": "no-store" } },
-        )
+    return assistant
+      ? refuse(503, "unavailable", UNAVAILABLE)
       : new NextResponse(UNAVAILABLE, { status: 503 });
   }
-  // A server action answers for itself: each one checks the session.
+  // A server action answers for itself: each one checks the session, and
+  // tells a signed-out customer so.
+  if (request.headers.has("next-action")) return NextResponse.next();
   if (request.method !== "GET" && request.method !== "HEAD")
-    return NextResponse.next();
+    return new NextResponse("Sign in first.", { status: 401 });
   return NextResponse.redirect(
     new URL(signInPath(`${pathname}${search}`), request.url),
   );

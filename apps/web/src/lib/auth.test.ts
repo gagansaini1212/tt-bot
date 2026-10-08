@@ -4,8 +4,8 @@ import { after, before, describe, test } from "node:test";
 import { NextRequest } from "next/server";
 import {
   DEV_CUSTOMER_ID,
-  DEV_USER_EMAIL,
-  DEV_USER_PASSWORD,
+  DEV_LOGIN_EMAIL,
+  DEV_LOGIN_PASSWORD,
 } from "@crypto-trading/database/dev-seed";
 import {
   createTestDatabase,
@@ -16,8 +16,6 @@ import {
 import { customerSession } from "../../../../agent/lib/customer-principal";
 import { proxy } from "../proxy";
 import { getAuth } from "./auth";
-import { FRESH_SESSION_SECONDS } from "./auth-options";
-import { isFreshSession } from "./current-customer";
 
 const origin = "http://localhost:3000";
 
@@ -75,7 +73,7 @@ describe("customer sign-in", { skip: databaseTestsSkipped }, () => {
     process.env.DATABASE_URL = url.toString();
     process.env.AUTH_SECRET = "auth-test-secret-at-least-32-characters";
 
-    const response = await signIn(DEV_USER_EMAIL, DEV_USER_PASSWORD);
+    const response = await signIn(DEV_LOGIN_EMAIL, DEV_LOGIN_PASSWORD);
     assert.equal(response.status, 200);
     cookie = sessionCookie(response);
   });
@@ -91,14 +89,13 @@ describe("customer sign-in", { skip: databaseTestsSkipped }, () => {
     });
     assert.ok(session);
     assert.equal(session.user.customerId, DEV_CUSTOMER_ID);
-    assert.equal(session.user.email, DEV_USER_EMAIL);
-    assert.ok(isFreshSession(new Date(session.session.createdAt)));
+    assert.equal(session.user.email, DEV_LOGIN_EMAIL);
   });
 
   test("a wrong password, an unknown email or a sign-up gets no session", async () => {
     for (const response of [
-      await signIn(DEV_USER_EMAIL, "not-the-password"),
-      await signIn("nobody@example.com", DEV_USER_PASSWORD),
+      await signIn(DEV_LOGIN_EMAIL, "not-the-password"),
+      await signIn("nobody@example.com", DEV_LOGIN_PASSWORD),
     ]) {
       assert.equal(response.status, 401);
       assert.deepEqual(response.headers.getSetCookie(), []);
@@ -120,7 +117,7 @@ describe("customer sign-in", { skip: databaseTestsSkipped }, () => {
 
   test("sign-in is served only to requests addressed to this machine", async () => {
     await assert.rejects(
-      signIn(DEV_USER_EMAIL, DEV_USER_PASSWORD, "trading.example.com"),
+      signIn(DEV_LOGIN_EMAIL, DEV_LOGIN_PASSWORD, "trading.example.com"),
       /not in the allowed hosts/,
     );
   });
@@ -138,6 +135,17 @@ describe("customer sign-in", { skip: databaseTestsSkipped }, () => {
     );
     assert.equal(signedIn.headers.get("x-middleware-next"), "1");
 
+    // Only a server action may POST signed out; it checks the session itself.
+    const post = await proxy(pageRequest("/markets", { method: "POST" }));
+    assert.equal(post.status, 401);
+    const action = await proxy(
+      pageRequest("/markets", {
+        method: "POST",
+        headers: { "next-action": "0123abcd" },
+      }),
+    );
+    assert.equal(action.headers.get("x-middleware-next"), "1");
+
     const signInPage = await proxy(pageRequest("/sign-in"));
     assert.equal(signInPage.headers.get("x-middleware-next"), "1");
 
@@ -151,11 +159,11 @@ describe("customer sign-in", { skip: databaseTestsSkipped }, () => {
   });
 
   test("the assistant hears only from signed-in customers, by token", async () => {
-    const signedOut = await proxy(
-      pageRequest("/eve/v1/session", { method: "POST" }),
-    );
-    assert.equal(signedOut.status, 401);
-    assert.equal(signedOut.headers.get("x-middleware-next"), null);
+    for (const path of ["/eve/v1/session", "/EVE/v1/session"]) {
+      const signedOut = await proxy(pageRequest(path, { method: "POST" }));
+      assert.equal(signedOut.status, 401, path);
+      assert.equal(signedOut.headers.get("x-middleware-next"), null, path);
+    }
 
     const forwarded = await proxy(
       pageRequest("/eve/v1/session", {
@@ -181,12 +189,23 @@ describe("customer sign-in", { skip: databaseTestsSkipped }, () => {
     assert.equal(caller?.principalId, DEV_CUSTOMER_ID);
   });
 
-  test("a session is fresh for ten minutes after signing in", () => {
-    const signedInAt = new Date("2026-10-08T12:00:00Z");
-    const at = (seconds: number) => signedInAt.getTime() + seconds * 1000;
-    assert.equal(FRESH_SESSION_SECONDS, 600);
-    assert.ok(isFreshSession(signedInAt, at(599)));
-    assert.ok(!isFreshSession(signedInAt, at(600)));
+  test("a freshly signed-in customer can change their password", async () => {
+    const headers = new Headers({ cookie, host: "localhost:3000", origin });
+    const change = (currentPassword: string, newPassword: string) =>
+      getAuth().api.changePassword({
+        body: { currentPassword, newPassword },
+        headers,
+      });
+    await change(DEV_LOGIN_PASSWORD, "a-changed-password");
+    assert.equal(
+      (await signIn(DEV_LOGIN_EMAIL, DEV_LOGIN_PASSWORD)).status,
+      401,
+    );
+    assert.equal(
+      (await signIn(DEV_LOGIN_EMAIL, "a-changed-password")).status,
+      200,
+    );
+    await change("a-changed-password", DEV_LOGIN_PASSWORD);
   });
 
   test("signing out ends the session", async () => {

@@ -32,7 +32,10 @@ test("the assistant accepts the web app's token as the customer it names", async
   assert.equal(caller.authenticator, CUSTOMER_AUTHENTICATOR);
   assert.equal(caller.principalType, "user");
   assert.equal(caller.principalId, DEV_CUSTOMER_ID);
-  assert.equal(customerIdFrom(caller), DEV_CUSTOMER_ID);
+  assert.equal(
+    customerIdFrom({ current: caller, initiator: caller }),
+    DEV_CUSTOMER_ID,
+  );
 });
 
 test("the assistant ignores missing, expired, forged and altered tokens", async () => {
@@ -70,6 +73,13 @@ test("the key is derived from AUTH_SECRET, not the secret itself", () => {
 });
 
 test("only a signed-in customer may draft proposals", () => {
+  const customer = {
+    attributes: {},
+    authenticator: CUSTOMER_AUTHENTICATOR,
+    issuer: "crypto-trading-agent/web",
+    principalId: DEV_CUSTOMER_ID,
+    principalType: "user",
+  };
   for (const caller of [
     null,
     {
@@ -99,5 +109,25 @@ test("only a signed-in customer may draft proposals", () => {
       principalType: "user",
     },
   ])
-    assert.throws(() => customerIdFrom(caller), /signed-in customer/);
+    assert.throws(
+      () => customerIdFrom({ current: caller, initiator: customer }),
+      /signed-in customer/,
+    );
+});
+
+test("a customer cannot act in another customer's conversation", () => {
+  const customer = (principalId: string) => ({
+    attributes: {},
+    authenticator: CUSTOMER_AUTHENTICATOR,
+    issuer: "crypto-trading-agent/web",
+    principalId,
+    principalType: "user",
+  });
+  const owner = customer(DEV_CUSTOMER_ID);
+  const other = customer("6d1f3c52-8b7e-4a51-9a0d-2f4e8c1b7aff");
+  for (const initiator of [owner, null])
+    assert.throws(
+      () => customerIdFrom({ current: other, initiator }),
+      /belongs to another customer/,
+    );
 });

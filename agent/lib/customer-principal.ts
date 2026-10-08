@@ -5,7 +5,7 @@ import {
   withAuthChallenges,
   type AuthFn,
 } from "eve/channels/auth";
-import type { SessionAuthContext } from "eve/context";
+import type { SessionAuth, SessionAuthContext } from "eve/context";
 
 // The web app's proxy checks the customer's Better Auth session on every
 // request to the assistant, then forwards it with a short-lived token naming
@@ -62,23 +62,34 @@ export function customerSession(): AuthFn<Request> {
   );
 }
 
-/**
- * The customer a turn acts for: the signed-in customer who sent it. Every
- * other caller is refused, including eve's `localDev()` principal and Vercel
- * OIDC `user` principals, which identify developers and Vercel accounts
- * rather than customers.
- */
-export function customerIdFrom(caller: SessionAuthContext | null): string {
-  if (
-    caller?.authenticator === CUSTOMER_AUTHENTICATOR &&
+function customerOf(caller: SessionAuthContext | null): string | undefined {
+  return caller?.authenticator === CUSTOMER_AUTHENTICATOR &&
     caller.issuer === ISSUER &&
     caller.principalType === "user" &&
     UUID.test(caller.principalId)
-  )
-    return caller.principalId;
-  throw new Error(
-    caller
-      ? `A signed-in customer is required. The caller authenticated through "${caller.authenticator}" as "${caller.principalType}", which does not identify a customer. Sign in to the web app and use the assistant there.`
-      : "A signed-in customer is required. Sign in to the web app and use the assistant there.",
-  );
+    ? caller.principalId
+    : undefined;
+}
+
+/**
+ * The customer a turn acts for: the signed-in customer who sent it, who must
+ * also be the customer who started the conversation. Every other caller is
+ * refused, including eve's `localDev()` principal and Vercel OIDC `user`
+ * principals, which identify developers and Vercel accounts rather than
+ * customers. eve lets anyone who passes route auth continue a conversation
+ * whose ID they know, so this keeps another customer from acting in it.
+ */
+export function customerIdFrom({ current, initiator }: SessionAuth): string {
+  const customerId = customerOf(current);
+  if (!customerId)
+    throw new Error(
+      current
+        ? `A signed-in customer is required. The caller authenticated through "${current.authenticator}" as "${current.principalType}", which does not identify a customer. Sign in to the web app and use the assistant there.`
+        : "A signed-in customer is required. Sign in to the web app and use the assistant there.",
+    );
+  if (customerOf(initiator) !== customerId)
+    throw new Error(
+      "This conversation belongs to another customer. Start a new conversation.",
+    );
+  return customerId;
 }

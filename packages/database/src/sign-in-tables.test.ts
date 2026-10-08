@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { after, before, describe, test } from "node:test";
-import { DEV_CUSTOMER_ID, DEV_USER_ID } from "./dev-seed";
+import { DEV_CUSTOMER_ID, DEV_LOGIN_ID } from "./dev-seed";
 import { createDatabase, type Database } from "./index";
 import { seedDevelopment } from "./seed";
 import {
@@ -62,12 +62,12 @@ describe("sign-in tables", { skip: databaseTestsSkipped }, () => {
 
   test("never let a login change which customer it acts for", async () => {
     const [login] = await web<{ customer_id: string }[]>`
-      select customer_id from auth_users where id = ${DEV_USER_ID}
+      select customer_id from auth_users where id = ${DEV_LOGIN_ID}
     `;
     assert.equal(login.customer_id, DEV_CUSTOMER_ID);
-    await web`update auth_users set name = 'Renamed' where id = ${DEV_USER_ID}`;
+    await web`update auth_users set name = 'Renamed' where id = ${DEV_LOGIN_ID}`;
     await assert.rejects(
-      web`update auth_users set customer_id = ${DEV_CUSTOMER_ID} where id = ${DEV_USER_ID}`,
+      web`update auth_users set customer_id = ${DEV_CUSTOMER_ID} where id = ${DEV_LOGIN_ID}`,
       /permission denied/,
     );
     await assert.rejects(
@@ -75,6 +75,11 @@ describe("sign-in tables", { skip: databaseTestsSkipped }, () => {
         insert into auth_users (customer_id, name, email)
         values (${DEV_CUSTOMER_ID}, 'Intruder', 'intruder@example.com')
       `,
+      /permission denied/,
+    );
+    await web`update auth_accounts set password = password where user_id = ${DEV_LOGIN_ID}`;
+    await assert.rejects(
+      web`update auth_accounts set user_id = ${DEV_LOGIN_ID}`,
       /permission denied/,
     );
   });

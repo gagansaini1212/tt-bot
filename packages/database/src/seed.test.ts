@@ -5,9 +5,9 @@ import { verifyPassword } from "better-auth/crypto";
 import {
   DEV_CUSTOMER_ID,
   DEV_EXCHANGE_ACCOUNT_ID,
-  DEV_USER_EMAIL,
-  DEV_USER_ID,
-  DEV_USER_PASSWORD,
+  DEV_LOGIN_EMAIL,
+  DEV_LOGIN_ID,
+  DEV_LOGIN_PASSWORD,
 } from "./dev-seed";
 import {
   assertRowLevelSecurity,
@@ -123,32 +123,32 @@ describe("development seed", { skip: databaseTestsSkipped }, () => {
       [...logins],
       [
         {
-          id: DEV_USER_ID,
+          id: DEV_LOGIN_ID,
           customer_id: DEV_CUSTOMER_ID,
-          email: DEV_USER_EMAIL,
+          email: DEV_LOGIN_EMAIL,
           email_verified: true,
         },
       ],
     );
     const [account] = await database.admin<{ password: string }[]>`
       select password from auth_accounts
-      where user_id = ${DEV_USER_ID} and account_id = ${DEV_USER_ID}
+      where user_id = ${DEV_LOGIN_ID} and account_id = ${DEV_LOGIN_ID}
         and provider_id = 'credential'
     `;
     assert.ok(
       await verifyPassword({
         hash: account.password,
-        password: DEV_USER_PASSWORD,
+        password: DEV_LOGIN_PASSWORD,
       }),
     );
 
     // A second run leaves a changed password as it is.
     await database.admin`
-      update auth_accounts set password = 'changed' where user_id = ${DEV_USER_ID}
+      update auth_accounts set password = 'changed' where user_id = ${DEV_LOGIN_ID}
     `;
     await seedDevelopment(database.admin);
     const accounts = await database.admin`
-      select password from auth_accounts where user_id = ${DEV_USER_ID}
+      select password from auth_accounts where user_id = ${DEV_LOGIN_ID}
     `;
     assert.deepEqual([...accounts], [{ password: "changed" }]);
   });

@@ -4,12 +4,13 @@
  */
 export function safeNextPath(value: unknown): string {
   if (typeof value !== "string" || !value.startsWith("/")) return "/";
-  // "//host" and "/\host" are other sites to a browser.
-  if (value.startsWith("//") || value.startsWith("/\\")) return "/";
   const url = URL.parse(value, "http://localhost");
   if (!url || url.origin !== "http://localhost") return "/";
-  if (url.pathname === "/sign-in") return "/";
-  return `${url.pathname}${url.search}`;
+  const path = `${url.pathname}${url.search}`;
+  // A browser reads "//host" as another site, so check after the parser has
+  // resolved "/.//host", "/%2e//host" and "/\host" to it.
+  if (path.startsWith("//") || url.pathname === "/sign-in") return "/";
+  return path;
 }
 
 /** The sign-in page, returning to `next` afterwards. */

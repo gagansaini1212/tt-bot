@@ -28,7 +28,7 @@ export default defineTool({
   execute(input, ctx) {
     return {
       ...input,
-      customerId: customerIdFrom(ctx.session.auth.current),
+      customerId: customerIdFrom(ctx.session.auth),
       status: "draft" as const,
       notice: "Independent execution checks are still required.",
     };

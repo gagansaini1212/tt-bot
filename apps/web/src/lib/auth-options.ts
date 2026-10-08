@@ -4,7 +4,7 @@ import type { Pool } from "pg";
 /**
  * How long after signing in a session stays fresh. Changing exchange
  * credentials or activating live trading needs a fresh session (see
- * `checkFreshSession`); Better Auth's own sensitive endpoints use it too.
+ * `requireFreshSession`); Better Auth's own sensitive endpoints use it too.
  */
 export const FRESH_SESSION_SECONDS = 10 * 60;
 

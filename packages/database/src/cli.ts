@@ -3,8 +3,8 @@
 import {
   DEV_CUSTOMER_ID,
   DEV_EXCHANGE_ACCOUNT_ID,
-  DEV_USER_EMAIL,
-  DEV_USER_PASSWORD,
+  DEV_LOGIN_EMAIL,
+  DEV_LOGIN_PASSWORD,
 } from "./dev-seed";
 import { createDatabase } from "./index";
 import { migrate } from "./migrate";
@@ -54,7 +54,7 @@ async function main() {
     await seedDevelopment(admin);
     await verifyAppConnection(appUrl);
     console.info(
-      `Seeded the dev customer ${DEV_CUSTOMER_ID} and their Binance Spot Testnet exchange account ${DEV_EXCHANGE_ACCOUNT_ID}. Sign in to the web app as ${DEV_USER_EMAIL} with the password ${DEV_USER_PASSWORD}.`,
+      `Seeded the dev customer ${DEV_CUSTOMER_ID} and their Binance Spot Testnet exchange account ${DEV_EXCHANGE_ACCOUNT_ID}. Sign in to the web app as ${DEV_LOGIN_EMAIL} with the password ${DEV_LOGIN_PASSWORD}.`,
     );
   } finally {
     await admin.end();

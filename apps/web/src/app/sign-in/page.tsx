@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { ChartCandlestick } from "lucide-react";
 import {
-  DEV_USER_EMAIL,
-  DEV_USER_PASSWORD,
+  DEV_LOGIN_EMAIL,
+  DEV_LOGIN_PASSWORD,
 } from "@crypto-trading/database/dev-seed";
 
 import { SignInForm } from "@/components/sign-in-form";
@@ -76,8 +76,8 @@ export default async function SignInPage({
         {process.env.NODE_ENV === "development" ? (
           <p className="text-xs leading-5 text-muted-foreground">
             Local development: sign in as{" "}
-            <span className="font-mono">{DEV_USER_EMAIL}</span> with the
-            password <span className="font-mono">{DEV_USER_PASSWORD}</span>,
+            <span className="font-mono">{DEV_LOGIN_EMAIL}</span> with the
+            password <span className="font-mono">{DEV_LOGIN_PASSWORD}</span>,
             which <span className="font-mono">pnpm db:seed</span> creates.
           </p>
         ) : null}

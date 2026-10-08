@@ -2,9 +2,9 @@ import { hashPassword } from "better-auth/crypto";
 import {
   DEV_CUSTOMER_ID,
   DEV_EXCHANGE_ACCOUNT_ID,
-  DEV_USER_EMAIL,
-  DEV_USER_ID,
-  DEV_USER_PASSWORD,
+  DEV_LOGIN_EMAIL,
+  DEV_LOGIN_ID,
+  DEV_LOGIN_PASSWORD,
 } from "./dev-seed";
 import {
   assertRowLevelSecurity,
@@ -16,13 +16,13 @@ import {
 
 /**
  * Creates the dev customer, their Binance Spot Testnet exchange account in
- * simulation mode, and their login (DEV_USER_EMAIL, DEV_USER_PASSWORD). Rows
+ * simulation mode, and their login (DEV_LOGIN_EMAIL, DEV_LOGIN_PASSWORD). Rows
  * that already exist are left as they are, so running it again changes
  * nothing, and a changed password stays changed.
  */
 export async function seedDevelopment(database: Database) {
   // Better Auth's own hash, so its email sign-in accepts the password.
-  const passwordHash = await hashPassword(DEV_USER_PASSWORD);
+  const passwordHash = await hashPassword(DEV_LOGIN_PASSWORD);
   await withCustomerScope(database, DEV_CUSTOMER_ID, async (transaction) => {
     await transaction`
       insert into customers (id, display_name)
@@ -42,8 +42,8 @@ export async function seedDevelopment(database: Database) {
     await transaction`
       insert into auth_users (id, customer_id, name, email, email_verified)
       values (
-        ${DEV_USER_ID}, ${DEV_CUSTOMER_ID}, 'Development customer',
-        ${DEV_USER_EMAIL}, true
+        ${DEV_LOGIN_ID}, ${DEV_CUSTOMER_ID}, 'Development customer',
+        ${DEV_LOGIN_EMAIL}, true
       )
       on conflict (id) do nothing
     `;
@@ -51,10 +51,10 @@ export async function seedDevelopment(database: Database) {
     // "credential" account, whose account ID is the login's ID.
     await transaction`
       insert into auth_accounts (user_id, account_id, provider_id, password)
-      select ${DEV_USER_ID}, ${DEV_USER_ID}, 'credential', ${passwordHash}
+      select ${DEV_LOGIN_ID}, ${DEV_LOGIN_ID}, 'credential', ${passwordHash}
       where not exists (
         select from auth_accounts
-        where user_id = ${DEV_USER_ID} and provider_id = 'credential'
+        where user_id = ${DEV_LOGIN_ID} and provider_id = 'credential'
       )
     `;
   });
@@ -133,7 +133,7 @@ export async function verifyAppConnection(connectionString: string) {
       );
     await listCustomerIds(app);
     const logins = await app`
-      select customer_id from auth_users where id = ${DEV_USER_ID}
+      select customer_id from auth_users where id = ${DEV_LOGIN_ID}
     `;
     if (logins.length !== 1)
       throw new Error(
