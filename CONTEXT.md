@@ -8,6 +8,10 @@ Customers connect their own exchange accounts and authorize automated trading wi
 A person or organization using the product to trade through their own exchange accounts.
 _Avoid_: Account when referring to the customer
 
+**Login**:
+An email and password that signs a person in to act for one customer. A customer may have several.
+_Avoid_: User, account
+
 **Exchange account**:
 A customer's account at a crypto exchange, connected to the product for trading.
 _Avoid_: Customer when referring to the exchange account

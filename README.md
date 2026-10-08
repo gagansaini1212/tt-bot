@@ -5,6 +5,7 @@ A Binance Spot Testnet trading application built with Next.js, eve, shadcn/ui, a
 ## What is implemented
 
 - A responsive dashboard for exchange balances, open orders, and recent fills. Unimplemented strategy management and AI decision persistence are shown explicitly.
+- Customer sign-in with email and password (Better Auth). Every page, server action and assistant request checks the session on the server, and acts only for the signed-in customer.
 - An eve analysis assistant mounted through the Next.js app.
 - A typed trade-proposal tool that cannot place orders or change limits.
 - Independent execution checks for customer scope, strategy version, instrument access, leverage, protection, expiry, position size, and available allocation.
@@ -35,7 +36,7 @@ pnpm db:migrate
 pnpm db:seed
 ```
 
-`pnpm db:seed` creates the development customer, their Binance Spot Testnet exchange account, and the login role `DATABASE_URL` names. Both commands are safe to run again. Until customer sign-in exists, every request acts for that development customer. [The database guide](docs/database.md) explains the roles, migrations and customer scoping.
+`pnpm db:seed` creates the development customer, their Binance Spot Testnet exchange account, their login, and the login role `DATABASE_URL` names. Both commands are safe to run again. [The database guide](docs/database.md) explains the roles, migrations, sign-in and customer scoping.
 
 Start the web app and eve agent together:
 
@@ -43,7 +44,7 @@ Start the web app and eve agent together:
 pnpm dev
 ```
 
-Next.js prints the local URL. It uses another available port if port 3000 is busy.
+Next.js prints the local URL. It uses another available port if port 3000 is busy. Sign in as `dev@example.com` with the password `development-password`; the sign-in page repeats this during development. The web app reads `DATABASE_URL` and `AUTH_SECRET` from `.env`. There is no sign-up: other logins are created in the database, as the seed creates this one.
 
 The assistant needs a model connection before it can answer. Run `pnpm dev:agent` and use eve's `/login` flow to configure one for local development.
 

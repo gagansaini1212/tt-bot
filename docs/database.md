@@ -7,18 +7,20 @@ PostgreSQL holds the trading state ([ADR 0003](adr/0003-own-trading-state-outsid
 ```bash
 pnpm db:up        # PostgreSQL 17 in Docker Compose
 pnpm db:migrate   # apply pending migrations
-pnpm db:seed      # dev customer, their testnet exchange account, DATABASE_URL's login role
+pnpm db:seed      # dev customer, their testnet exchange account and login, DATABASE_URL's login role
 ```
 
 Both commands are safe to run again. To start from an empty database, run `docker compose down -v`, which deletes the volume, then the three commands again.
 
 | Variable             | Used by                           | Role                                                                                       |
 | -------------------- | --------------------------------- | ------------------------------------------------------------------------------------------ |
-| `DATABASE_URL`       | execution worker                  | A login role in `trading_worker`. Never a superuser or the owner. `pnpm db:seed` makes it. |
+| `DATABASE_URL`       | execution worker, web app         | A login role in `trading_worker`. Never a superuser or the owner. `pnpm db:seed` makes it. |
 | `DATABASE_ADMIN_URL` | `pnpm db:migrate`, `pnpm db:seed` | The schema owner. The apps never use it.                                                   |
 | `TEST_DATABASE_URL`  | `pnpm test`                       | A superuser on a server the tests may create and drop databases and roles on.              |
 
 Without `TEST_DATABASE_URL`, the database tests skip and say why. CI runs them against a PostgreSQL service container.
+
+The web app reads the repository's `.env` as well as its own `apps/web/.env.local`, whose values win. It uses `DATABASE_URL` for customer sign-in, and `AUTH_SECRET` to sign session cookies and the assistant's customer tokens.
 
 ## Add a migration
 
@@ -47,11 +49,20 @@ Superusers, table owners and roles with `BYPASSRLS` skip row-level security. If 
 | owner            | your PostgreSQL setup               | Everything. Runs migrations and the seed.                                              |
 | `trading_app`    | migration `…_app_roles`, `NOLOGIN`  | Read and write customer tables in one customer's scope. `audit_events` is insert-only. |
 | `trading_worker` | migration `…_app_roles`, `NOLOGIN`  | Everything `trading_app` can, plus `listCustomerIds`.                                  |
-| login roles      | `pnpm db:seed` (dev), you (deploys) | Members of one of the above. `DATABASE_URL` names one.                                 |
+| `trading_auth`   | migration `…_customer_sign_in`      | Use the sign-in tables, and nothing else. See [Sign-in](#sign-in).                     |
+| login roles      | `pnpm db:seed` (dev), you (deploys) | Members of the above. `DATABASE_URL` names one.                                        |
 
 The policies compare each row's `customer_id` with the `app.current_customer_id` setting. `withCustomerScope` sets it for one transaction only, so a pooled connection never carries it into the next query. Outside a scope, no customer rows are visible.
 
 Before its first query, the worker runs `assertRowLevelSecurity`, which fails unless row-level security applies to its connection on every table that has it. `pnpm db:seed` runs the same check against `DATABASE_URL`.
+
+Locally the worker and the web app share `DATABASE_URL`, so `pnpm db:seed` makes its login role a member of `trading_worker` and `trading_auth`. A deployment gives each app its own login: the worker one in `trading_worker`, the web app one in `trading_auth` (and `trading_app` once it reads customer data).
+
+## Sign-in
+
+Customers sign in to the web app with Better Auth, using email and password. Each **login** (`auth_users`) acts for one customer, named by its `customer_id`; a customer may have several. Better Auth also keeps sessions (`auth_sessions`), password hashes (`auth_accounts`) and one-time tokens (`auth_verifications`). `apps/web/src/lib/auth-options.ts` maps its models onto these tables, and Better Auth checks they match when it starts.
+
+Better Auth finds a session by its token, and a login by its email, before anyone knows which customer is asking, so these tables have no `customer_isolation` policy. Instead only `trading_auth` may use them, and `trading_app` and `trading_worker` may not, so code that handles trading data never reads passwords or session tokens. `trading_auth` cannot read trading data, create logins, or change the customer a login acts for. There is no sign-up: logins are created with the schema owner's role, as `pnpm db:seed` does for the dev login.
 
 ## Scoping rules
 
@@ -64,7 +75,9 @@ Before its first query, the worker runs `assertRowLevelSecurity`, which fails un
 
 The web app decides which customer a request acts for, and the worker acts only for that customer.
 
-- **Web.** `getCurrentCustomer()` in `apps/web/src/lib/current-customer.ts` is the only source of the customer. Until customer sign-in (#35), it returns the seeded dev customer; #35 replaces its body with a Better Auth session lookup. It returns null when nobody is signed in, and callers already handle that.
+- **Web.** `getCurrentCustomer()` in `apps/web/src/lib/current-customer.ts` is the only source of the customer: the signed-in login's customer, read from the Better Auth session in the database on every request. It returns null when nobody is signed in. The proxy (`apps/web/src/proxy.ts`) sends signed-out visitors to `/sign-in`, but every server action and data access still checks for itself, as `callWorkerForCustomer` does.
+- **Fresh sign-in.** Changing exchange credentials or activating live trading needs a customer who signed in within the last ten minutes. Call `checkFreshSession()` at the start of such an action and refuse unless it returns `fresh`; send a `stale` customer to `signInPath(next, { reauthenticate: true })` to confirm their password, which starts a fresh session.
+- **Assistant.** The eve assistant runs as its own process behind `/eve`, and cannot read sessions. The proxy checks the session on every assistant request and forwards it with a one-minute token naming the customer, without the browser's cookies. `agent/lib/customer-principal.ts` turns the token into the session's principal, and tools such as `draft_trade_proposal` act only for that customer, the one who sent the turn. eve does not tie a conversation to the customer who started it: any signed-in customer who knows a conversation's ID can continue or read it. Only the browser that started a conversation learns its ID, so never show, log or link one where another customer could see it until conversations record their owner.
 - **Web to worker.** `callWorkerForCustomer` sends the customer's ID in the `X-Customer-Id` header. The worker trusts that header because only the web server holds the worker's bearer token, and the worker refuses browser requests.
 - **Worker.** Routes built with `handler` are customer routes: the worker reads the header, then looks up the exchange account its Binance credentials belong to, in that customer's scope. A customer who does not own it, or a missing seed, gets `{ status: "not_configured", reason: "exchange_account" }`; a database failure gets `reason: "database"`. Either way nothing is sent to Binance. The handler receives the `account` and passes it down, so every query runs in that customer's scope. Market data uses `publicHandler` and needs no customer.
 - **Credentials.** The worker's testnet credentials belong to the seeded dev exchange account (`TESTNET_EXCHANGE_ACCOUNT_ID` in `apps/execution/src/accounts.ts`) until exchange accounts keep their own. The CLI acts for the dev customer.
@@ -73,10 +86,13 @@ The web app decides which customer a request acts for, and the worker acts only 
 
 `pnpm db:seed` inserts these rows if they are missing and leaves existing ones alone.
 
-| Row                          | ID                                     | Details                                                             |
-| ---------------------------- | -------------------------------------- | ------------------------------------------------------------------- |
-| Dev customer                 | `6d1f3c52-8b7e-4a51-9a0d-2f4e8c1b7a01` | "Development customer"                                              |
-| Binance Spot Testnet account | `6d1f3c52-8b7e-4a51-9a0d-2f4e8c1b7a02` | `binance-spot-testnet`, mode `simulation`, USDT, status `connected` |
+| Row                          | ID                                     | Details                                                                  |
+| ---------------------------- | -------------------------------------- | ------------------------------------------------------------------------ |
+| Dev customer                 | `6d1f3c52-8b7e-4a51-9a0d-2f4e8c1b7a01` | "Development customer"                                                   |
+| Binance Spot Testnet account | `6d1f3c52-8b7e-4a51-9a0d-2f4e8c1b7a02` | `binance-spot-testnet`, mode `simulation`, USDT, status `connected`      |
+| Dev login                    | `6d1f3c52-8b7e-4a51-9a0d-2f4e8c1b7a03` | `dev@example.com`, password `development-password`, for the dev customer |
+
+Sign in to the web app with the dev login. The seed never resets its password, so a changed password stays changed.
 
 The IDs are exported from `@crypto-trading/database/dev-seed`, which imports nothing, so the web app can use them without a database client.
 
