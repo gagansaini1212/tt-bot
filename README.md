@@ -14,6 +14,7 @@ A Binance Spot Testnet trading application built with Next.js, eve, shadcn/ui, a
 - A local execution service with a Binance Spot Testnet adapter for balances, limit orders, cancellation, order lookup, recent fills, and public market data (24-hour tickers, candles, and order book depth).
 - A testnet Overview with balances, open orders, recent fills, and automatic refresh every ten seconds. Accounts lists searchable virtual asset balances. Activity lists exchange fills. Settings shows the current account connection.
 - Manual development order commands with a notional cap, Binance filter validation, and an order-intent journal to prevent duplicate submission after restart.
+- Testnet order placement from the dashboard: limit and market buys with a required take profit and stop loss that Binance attaches to the entry, a pre-execution check preview, and a confirmed Cancel button on every open order.
 
 ## Requirements
 
@@ -74,7 +75,36 @@ Live trading remains locked until the deployment prerequisites in [the implement
 3. Copy `apps/web/.env.example` to `apps/web/.env.local`. Copy the same `EXECUTION_API_TOKEN` there. Binance credentials belong only in `apps/execution/.env`, which the execution service loads. Keep both files private.
 4. Run `pnpm exchange check` to verify authenticated connectivity. Then run `pnpm dev:worker` and `pnpm dev` in separate terminals. Open `/accounts` to see virtual balances, open BTC/ETH orders, and recent fills. Restart the processes after changing their environment files.
 
-The worker listens on `127.0.0.1:4001`, and on `[::1]:4001` when IPv6 is available. Its HTTP interface requires the shared token and exposes reads only: the account snapshot and market data. The web app is currently a local development dashboard without customer account authentication; do not expose the connected dashboard publicly. The Overview assistant receives the displayed testnet account snapshot and cannot access exchange credentials or submit orders. The application has no demo account data or invented strategy/decision records. Strategy management and AI decision persistence are not implemented.
+The worker listens on `127.0.0.1:4001`, and on `[::1]:4001` when IPv6 is available. Its HTTP interface requires the shared token. It serves the account snapshot and market data, and places and cancels dashboard orders. **The dashboard can place and cancel orders on the connected testnet account, so it must stay on this machine.** It has no customer account authentication: never expose it to a network, put it behind a proxy, or reach it through a tunnel. Its order actions refuse requests that are not from `localhost`, `127.0.0.1` or `[::1]`. The Overview assistant receives the displayed testnet account snapshot and cannot access exchange credentials or submit orders. The application has no demo account data or invented strategy/decision records. Strategy management and AI decision persistence are not implemented.
+
+### Dashboard orders
+
+Select **Trade** in the top bar, or in the header on a phone, to place a buy on BTC/USDT or ETH/USDT. Spot trading is long only, so the dashboard buys and never opens a short. A take profit above the entry and a stop loss below it are required. The drawer previews every pre-execution check as you type. The execution worker runs them again, with fresh account data, before it sends anything:
+
+- account limits from `authorizeTradeProposal`, with a policy built from the worker's configuration;
+- the per-order cap, `TESTNET_MAX_ORDER_NOTIONAL_USDT`;
+- Binance's price, quantity and minimum value filters for the entry and both exits, plus Binance's own validation of the entry.
+
+Each order is one Binance order list (OPOCO): a limit buy that, once it fills completely, places a limit-maker take profit and a stop-market stop loss, sized from the quantity received after fees. Either exit cancels the other. Exits are placed only when the entry has filled completely: a partly filled entry's quantity has no exits yet, and the Open orders table flags it.
+
+- **Limit** entries rest on the book until they fill or are cancelled. Binance Spot has no good-till-date orders.
+- **Market** entries are fill-or-kill limit buys at the best ask plus `TESTNET_MARKET_MAX_SLIPPAGE_PERCENT`. They fill completely at or below that price, or not at all. A plain market order cannot carry attached exits.
+- **Stop-limit** entries are not offered. Binance attaches exits only to limit entries, so a filled stop-limit buy would have none until something else placed them.
+
+Dashboard orders stay off until these are set in `apps/execution/.env`; they have no defaults:
+
+| Variable                              | Meaning                                                                               |
+| ------------------------------------- | ------------------------------------------------------------------------------------- |
+| `TESTNET_MANUAL_INSTRUMENTS`          | `BTC-USDT`, `ETH-USDT` or both                                                        |
+| `TESTNET_MANUAL_ALLOCATION_USDT`      | Virtual USDT that open entries and the positions their exits protect may hold at once |
+| `TESTNET_MAX_ORDER_NOTIONAL_USDT`     | Per-order cap, also the largest position                                              |
+| `TESTNET_MARKET_MAX_SLIPPAGE_PERCENT` | Optional, at most 5. Empty turns market orders off                                    |
+
+The allocation counts the unfilled value of every open buy, plus the entry value of each position whose exits are still open. Holdings with no open order are outside it.
+
+Each order gets a new `ct_` client ID in the browser. The worker records it in `.testnet-orders/` before submitting and never submits it twice. If the worker cannot confirm an order, the drawer offers **Check order status**, which looks the order up by that ID, instead of letting you resend it. If an entry fills at once, the worker confirms on Binance that both exits are open and reports loudly when they are not.
+
+Binance cancels every order in a list together, so cancelling any leg cancels the entry and both exits. The confirmation dialog lists what will be cancelled. If the entry has already bought anything, it names the quantity that will be left without exits and needs a second, explicit confirmation.
 
 ### Manual test orders
 
