@@ -127,7 +127,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
             <ThemeToggle />
             <div className="rounded-lg border border-border bg-background/40 p-3">
               <div className="flex items-center gap-2 text-xs font-medium">
-                <span className="size-2 rounded-full bg-amber-400" />
+                <span className="size-2 rounded-full bg-amber-600 dark:bg-amber-400" />
                 Development trading
               </div>
               <p className="mt-1 text-xs text-muted-foreground">
