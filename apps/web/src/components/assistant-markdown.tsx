@@ -9,6 +9,9 @@ import styles from "./assistant-markdown.module.css";
 
 const remarkPlugins = [remarkGfm];
 const rehypePlugins = [rehypeHighlight];
+// The browser would fetch an image URL without a click, so a reply could send
+// account data from the turn's context to any host. Links still need a click.
+const disallowedElements = ["img"];
 
 // react-markdown passes the source `node` to custom components; keep it off
 // the DOM element.
@@ -41,6 +44,8 @@ const components: Components = {
   h2: Heading,
   h3: Heading,
   h4: Heading,
+  h5: Heading,
+  h6: Heading,
   table: (props) => (
     <div className="my-2 overflow-x-auto rounded-md border border-border">
       <table {...domProps(props)} className="w-full text-xs tabular-nums" />
@@ -50,7 +55,7 @@ const components: Components = {
 
 /**
  * Renders assistant text as GitHub-flavoured Markdown with highlighted code.
- * Raw HTML in model output is not rendered.
+ * Raw HTML and images in model output are not rendered.
  */
 export const AssistantMarkdown = memo(function AssistantMarkdown({
   text,
@@ -61,6 +66,7 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
     <div className={cn("text-sm leading-5", styles.markdown)}>
       <Markdown
         components={components}
+        disallowedElements={disallowedElements}
         rehypePlugins={rehypePlugins}
         remarkPlugins={remarkPlugins}
       >
