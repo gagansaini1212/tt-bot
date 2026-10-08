@@ -85,7 +85,7 @@ export function WelcomeCard() {
           <h3 className="font-medium">Start trading</h3>
           <ol className="mt-2 list-decimal space-y-1 pl-5 leading-6 text-muted-foreground">
             <li>
-              Register an API key at{" "}
+              Register an Ed25519 or RSA public key at{" "}
               <a
                 className="text-foreground underline underline-offset-3"
                 href="https://testnet.binance.vision/"
@@ -93,14 +93,17 @@ export function WelcomeCard() {
                 target="_blank"
               >
                 Binance Spot Testnet
-              </a>{" "}
-              and add it to <Code>apps/execution/.env</Code>, copied from its{" "}
-              <Code>.env.example</Code>.
+              </a>
+              . Copy <Code>apps/execution/.env.example</Code> to{" "}
+              <Code>apps/execution/.env</Code> and set the API key Binance
+              issues and the path to your private key.
             </li>
             <li>
-              Set the same <Code>EXECUTION_API_TOKEN</Code> in{" "}
-              <Code>apps/execution/.env</Code> and{" "}
-              <Code>apps/web/.env.local</Code>, then restart{" "}
+              Generate a token with <Code>openssl rand -hex 32</Code> and set it
+              as <Code>EXECUTION_API_TOKEN</Code> in{" "}
+              <Code>apps/execution/.env</Code> and in{" "}
+              <Code>apps/web/.env.local</Code>, copied from{" "}
+              <Code>apps/web/.env.example</Code>. Then restart{" "}
               <Code>pnpm dev</Code>.
             </li>
             <li>
@@ -108,8 +111,9 @@ export function WelcomeCard() {
               worker with <Code>pnpm dev:worker</Code>.
             </li>
             <li>
-              Place test orders with <Code>pnpm exchange place-order</Code>.
-              They appear here after the next refresh.
+              Place test limit orders with{" "}
+              <Code>pnpm exchange place-order</Code>, using the arguments in
+              README.md. They appear here after the next refresh.
             </li>
           </ol>
           <p className="mt-2 text-xs text-muted-foreground">
