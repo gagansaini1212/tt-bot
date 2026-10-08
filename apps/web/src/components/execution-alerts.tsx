@@ -18,16 +18,13 @@ import { alertHeadline, checkedLabel, isUrgent } from "@/lib/execution-display";
 import { formatUtc } from "@/lib/format";
 
 /**
- * Entries that hold quantity the worker is selling, or must, shown at the
- * top of the Overview until they are sold. Urgent ones are red.
+ * Protected entries that hold quantity the worker is selling, or must, shown
+ * at the top of the Overview until they are sold. Urgent ones are red.
  */
 export function ExecutionAlerts({ alerts }: { alerts: EntryAlert[] }) {
   if (!alerts.length) return null;
   return (
-    <section
-      aria-label="Positions that need attention"
-      className="mt-6 space-y-3"
-    >
+    <section aria-label="Orders that need attention" className="mt-6 space-y-3">
       {alerts.map((alert) => (
         <EntryAlertItem alert={alert} key={alert.listClientOrderId} />
       ))}

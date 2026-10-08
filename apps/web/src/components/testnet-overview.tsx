@@ -137,8 +137,6 @@ function AccountContent({
     recentFills: fills,
     strategyManagement:
       "Manual development trades. The execution worker watches each order's exits and sells any bought quantity left without a stop loss. Strategy ownership and profit/loss are not tracked for these holdings.",
-    positionsNeedingAttention:
-      execution.status === "connected" ? execution.execution.alerts : [],
   };
 
   return (
