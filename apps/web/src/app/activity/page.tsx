@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import { AccountRefresh } from "@/components/account-refresh";
+import { FillsTable } from "@/components/fills-table";
 import { PageHeader } from "@/components/page-header";
 import {
   Card,
@@ -9,14 +10,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { getTestnetAccount } from "@/lib/testnet-account";
 
 export const metadata: Metadata = { title: "Activity" };
@@ -42,53 +35,11 @@ export default async function ActivityPage() {
         </CardHeader>
         {account.status === "connected" ? (
           <CardContent className="overflow-x-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Time · UTC</TableHead>
-                  <TableHead>Market</TableHead>
-                  <TableHead>Side</TableHead>
-                  <TableHead>Quantity</TableHead>
-                  <TableHead>Price</TableHead>
-                  <TableHead>Fee</TableHead>
-                  <TableHead>Order ID</TableHead>
-                  <TableHead>Fill ID</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {account.snapshot.fills.map((fill) => (
-                  <TableRow key={`${fill.symbol}-${fill.id}`}>
-                    <TableCell className="whitespace-nowrap text-xs">
-                      <time dateTime={new Date(fill.time).toISOString()}>
-                        {new Date(fill.time).toISOString()}
-                      </time>
-                    </TableCell>
-                    <TableCell>{fill.symbol}</TableCell>
-                    <TableCell>{fill.isBuyer ? "BUY" : "SELL"}</TableCell>
-                    <TableCell className="font-mono text-xs">
-                      {fill.qty}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">
-                      {fill.price}
-                    </TableCell>
-                    <TableCell>
-                      {fill.commission} {fill.commissionAsset}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">
-                      {fill.orderId}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">
-                      {fill.id}
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {account.snapshot.fills.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={8}>No recorded fills.</TableCell>
-                  </TableRow>
-                ) : null}
-              </TableBody>
-            </Table>
+            <FillsTable
+              fills={account.snapshot.fills}
+              now={account.snapshot.capturedAt}
+              showFillId
+            />
           </CardContent>
         ) : null}
       </Card>

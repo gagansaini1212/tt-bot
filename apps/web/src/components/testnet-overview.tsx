@@ -9,8 +9,10 @@ import {
 
 import { AccountRefresh } from "@/components/account-refresh";
 import { AssistantPanel } from "@/components/assistant-panel";
+import { FillsTable } from "@/components/fills-table";
 import { OpenOrders } from "@/components/open-orders";
 import { PageHeader } from "@/components/page-header";
+import { PortfolioSummary } from "@/components/portfolio-summary";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -21,18 +23,17 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { WelcomeCard } from "@/components/welcome-card";
+import type { PortfolioState } from "@/lib/account-portfolio";
 import type { TestnetAccountState } from "@/lib/testnet-account";
 
-export function TestnetOverview({ account }: { account: TestnetAccountState }) {
+export function TestnetOverview({
+  account,
+  portfolio,
+}: {
+  account: TestnetAccountState;
+  portfolio: PortfolioState;
+}) {
   const connected = account.status === "connected";
   return (
     <>
@@ -74,7 +75,7 @@ export function TestnetOverview({ account }: { account: TestnetAccountState }) {
       </Alert>
 
       {account.status === "connected" ? (
-        <AccountContent account={account} />
+        <AccountContent account={account} portfolio={portfolio} />
       ) : (
         <Card className="mt-6">
           <CardHeader>
@@ -92,8 +93,10 @@ export function TestnetOverview({ account }: { account: TestnetAccountState }) {
 
 function AccountContent({
   account,
+  portfolio,
 }: {
   account: Extract<TestnetAccountState, { status: "connected" }>;
+  portfolio: PortfolioState;
 }) {
   const { snapshot } = account;
   const available = (asset: string) =>
@@ -121,6 +124,8 @@ function AccountContent({
 
   return (
     <>
+      <PortfolioSummary portfolio={portfolio} />
+
       <section
         className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
         aria-label="Testnet account summary"
@@ -162,58 +167,7 @@ function AccountContent({
               </CardDescription>
             </CardHeader>
             <CardContent className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Market / side</TableHead>
-                    <TableHead>Quantity</TableHead>
-                    <TableHead>Price</TableHead>
-                    <TableHead>Fee</TableHead>
-                    <TableHead>Order</TableHead>
-                    <TableHead>Time · UTC</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {fills.map((fill) => (
-                    <TableRow key={`${fill.symbol}-${fill.id}`}>
-                      <TableCell>
-                        <span className="font-medium">{fill.symbol}</span>
-                        <Badge
-                          className="ml-2"
-                          variant={fill.isBuyer ? "secondary" : "outline"}
-                        >
-                          {fill.isBuyer ? "BUY" : "SELL"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">
-                        {fill.qty}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">
-                        {fill.price}
-                      </TableCell>
-                      <TableCell className="text-xs">
-                        {fill.commission} {fill.commissionAsset}
-                      </TableCell>
-                      <TableCell className="font-mono text-xs">
-                        {fill.orderId}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap text-xs">
-                        <time
-                          dateTime={new Date(fill.time).toISOString()}
-                          title={new Date(fill.time).toISOString()}
-                        >
-                          {new Date(fill.time).toISOString().slice(11, 19)}
-                        </time>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {fills.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={6}>No trades yet.</TableCell>
-                    </TableRow>
-                  ) : null}
-                </TableBody>
-              </Table>
+              <FillsTable fills={fills} now={snapshot.capturedAt} />
             </CardContent>
           </Card>
 
