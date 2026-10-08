@@ -8,6 +8,25 @@ export type TestnetAccountState =
   | { status: "connected"; snapshot: TestnetSnapshot }
   | { status: "not_configured" | "unavailable"; message: string };
 
+// The web app sends the worker's bearer token to this URL, so it must stay on this machine.
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+export function parseWorkerUrl(value: string): URL | undefined {
+  const url = URL.parse(value);
+  if (
+    !url ||
+    url.protocol !== "http:" ||
+    !LOOPBACK_HOSTS.has(url.hostname) ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  )
+    return undefined;
+  return url;
+}
+
 export async function getTestnetAccount(): Promise<TestnetAccountState> {
   const token = process.env.EXECUTION_API_TOKEN;
   if (!token)
@@ -16,23 +35,16 @@ export async function getTestnetAccount(): Promise<TestnetAccountState> {
       message:
         "Set up Binance Spot Testnet to view virtual balances, orders, and fills here. Follow the testnet setup in README.md.",
     };
-  const origin = process.env.EXECUTION_API_URL ?? "http://127.0.0.1:4001";
+  const url = parseWorkerUrl(
+    process.env.EXECUTION_API_URL ?? "http://127.0.0.1:4001",
+  );
+  if (!url)
+    return {
+      status: "unavailable",
+      message:
+        "EXECUTION_API_URL must point to the execution worker on this machine, such as http://127.0.0.1:4001. Use 127.0.0.1, localhost, or [::1] as the host.",
+    };
   try {
-    const url = new URL(origin);
-    if (
-      url.protocol !== "http:" ||
-      url.hostname !== "127.0.0.1" ||
-      url.username ||
-      url.password ||
-      url.pathname !== "/" ||
-      url.search ||
-      url.hash
-    ) {
-      return {
-        status: "unavailable",
-        message: "The execution service URL must point to the local worker.",
-      };
-    }
     const response = await fetch(new URL("/snapshot", url), {
       headers: { Authorization: `Bearer ${token}` },
       cache: "no-store",
