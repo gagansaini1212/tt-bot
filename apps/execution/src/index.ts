@@ -103,10 +103,11 @@ async function main() {
         return;
       }
       try {
-        if (
-          !snapshot ||
-          Date.now() - Date.parse(snapshot.capturedAt) > 10_000
-        ) {
+        const age = snapshot
+          ? Date.now() - Date.parse(snapshot.capturedAt)
+          : Infinity;
+        // A negative age means the clock stepped back since the capture.
+        if (age > 10_000 || age < 0) {
           pending ??= exchange.getSnapshot().finally(() => {
             pending = undefined;
           });

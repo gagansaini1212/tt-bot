@@ -12,6 +12,7 @@ const entry = fileURLToPath(new URL("./index.ts", import.meta.url));
 const preload = fileURLToPath(
   new URL("./fixtures/binance-fetch.mjs", import.meta.url),
 );
+const clock = fileURLToPath(new URL("./fixtures/clock.mjs", import.meta.url));
 const token = "execution-test-token-at-least-32-characters";
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), "binance-execution-"));
@@ -156,7 +157,7 @@ test("worker HTTP requires a token, rejects browser origins and writes, caches a
   await new Promise<void>((resolve) => socket.close(() => resolve()));
   const worker = spawn(
     process.execPath,
-    ["--import", "tsx", "--import", preload, entry, "serve"],
+    ["--import", "tsx", "--import", preload, "--import", clock, entry, "serve"],
     {
       env: { ...f.env, EXECUTION_PORT: String(port) },
       stdio: ["ignore", "pipe", "pipe"],
@@ -198,6 +199,15 @@ test("worker HTTP requires a token, rejects browser origins and writes, caches a
     assert.equal(
       (await f.requests()).filter((r) => r.path === "/api/v3/account").length,
       1,
+    );
+    const stepped = once(worker.stdout, "data");
+    worker.kill("SIGUSR2");
+    await stepped;
+    await fetch(url, { headers });
+    assert.equal(
+      (await f.requests()).filter((r) => r.path === "/api/v3/account").length,
+      2,
+      "a snapshot dated in the future is refetched, not served from cache",
     );
   } finally {
     const exited = once(worker, "exit");
