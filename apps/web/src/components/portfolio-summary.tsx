@@ -9,7 +9,12 @@ import {
 
 import { Card, CardContent } from "@/components/ui/card";
 import type { PortfolioState } from "@/lib/account-portfolio";
-import { formatAmount, formatChange, formatPercent } from "@/lib/format";
+import {
+  changeTone,
+  formatAmount,
+  formatChange,
+  formatPercent,
+} from "@/lib/format";
 import type { Portfolio } from "@/lib/portfolio";
 import { cn } from "@/lib/utils";
 
@@ -18,7 +23,7 @@ const LISTED_UNPRICED = 5;
 
 export function PortfolioSummary({ portfolio }: { portfolio: PortfolioState }) {
   return (
-    <Card className="mt-6" aria-labelledby="net-worth-label">
+    <Card aria-labelledby="net-worth-label" className="mt-6" role="region">
       <CardContent className="p-5 sm:p-6">
         <div className="flex items-center justify-between text-muted-foreground">
           <h2
@@ -30,7 +35,7 @@ export function PortfolioSummary({ portfolio }: { portfolio: PortfolioState }) {
           <WalletCards className="size-4" />
         </div>
         {portfolio.status === "connected" ? (
-          <Valuation portfolio={portfolio.portfolio} />
+          <NetWorth portfolio={portfolio.portfolio} />
         ) : (
           <p className="mt-3 text-sm text-muted-foreground">
             Net worth needs current USDT prices, which are unavailable.{" "}
@@ -42,41 +47,23 @@ export function PortfolioSummary({ portfolio }: { portfolio: PortfolioState }) {
   );
 }
 
-function Valuation({ portfolio }: { portfolio: Portfolio }) {
-  const change = formatChange(portfolio.change);
-  const direction = change.startsWith("+")
-    ? "up"
-    : change.startsWith("-")
-      ? "down"
-      : "flat";
-  const Icon = { up: TrendingUp, down: TrendingDown, flat: Minus }[direction];
+function NetWorth({ portfolio }: { portfolio: Portfolio }) {
   const unpriced = portfolio.unpriced;
   const named = unpriced.slice(0, LISTED_UNPRICED).join(", ");
+  // With balances but no price for any of them, a total of 0.00 would be wrong.
+  const priced =
+    unpriced.length === 0 ||
+    portfolio.holdings.some(({ valuation }) => valuation);
   return (
     <>
-      <p className="mt-3 flex flex-wrap items-baseline gap-x-2 text-4xl font-semibold tracking-tight sm:text-5xl">
-        {formatAmount(portfolio.total)}
-        <span className="text-base font-medium text-muted-foreground">
-          USDT
-        </span>
-      </p>
-      <p
-        aria-describedby="net-worth-definitions"
-        className={cn(
-          "mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium",
-          direction === "up" && "text-emerald-700 dark:text-emerald-400",
-          direction === "down" && "text-destructive",
-        )}
-      >
-        <Icon aria-hidden className="size-4" />
-        <span>{change} USDT</span>
-        {portfolio.changePercent ? (
-          <span>({formatPercent(portfolio.changePercent)})</span>
-        ) : null}
-        <span className="font-normal text-muted-foreground">
-          24h change in value of current holdings
-        </span>
-      </p>
+      {priced ? (
+        <Figures portfolio={portfolio} />
+      ) : (
+        <p className="mt-3 text-sm text-muted-foreground">
+          None of these balances has a USDT price, so there is no net worth to
+          show.
+        </p>
+      )}
       {unpriced.length > 0 ? (
         <p className="mt-3 flex gap-2 text-sm">
           <TriangleAlert
@@ -117,6 +104,41 @@ function Valuation({ portfolio }: { portfolio: Portfolio }) {
           record what the sold coins cost.
         </p>
       </div>
+    </>
+  );
+}
+
+function Figures({ portfolio }: { portfolio: Portfolio }) {
+  const change = formatChange(portfolio.change);
+  const Icon = change.startsWith("+")
+    ? TrendingUp
+    : change.startsWith("-")
+      ? TrendingDown
+      : Minus;
+  return (
+    <>
+      <p className="mt-3 flex flex-wrap items-baseline gap-x-2 text-4xl font-semibold tracking-tight sm:text-5xl">
+        {formatAmount(portfolio.total)}
+        <span className="text-base font-medium text-muted-foreground">
+          USDT
+        </span>
+      </p>
+      <p
+        aria-describedby="net-worth-definitions"
+        className={cn(
+          "mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium",
+          changeTone(change),
+        )}
+      >
+        <Icon aria-hidden className="size-4" />
+        <span>{change} USDT</span>
+        {portfolio.changePercent ? (
+          <span>({formatPercent(portfolio.changePercent)})</span>
+        ) : null}
+        <span className="font-normal text-muted-foreground">
+          24h change in value of current holdings
+        </span>
+      </p>
     </>
   );
 }

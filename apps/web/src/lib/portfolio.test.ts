@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { TestnetTicker } from "@crypto-trading/exchanges";
-import { allocationSlices, fillTotal, valuePortfolio } from "./portfolio";
+import { assetMix, fillTotal, valuePortfolio } from "./portfolio";
 
 function ticker(
   symbol: string,
@@ -148,22 +148,36 @@ test("zero and sub-1 USDT balances are dust; unpriced balances are not", () => {
   assert.deepEqual(portfolio.unpriced, ["XYZ"]);
 });
 
+test("dust is judged at the cent shown", () => {
+  const portfolio = valuePortfolio(
+    [balance("USDT", "0.995"), balance("USDC", "0.99499999")],
+    [ticker("USDCUSDT", "1")],
+  );
+  assert.deepEqual(
+    portfolio.holdings.map(({ asset, dust }) => [asset, dust]),
+    [
+      ["USDT", false],
+      ["USDC", true],
+    ],
+  );
+});
+
 test("the 24h percentage is absent when nothing had value at the open", () => {
   const portfolio = valuePortfolio([balance("XYZ", "1")], []);
   assert.equal(portfolio.total, "0");
   assert.equal(portfolio.change, "0");
   assert.equal(portfolio.changePercent, null);
-  assert.deepEqual(allocationSlices(portfolio), []);
+  assert.deepEqual(assetMix(portfolio), []);
 });
 
-test("allocation folds the smallest holdings into Other past six slices", () => {
+test("the asset mix folds the smallest holdings into Other past six slices", () => {
   const assets = ["AAA", "BBB", "CCC", "DDD", "EEE", "FFF", "GGG"];
   const tickers = assets.map((asset) => ticker(`${asset}USDT`, "1"));
   const balances = assets.map((asset, index) =>
     balance(asset, String(70 - index * 10)),
   );
 
-  const seven = allocationSlices(valuePortfolio(balances, tickers));
+  const seven = assetMix(valuePortfolio(balances, tickers));
   assert.deepEqual(
     seven.map(({ label, value, folded }) => [label, value, folded]),
     [
@@ -177,7 +191,7 @@ test("allocation folds the smallest holdings into Other past six slices", () => 
   );
   assert.equal(seven[0].share, "25");
 
-  const six = allocationSlices(
+  const six = assetMix(
     valuePortfolio(
       [...balances.slice(0, 6), balance("ZERO", "0")],
       [...tickers, ticker("ZEROUSDT", "1")],

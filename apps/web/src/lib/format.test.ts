@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  changeTone,
   formatAge,
   formatAmount,
   formatChange,
@@ -35,6 +36,9 @@ test("changes and percentages carry a sign unless they round to zero", () => {
   assert.equal(formatPercent("19.868689"), "+19.87%");
   assert.equal(formatPercent("-1.434"), "-1.43%");
   assert.equal(formatPercent("0"), "0.00%");
+  assert.match(changeTone("+0.01") ?? "", /emerald/);
+  assert.equal(changeTone("-0.01"), "text-destructive");
+  assert.equal(changeTone("0.00"), undefined);
 });
 
 test("prices keep four significant digits below 1", () => {

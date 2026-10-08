@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { TriangleAlert } from "lucide-react";
 
 import { AccountRefresh } from "@/components/account-refresh";
-import { AllocationChart } from "@/components/allocation-chart";
+import { AssetMixChart } from "@/components/asset-mix-chart";
 import { Holdings } from "@/components/holdings";
 import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -15,11 +15,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { getAccountPortfolio } from "@/lib/account-portfolio";
-import {
-  allocationSlices,
-  valuePortfolio,
-  type Portfolio,
-} from "@/lib/portfolio";
+import { assetMix, valuePortfolio, type Portfolio } from "@/lib/portfolio";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +29,7 @@ export default async function AccountsPage() {
     <>
       <PageHeader
         action={<AccountRefresh />}
-        description="Asset holdings and allocation in your connected Binance Spot Testnet account, valued in USDT."
+        description="Asset holdings in your connected Binance Spot Testnet account, valued in USDT, and each asset's share of net worth."
         title="Accounts"
       />
 
@@ -67,7 +63,7 @@ export default async function AccountsPage() {
                   <TriangleAlert className="text-amber-600 dark:text-amber-400" />
                   <AlertTitle>USDT prices are unavailable</AlertTitle>
                   <AlertDescription>
-                    Values and allocation will appear when prices load.{" "}
+                    Values and the asset mix will appear when prices load.{" "}
                     {portfolio.message}
                   </AlertDescription>
                 </Alert>
@@ -86,18 +82,18 @@ export default async function AccountsPage() {
 }
 
 function ValuedHoldings({ portfolio }: { portfolio: Portfolio }) {
-  const slices = allocationSlices(portfolio);
+  const slices = assetMix(portfolio);
   return (
     <>
-      <section aria-labelledby="allocation-heading">
-        <h2 className="mb-3 text-sm font-medium" id="allocation-heading">
-          Allocation
+      <section aria-labelledby="asset-mix-heading">
+        <h2 className="mb-3 text-sm font-medium" id="asset-mix-heading">
+          Asset mix
         </h2>
         {slices.length > 0 ? (
-          <AllocationChart slices={slices} total={portfolio.total} />
+          <AssetMixChart slices={slices} total={portfolio.total} />
         ) : (
           <p className="text-sm text-muted-foreground">
-            No priced balances to allocate.
+            No priced balances to show.
           </p>
         )}
       </section>
@@ -105,12 +101,12 @@ function ValuedHoldings({ portfolio }: { portfolio: Portfolio }) {
         <Alert>
           <TriangleAlert className="text-amber-600 dark:text-amber-400" />
           <AlertTitle>
-            Left out of net worth and allocation:{" "}
+            Left out of net worth and the asset mix:{" "}
             {portfolio.unpriced.join(", ")}
           </AlertTitle>
           <AlertDescription>
-            These assets have no USDT market, inverse market, or market with
-            BTC, ETH or BNB, so they are not priced.
+            No market with USDT, or with BTC, ETH or BNB, gives these assets a
+            current and 24-hour open price, so they are not priced.
           </AlertDescription>
         </Alert>
       ) : null}

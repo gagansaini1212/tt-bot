@@ -3,12 +3,12 @@
 import { useState } from "react";
 
 import { formatAmount } from "@/lib/format";
-import type { AllocationSlice } from "@/lib/portfolio";
+import type { MIX_SLICES, MixSlice } from "@/lib/portfolio";
 import { cn } from "@/lib/utils";
 
-// Categorical slots in a fixed order, with light and dark steps that pass the
-// colour-vision checks as neighbours, including slot 6 next to slot 1. "Other"
-// is a recessive grey that stays distinct from its neighbours.
+// One categorical slot per slice, in a fixed order, with light and dark steps
+// that pass the colour-vision checks as neighbours, including slot 6 next to
+// slot 1. "Other" is a recessive grey that stays distinct from its neighbours.
 const SLOT_COLORS = [
   "text-[#2a78d6] dark:text-[#3987e5]",
   "text-[#eb6834] dark:text-[#d95926]",
@@ -16,7 +16,7 @@ const SLOT_COLORS = [
   "text-[#eda100] dark:text-[#c98500]",
   "text-[#e87ba4] dark:text-[#d55181]",
   "text-[#008300] dark:text-[#008300]",
-];
+] as const satisfies { length: typeof MIX_SLICES };
 const OTHER_COLOR = "text-[#c3c2b7] dark:text-[#4a4945]";
 
 const SIZE = 176;
@@ -26,8 +26,9 @@ const INNER = 64;
 
 /** A ring segment between two fractions of a turn, clockwise from 12 o'clock. */
 function segment(start: number, end: number) {
+  // Rounded so the server and every browser write the same path.
   const point = (turn: number, radius: number) =>
-    `${CENTER + radius * Math.sin(turn * 2 * Math.PI)} ${CENTER - radius * Math.cos(turn * 2 * Math.PI)}`;
+    `${(CENTER + radius * Math.sin(turn * 2 * Math.PI)).toFixed(2)} ${(CENTER - radius * Math.cos(turn * 2 * Math.PI)).toFixed(2)}`;
   const large = end - start > 0.5 ? 1 : 0;
   return [
     `M${point(start, OUTER)}`,
@@ -38,20 +39,20 @@ function segment(start: number, end: number) {
   ].join(" ");
 }
 
-function name(slice: AllocationSlice) {
+function name(slice: MixSlice) {
   return slice.folded > 0 ? `Other (${slice.folded} assets)` : slice.label;
 }
 
-function share(slice: AllocationSlice) {
+function share(slice: MixSlice) {
   return `${formatAmount(slice.share)}%`;
 }
 
-/** Each priced holding's share of net worth, as a donut with a legend. */
-export function AllocationChart({
+/** The asset mix: each priced holding's share of net worth, as a donut with a legend. */
+export function AssetMixChart({
   slices,
   total,
 }: {
-  slices: AllocationSlice[];
+  slices: MixSlice[];
   total: string;
 }) {
   const [active, setActive] = useState<number>();
@@ -74,7 +75,7 @@ export function AllocationChart({
     <figure className="flex flex-col items-center gap-6 sm:flex-row sm:items-center">
       <div className="relative shrink-0" style={{ width: SIZE, height: SIZE }}>
         <svg
-          aria-label={`Allocation by USDT value: ${summary}.`}
+          aria-label={`Share of net worth by asset: ${summary}.`}
           height={SIZE}
           role="img"
           viewBox={`0 0 ${SIZE} ${SIZE}`}

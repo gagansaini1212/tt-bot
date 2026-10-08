@@ -13,6 +13,8 @@ const DUST_LIMIT = ONE;
 // Assets without a USDT market are priced through the first of these that
 // has a market with both the asset and USDT.
 const BRIDGES = ["BTC", "ETH", "BNB"];
+/** Slices in the asset mix: the largest holdings, then "Other". The chart has a colour for each. */
+export const MIX_SLICES = 6;
 
 type Balance = { asset: string; free: string; locked: string };
 
@@ -91,7 +93,8 @@ export function valuePortfolio(
     const before = quantity.times(rate.open);
     total = total.plus(value);
     opening = opening.plus(before);
-    holding.dust = value.lt(DUST_LIMIT);
+    // Compared at the cent shown, so a value displayed as 1.00 is not dust.
+    holding.dust = value.toDecimalPlaces(2, Exact.ROUND_HALF_UP).lt(DUST_LIMIT);
     holding.valuation = {
       price: rate.last.toFixed(),
       value: value.toFixed(),
@@ -162,7 +165,7 @@ function percent(change: Decimal, base: Decimal) {
   return change.div(base).times(HUNDRED).toFixed();
 }
 
-export type AllocationSlice = {
+export type MixSlice = {
   /** An asset, or "Other" when `folded` is above zero. */
   label: string;
   /** In USDT. */
@@ -174,13 +177,10 @@ export type AllocationSlice = {
 };
 
 /**
- * The priced holdings' shares of the total, largest first. With more than
- * `max` holdings, the smallest are folded into one "Other" slice.
+ * Each priced holding's share of net worth, largest first. With more than
+ * MIX_SLICES holdings, the smallest are folded into one "Other" slice.
  */
-export function allocationSlices(
-  portfolio: Portfolio,
-  max = 6,
-): AllocationSlice[] {
+export function assetMix(portfolio: Portfolio): MixSlice[] {
   const total = new Exact(portfolio.total);
   if (total.isZero()) return [];
   const priced = portfolio.holdings.flatMap(({ asset, valuation }) =>
@@ -188,7 +188,8 @@ export function allocationSlices(
       ? [{ asset, value: new Exact(valuation.value) }]
       : [],
   );
-  const shown = priced.length > max ? priced.slice(0, max - 1) : priced;
+  const shown =
+    priced.length > MIX_SLICES ? priced.slice(0, MIX_SLICES - 1) : priced;
   const slice = (label: string, value: Decimal, folded: number) => ({
     label,
     value: value.toFixed(),

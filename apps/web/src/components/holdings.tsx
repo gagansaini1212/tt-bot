@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/table";
 import {
   formatAmount,
+  changeTone,
   formatChange,
   formatDecimal,
   formatPercent,
@@ -19,7 +20,6 @@ import {
 } from "@/lib/format";
 import type { Holding } from "@/lib/portfolio";
 import { createStoredFlag } from "@/lib/stored-flag";
-import { cn } from "@/lib/utils";
 
 const hideDust = createStoredFlag(
   "hide-dust-balances",
@@ -77,8 +77,9 @@ export function Holdings({ holdings }: { holdings: Holding[] }) {
       </p>
       <div
         className="max-h-[32rem] overflow-auto rounded-md border border-border"
+        aria-label="Holdings table"
+        role="region"
         tabIndex={0}
-        aria-label="Scrollable holdings"
       >
         {/* No Table wrapper: this element scrolls both ways, so the header can stick. */}
         <table className="w-full caption-bottom text-sm">
@@ -150,15 +151,7 @@ function HoldingRow({ holding }: { holding: Holding }) {
       <TableCell className="whitespace-nowrap font-mono text-xs">
         {change ? (
           <>
-            <span
-              className={cn(
-                change.percent.startsWith("+") &&
-                  "text-emerald-700 dark:text-emerald-400",
-                change.percent.startsWith("-") && "text-destructive",
-              )}
-            >
-              {change.percent}
-            </span>
+            <span className={changeTone(change.percent)}>{change.percent}</span>
             <span className="block text-muted-foreground">{change.amount}</span>
           </>
         ) : (

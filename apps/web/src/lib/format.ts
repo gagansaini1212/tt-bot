@@ -42,6 +42,15 @@ export function formatChange(value: string) {
   return signedTwoDecimals.format(value as NumericString);
 }
 
+/** Text colour for a formatted signed change: green up, red down, none at zero. */
+export function changeTone(formatted: string) {
+  return formatted.startsWith("+")
+    ? "text-emerald-700 dark:text-emerald-400"
+    : formatted.startsWith("-")
+      ? "text-destructive"
+      : undefined;
+}
+
 /** A signed percentage to two decimals, such as "+1.25%". */
 export function formatPercent(value: string) {
   return `${signedTwoDecimals.format(value as NumericString)}%`;
