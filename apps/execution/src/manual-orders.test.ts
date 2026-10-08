@@ -48,7 +48,11 @@ type Behaviour =
   | "rate_limited";
 
 /** An in-memory exchange that models OPOCO lists the way Binance documents them. */
-function fakeExchange(behaviour: Behaviour = "rest") {
+function fakeExchange(
+  behaviour: Behaviour = "rest",
+  // Holds a submission in flight until it resolves.
+  gate: Promise<void> = Promise.resolve(),
+) {
   const calls = { test: 0, place: 0, cancelList: 0, cancelOrder: 0 };
   const orders = new Map<string, TestnetOrder>();
   const lists: TestnetOrderList[] = [];
@@ -93,6 +97,7 @@ function fakeExchange(behaviour: Behaviour = "rest") {
     },
     placeProtectedEntry: async (entry: ProtectedEntry) => {
       calls.place++;
+      await gate;
       if (behaviour === "reject")
         throw new BinanceTestnetError(
           "rejected",
@@ -197,6 +202,7 @@ async function desk(
   behaviour?: Behaviour,
   env: Record<string, string> = {},
   directory?: string,
+  gate?: Promise<void>,
 ) {
   const journalDirectory =
     directory ?? (await mkdtemp(join(tmpdir(), "manual-orders-")));
@@ -208,8 +214,9 @@ async function desk(
     ...env,
   });
   assert.ok(loaded.ok);
-  const fake = fakeExchange(behaviour);
+  const fake = fakeExchange(behaviour, gate);
   let changes = 0;
+  let offset = 0;
   return {
     ...fake,
     journalDirectory,
@@ -218,8 +225,12 @@ async function desk(
       exchange: fake.exchange,
       config: loaded.config,
       journal: new OrderJournal(journalDirectory),
+      now: () => new Date(Date.now() + offset),
       onChange: () => changes++,
     }),
+    advance: (ms: number) => {
+      offset += ms;
+    },
     journal: async (id: string) =>
       JSON.parse(await readFile(join(journalDirectory, `${id}.json`), "utf8")),
     cleanup: () => rm(journalDirectory, { recursive: true, force: true }),
@@ -348,12 +359,35 @@ test("an unknown outcome is looked up by client ID and never resubmitted", async
     assert.equal(unknown.listClientOrderId, "ct_lost");
     assert.equal((await lost.journal("ct_lost")).status, "submission_pending");
     assert.equal((await lost.desk.place(limit("ct_lost"))).status, "duplicate");
+    // Binance may still be executing it, so it is not called missing yet.
+    assert.equal((await lost.desk.status("ct_lost")).status, "unknown");
+    lost.advance(61_000);
     assert.equal((await lost.desk.status("ct_lost")).status, "not_found");
     assert.equal((await lost.desk.status("../escape")).status, "invalid");
     assert.equal(placed.calls.place + lost.calls.place, 2);
   } finally {
     await placed.cleanup();
     await lost.cleanup();
+  }
+});
+
+test("a status check waits for a placement still in flight", async () => {
+  let release!: () => void;
+  const f = await desk(
+    "rest",
+    {},
+    undefined,
+    new Promise((done) => (release = done)),
+  );
+  try {
+    const placing = f.desk.place(limit("ct_flight"));
+    await new Promise(setImmediate);
+    const status = f.desk.status("ct_flight");
+    release();
+    assert.equal((await status).status, "working");
+    assert.equal((await placing).status, "working");
+  } finally {
+    await f.cleanup();
   }
 });
 

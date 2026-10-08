@@ -100,6 +100,7 @@ export function loadManualTradingConfig(
   };
 }
 
+const UNCONFIRMED_GRACE_MS = 60_000;
 // Binance's code for an order or order list that does not exist.
 const NO_SUCH_ORDER = -2013;
 const journalEntrySchema = z.object({ entry: z.object({ price: z.string() }) });
@@ -298,12 +299,18 @@ export class ManualOrderDesk {
     const id = listClientOrderIdSchema.safeParse(listClientOrderId);
     if (!id.success)
       return { status: "invalid", message: "The order ID is invalid." };
-    return this.#status(id.data);
+    // Waits for a placement still in flight, so it cannot report that order
+    // as missing while it is being sent.
+    return this.#exclusive(() => this.#status(id.data));
   }
 
   async #status(listClientOrderId: string): Promise<ManualOrderOutcome> {
     const record = z
-      .object({ entry: protectedEntrySchema })
+      .object({
+        entry: protectedEntrySchema,
+        status: z.string(),
+        createdAt: z.iso.datetime(),
+      })
       .safeParse(await this.#journal.read(listClientOrderId));
     if (!record.success)
       return {
@@ -322,6 +329,20 @@ export class ManualOrderDesk {
           "Binance could not be reached, so the order's status is still unknown. Try again shortly.",
       };
     }
+    // Binance can still be executing a submission it did not confirm, so a
+    // recent one is not called missing yet.
+    if (
+      !list &&
+      record.data.status === "submission_pending" &&
+      this.#now().getTime() - Date.parse(record.data.createdAt) <
+        UNCONFIRMED_GRACE_MS
+    )
+      return {
+        status: "unknown",
+        listClientOrderId,
+        message:
+          "Binance has no record of this order yet. Check again in a minute before placing another order.",
+      };
     if (!list)
       return {
         status: "not_found",
