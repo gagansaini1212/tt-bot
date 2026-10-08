@@ -1,0 +1,3214 @@
+{
+  "grid": {
+    "instrument": "BTC-USDT",
+    "strategyKind": "grid",
+    "period": {
+      "start": "2026-09-04T00:00:00.000Z",
+      "end": "2026-09-11T00:00:00.000Z"
+    },
+    "candles": 168,
+    "missingHours": 0,
+    "allocation": "1000",
+    "assumptions": {
+      "makerFeePercent": "0.1",
+      "takerFeePercent": "0.1",
+      "slippagePercent": "0.05"
+    },
+    "market": {
+      "tickSize": "0.01",
+      "stepSize": "0.00001",
+      "minNotional": "5",
+      "maxStopOrders": 5
+    },
+    "entryLimit": 5,
+    "state": "running",
+    "notices": [],
+    "rejections": {},
+    "metrics": {
+      "netPnl": "-19.2737444",
+      "returnPercent": "-1.92737444",
+      "fees": "1.69687",
+      "realizedPnl": "3.765",
+      "unrealizedPnl": "-21.3418744",
+      "finalEquity": "980.7262556",
+      "maxDrawdown": {
+        "amount": "19.7745295",
+        "percent": "1.9764631666954201174",
+        "peakAt": 1788739200000,
+        "troughAt": 1789084800000
+      },
+      "sharpe": {
+        "value": "-8.4263082558873912209",
+        "riskFreeRatePercent": "0",
+        "periodsPerYear": 8760
+      },
+      "trades": {
+        "trades": 11,
+        "closed": 6,
+        "open": 5,
+        "wins": 6,
+        "losses": 0,
+        "breakeven": 0,
+        "winRate": "100",
+        "lossRate": "0"
+      }
+    },
+    "baseline": {
+      "netPnl": "-59.2338204028",
+      "returnPercent": "-5.92338204028",
+      "maxDrawdown": {
+        "amount": "59.2338204028",
+        "percent": "5.92338204028",
+        "peakAt": 1788480000000,
+        "troughAt": 1789084800000
+      },
+      "quantity": "0.01228",
+      "entryPrice": "81311.01",
+      "fee": "0.9984992028"
+    },
+    "equity": [
+      {
+        "time": 1788480000000,
+        "strategy": "1000",
+        "baseline": "1000"
+      },
+      {
+        "time": 1788483600000,
+        "strategy": "999.8660776",
+        "baseline": "994.8399315972"
+      },
+      {
+        "time": 1788487200000,
+        "strategy": "999.8610223",
+        "baseline": "994.7894607972"
+      },
+      {
+        "time": 1788490800000,
+        "strategy": "999.6937177",
+        "baseline": "993.1191351972"
+      },
+      {
+        "time": 1788494400000,
+        "strategy": "999.71587",
+        "baseline": "993.3402979972"
+      },
+      {
+        "time": 1788498000000,
+        "strategy": "999.9871342",
+        "baseline": "996.0485291972"
+      },
+      {
+        "time": 1788501600000,
+        "strategy": "999.8956345",
+        "baseline": "995.1350199972"
+      },
+      {
+        "time": 1788505200000,
+        "strategy": "999.6511597",
+        "baseline": "992.6942471972"
+      },
+      {
+        "time": 1788508800000,
+        "strategy": "999.4783201",
+        "baseline": "990.9686615972"
+      },
+      {
+        "time": 1788512400000,
+        "strategy": "1000.0813768",
+        "baseline": "996.9894227972"
+      },
+      {
+        "time": 1788516000000,
+        "strategy": "999.9700249",
+        "baseline": "995.8777143972"
+      },
+      {
+        "time": 1788519600000,
+        "strategy": "1000.1213149",
+        "baseline": "997.3881543972"
+      },
+      {
+        "time": 1788523200000,
+        "strategy": "1000.1769478",
+        "baseline": "997.9435787972"
+      },
+      {
+        "time": 1788526800000,
+        "strategy": "995.6623562",
+        "baseline": "976.1969267972"
+      },
+      {
+        "time": 1788530400000,
+        "strategy": "995.2881649",
+        "baseline": "975.2723655972"
+      },
+      {
+        "time": 1788534000000,
+        "strategy": "992.7815083",
+        "baseline": "969.5872167972"
+      },
+      {
+        "time": 1788537600000,
+        "strategy": "995.9702351",
+        "baseline": "975.8944703972"
+      },
+      {
+        "time": 1788541200000,
+        "strategy": "997.5427431",
+        "baseline": "979.7798623972"
+      },
+      {
+        "time": 1788544800000,
+        "strategy": "996.1833984",
+        "baseline": "976.4211595972"
+      },
+      {
+        "time": 1788548400000,
+        "strategy": "996.9086705",
+        "baseline": "978.2131799972"
+      },
+      {
+        "time": 1788552000000,
+        "strategy": "997.7793648",
+        "baseline": "980.3645131972"
+      },
+      {
+        "time": 1788555600000,
+        "strategy": "997.3007538",
+        "baseline": "979.1819491972"
+      },
+      {
+        "time": 1788559200000,
+        "strategy": "996.937745",
+        "baseline": "978.2850179972"
+      },
+      {
+        "time": 1788562800000,
+        "strategy": "996.9978323",
+        "baseline": "978.4334831972"
+      },
+      {
+        "time": 1788566400000,
+        "strategy": "997.1204919",
+        "baseline": "978.7365535972"
+      },
+      {
+        "time": 1788570000000,
+        "strategy": "996.6860642",
+        "baseline": "977.6631587972"
+      },
+      {
+        "time": 1788573600000,
+        "strategy": "996.4871648",
+        "baseline": "977.1717131972"
+      },
+      {
+        "time": 1788577200000,
+        "strategy": "996.6648423",
+        "baseline": "977.6107231972"
+      },
+      {
+        "time": 1788580800000,
+        "strategy": "996.729005",
+        "baseline": "977.7692579972"
+      },
+      {
+        "time": 1788584400000,
+        "strategy": "996.3215147",
+        "baseline": "976.7624207972"
+      },
+      {
+        "time": 1788588000000,
+        "strategy": "996.7067891",
+        "baseline": "977.7143663972"
+      },
+      {
+        "time": 1788591600000,
+        "strategy": "997.0371947",
+        "baseline": "978.5307407972"
+      },
+      {
+        "time": 1788595200000,
+        "strategy": "997.3649662",
+        "baseline": "979.3406067972"
+      },
+      {
+        "time": 1788598800000,
+        "strategy": "997.066965",
+        "baseline": "978.6042979972"
+      },
+      {
+        "time": 1788602400000,
+        "strategy": "996.9739266",
+        "baseline": "978.3744163972"
+      },
+      {
+        "time": 1788606000000,
+        "strategy": "996.9079747",
+        "baseline": "978.2114607972"
+      },
+      {
+        "time": 1788609600000,
+        "strategy": "996.8645866",
+        "baseline": "978.1042563972"
+      },
+      {
+        "time": 1788613200000,
+        "strategy": "997.3360408",
+        "baseline": "979.2691371972"
+      },
+      {
+        "time": 1788616800000,
+        "strategy": "996.8864049",
+        "baseline": "978.1581655972"
+      },
+      {
+        "time": 1788620400000,
+        "strategy": "997.4136722",
+        "baseline": "979.4609507972"
+      },
+      {
+        "time": 1788624000000,
+        "strategy": "997.8423347",
+        "baseline": "980.5201007972"
+      },
+      {
+        "time": 1788627600000,
+        "strategy": "998.862705",
+        "baseline": "983.4180579972"
+      },
+      {
+        "time": 1788631200000,
+        "strategy": "998.924457",
+        "baseline": "983.6219059972"
+      },
+      {
+        "time": 1788634800000,
+        "strategy": "998.7063906",
+        "baseline": "982.9020523972"
+      },
+      {
+        "time": 1788638400000,
+        "strategy": "997.791345",
+        "baseline": "979.8814179972"
+      },
+      {
+        "time": 1788642000000,
+        "strategy": "997.7311926",
+        "baseline": "979.6828503972"
+      },
+      {
+        "time": 1788645600000,
+        "strategy": "998.3568594",
+        "baseline": "981.7482235972"
+      },
+      {
+        "time": 1788649200000,
+        "strategy": "997.9029078",
+        "baseline": "980.2496951972"
+      },
+      {
+        "time": 1788652800000,
+        "strategy": "998.080575",
+        "baseline": "980.8361879972"
+      },
+      {
+        "time": 1788656400000,
+        "strategy": "998.215425",
+        "baseline": "981.2813379972"
+      },
+      {
+        "time": 1788660000000,
+        "strategy": "998.5256358",
+        "baseline": "982.3053671972"
+      },
+      {
+        "time": 1788663600000,
+        "strategy": "998.3615466",
+        "baseline": "981.7636963972"
+      },
+      {
+        "time": 1788667200000,
+        "strategy": "998.8106622",
+        "baseline": "983.2462607972"
+      },
+      {
+        "time": 1788670800000,
+        "strategy": "998.2080222",
+        "baseline": "981.2569007972"
+      },
+      {
+        "time": 1788674400000,
+        "strategy": "998.6660286",
+        "baseline": "982.7688143972"
+      },
+      {
+        "time": 1788678000000,
+        "strategy": "997.905363",
+        "baseline": "980.2577999972"
+      },
+      {
+        "time": 1788681600000,
+        "strategy": "997.981065",
+        "baseline": "980.5076979972"
+      },
+      {
+        "time": 1788685200000,
+        "strategy": "998.1007374",
+        "baseline": "980.9027455972"
+      },
+      {
+        "time": 1788688800000,
+        "strategy": "998.2815294",
+        "baseline": "981.4995535972"
+      },
+      {
+        "time": 1788692400000,
+        "strategy": "998.7210846",
+        "baseline": "982.9505583972"
+      },
+      {
+        "time": 1788696000000,
+        "strategy": "998.4057774",
+        "baseline": "981.9097055972"
+      },
+      {
+        "time": 1788699600000,
+        "strategy": "998.4164538",
+        "baseline": "981.9449491972"
+      },
+      {
+        "time": 1788703200000,
+        "strategy": "998.0739906",
+        "baseline": "980.8144523972"
+      },
+      {
+        "time": 1788706800000,
+        "strategy": "996.9610982",
+        "baseline": "977.2910747972"
+      },
+      {
+        "time": 1788710400000,
+        "strategy": "997.823095",
+        "baseline": "979.4209179972"
+      },
+      {
+        "time": 1788714000000,
+        "strategy": "997.65163",
+        "baseline": "978.9972579972"
+      },
+      {
+        "time": 1788717600000,
+        "strategy": "997.9664298",
+        "baseline": "979.7750731972"
+      },
+      {
+        "time": 1788721200000,
+        "strategy": "999.0101298",
+        "baseline": "982.3538731972"
+      },
+      {
+        "time": 1788724800000,
+        "strategy": "998.3871403",
+        "baseline": "980.8145751972"
+      },
+      {
+        "time": 1788728400000,
+        "strategy": "998.79473",
+        "baseline": "981.8216579972"
+      },
+      {
+        "time": 1788732000000,
+        "strategy": "998.9251836",
+        "baseline": "982.2192843972"
+      },
+      {
+        "time": 1788735600000,
+        "strategy": "999.3373224",
+        "baseline": "983.5797855972"
+      },
+      {
+        "time": 1788739200000,
+        "strategy": "1000.5007851",
+        "baseline": "987.0999703972"
+      },
+      {
+        "time": 1788742800000,
+        "strategy": "1000.0516897",
+        "baseline": "984.8672207972"
+      },
+      {
+        "time": 1788746400000,
+        "strategy": "999.2817058",
+        "baseline": "981.9952971972"
+      },
+      {
+        "time": 1788750000000,
+        "strategy": "999.0886378",
+        "baseline": "981.3579651972"
+      },
+      {
+        "time": 1788753600000,
+        "strategy": "998.0550358",
+        "baseline": "977.9459671972"
+      },
+      {
+        "time": 1788757200000,
+        "strategy": "998.529745",
+        "baseline": "979.5130179972"
+      },
+      {
+        "time": 1788760800000,
+        "strategy": "998.6616934",
+        "baseline": "979.9485895972"
+      },
+      {
+        "time": 1788764400000,
+        "strategy": "998.2889494",
+        "baseline": "978.7181335972"
+      },
+      {
+        "time": 1788768000000,
+        "strategy": "997.0893051",
+        "baseline": "975.5076503972"
+      },
+      {
+        "time": 1788771600000,
+        "strategy": "997.2858686",
+        "baseline": "975.9933243972"
+      },
+      {
+        "time": 1788775200000,
+        "strategy": "996.6719245",
+        "baseline": "974.4763759972"
+      },
+      {
+        "time": 1788778800000,
+        "strategy": "996.90129",
+        "baseline": "975.0430979972"
+      },
+      {
+        "time": 1788782400000,
+        "strategy": "997.2002852",
+        "baseline": "975.7818627972"
+      },
+      {
+        "time": 1788786000000,
+        "strategy": "998.1280848",
+        "baseline": "978.0742931972"
+      },
+      {
+        "time": 1788789600000,
+        "strategy": "996.8615797",
+        "baseline": "974.9449807972"
+      },
+      {
+        "time": 1788793200000,
+        "strategy": "996.2083985",
+        "baseline": "972.9794439972"
+      },
+      {
+        "time": 1788796800000,
+        "strategy": "993.9035477",
+        "baseline": "968.4363351972"
+      },
+      {
+        "time": 1788800400000,
+        "strategy": "995.1924101",
+        "baseline": "970.9768215972"
+      },
+      {
+        "time": 1788804000000,
+        "strategy": "996.1696479",
+        "baseline": "972.9030623972"
+      },
+      {
+        "time": 1788807600000,
+        "strategy": "996.2346268",
+        "baseline": "973.0311427972"
+      },
+      {
+        "time": 1788811200000,
+        "strategy": "997.2916086",
+        "baseline": "975.1145675972"
+      },
+      {
+        "time": 1788814800000,
+        "strategy": "996.49529",
+        "baseline": "973.5449379972"
+      },
+      {
+        "time": 1788818400000,
+        "strategy": "996.03427",
+        "baseline": "972.6362179972"
+      },
+      {
+        "time": 1788822000000,
+        "strategy": "994.7146937",
+        "baseline": "970.0351911972"
+      },
+      {
+        "time": 1788825600000,
+        "strategy": "995.7103723",
+        "baseline": "971.9977807972"
+      },
+      {
+        "time": 1788829200000,
+        "strategy": "996.9630384",
+        "baseline": "974.4669203972"
+      },
+      {
+        "time": 1788832800000,
+        "strategy": "997.7661477",
+        "baseline": "976.0499351972"
+      },
+      {
+        "time": 1788836400000,
+        "strategy": "994.5765123",
+        "baseline": "969.7628207972"
+      },
+      {
+        "time": 1788840000000,
+        "strategy": "994.4286744",
+        "baseline": "969.4714163972"
+      },
+      {
+        "time": 1788843600000,
+        "strategy": "993.0109133",
+        "baseline": "966.6768567972"
+      },
+      {
+        "time": 1788847200000,
+        "strategy": "992.38349",
+        "baseline": "965.4401379972"
+      },
+      {
+        "time": 1788850800000,
+        "strategy": "990.7985157",
+        "baseline": "962.3159831972"
+      },
+      {
+        "time": 1788854400000,
+        "strategy": "991.78541",
+        "baseline": "964.2612579972"
+      },
+      {
+        "time": 1788858000000,
+        "strategy": "991.38669",
+        "baseline": "963.4753379972"
+      },
+      {
+        "time": 1788861600000,
+        "strategy": "993.5297477",
+        "baseline": "967.6995351972"
+      },
+      {
+        "time": 1788865200000,
+        "strategy": "992.32119",
+        "baseline": "965.3173379972"
+      },
+      {
+        "time": 1788868800000,
+        "strategy": "991.4615123",
+        "baseline": "963.6228207972"
+      },
+      {
+        "time": 1788872400000,
+        "strategy": "991.5859877",
+        "baseline": "963.8681751972"
+      },
+      {
+        "time": 1788876000000,
+        "strategy": "988.5436918",
+        "baseline": "957.8714827972"
+      },
+      {
+        "time": 1788879600000,
+        "strategy": "992.3181996",
+        "baseline": "965.3114435972"
+      },
+      {
+        "time": 1788883200000,
+        "strategy": "994.41447",
+        "baseline": "969.4434179972"
+      },
+      {
+        "time": 1788886800000,
+        "strategy": "993.3671447",
+        "baseline": "967.3790271972"
+      },
+      {
+        "time": 1788890400000,
+        "strategy": "991.9248374",
+        "baseline": "964.5360843972"
+      },
+      {
+        "time": 1788894000000,
+        "strategy": "991.49883",
+        "baseline": "963.6963779972"
+      },
+      {
+        "time": 1788897600000,
+        "strategy": "991.56113",
+        "baseline": "963.8191779972"
+      },
+      {
+        "time": 1788901200000,
+        "strategy": "991.8227277",
+        "baseline": "964.3348151972"
+      },
+      {
+        "time": 1788904800000,
+        "strategy": "991.8488314",
+        "baseline": "964.3862683972"
+      },
+      {
+        "time": 1788908400000,
+        "strategy": "992.2865512",
+        "baseline": "965.2490611972"
+      },
+      {
+        "time": 1788912000000,
+        "strategy": "991.622184",
+        "baseline": "963.9395219972"
+      },
+      {
+        "time": 1788915600000,
+        "strategy": "993.6086195",
+        "baseline": "967.8549999972"
+      },
+      {
+        "time": 1788919200000,
+        "strategy": "994.336595",
+        "baseline": "969.2899179972"
+      },
+      {
+        "time": 1788922800000,
+        "strategy": "993.3055923",
+        "baseline": "967.2577007972"
+      },
+      {
+        "time": 1788926400000,
+        "strategy": "992.7573523",
+        "baseline": "966.1770607972"
+      },
+      {
+        "time": 1788930000000,
+        "strategy": "996.080995",
+        "baseline": "972.7283179972"
+      },
+      {
+        "time": 1788933600000,
+        "strategy": "994.5355189",
+        "baseline": "969.6820183972"
+      },
+      {
+        "time": 1788937200000,
+        "strategy": "996.0033069",
+        "baseline": "972.5751863972"
+      },
+      {
+        "time": 1788940800000,
+        "strategy": "996.7409389",
+        "baseline": "974.0291383972"
+      },
+      {
+        "time": 1788944400000,
+        "strategy": "999.0115394",
+        "baseline": "979.1939835972"
+      },
+      {
+        "time": 1788948000000,
+        "strategy": "995.1438623",
+        "baseline": "970.0329807972"
+      },
+      {
+        "time": 1788951600000,
+        "strategy": "994.9445023",
+        "baseline": "969.6400207972"
+      },
+      {
+        "time": 1788955200000,
+        "strategy": "997.4660325",
+        "baseline": "974.6102279972"
+      },
+      {
+        "time": 1788958800000,
+        "strategy": "998.9851858",
+        "baseline": "978.0656971972"
+      },
+      {
+        "time": 1788962400000,
+        "strategy": "996.6718993",
+        "baseline": "972.3499711972"
+      },
+      {
+        "time": 1788966000000,
+        "strategy": "995.6115323",
+        "baseline": "970.1066607972"
+      },
+      {
+        "time": 1788969600000,
+        "strategy": "993.360571",
+        "baseline": "965.6697739972"
+      },
+      {
+        "time": 1788973200000,
+        "strategy": "994.657657",
+        "baseline": "968.2264699972"
+      },
+      {
+        "time": 1788976800000,
+        "strategy": "994.4776723",
+        "baseline": "967.8717007972"
+      },
+      {
+        "time": 1788980400000,
+        "strategy": "992.2249666",
+        "baseline": "963.4313755972"
+      },
+      {
+        "time": 1788984000000,
+        "strategy": "991.1068062",
+        "baseline": "961.2273611972"
+      },
+      {
+        "time": 1788987600000,
+        "strategy": "991.6620861",
+        "baseline": "962.3218775972"
+      },
+      {
+        "time": 1788991200000,
+        "strategy": "990.5466046",
+        "baseline": "960.1231435972"
+      },
+      {
+        "time": 1788994800000,
+        "strategy": "989.1700238",
+        "baseline": "957.4097547972"
+      },
+      {
+        "time": 1788998400000,
+        "strategy": "991.5521889",
+        "baseline": "962.1052583972"
+      },
+      {
+        "time": 1789002000000,
+        "strategy": "990.768891",
+        "baseline": "960.5612939972"
+      },
+      {
+        "time": 1789005600000,
+        "strategy": "990.22875",
+        "baseline": "959.4966179972"
+      },
+      {
+        "time": 1789009200000,
+        "strategy": "991.8725978",
+        "baseline": "962.7368187972"
+      },
+      {
+        "time": 1789012800000,
+        "strategy": "991.6870684",
+        "baseline": "962.3711203972"
+      },
+      {
+        "time": 1789016400000,
+        "strategy": "992.13513",
+        "baseline": "963.2542979972"
+      },
+      {
+        "time": 1789020000000,
+        "strategy": "992.9868333",
+        "baseline": "964.9330967972"
+      },
+      {
+        "time": 1789023600000,
+        "strategy": "992.2348723",
+        "baseline": "963.4509007972"
+      },
+      {
+        "time": 1789027200000,
+        "strategy": "990.34089",
+        "baseline": "959.7176579972"
+      },
+      {
+        "time": 1789030800000,
+        "strategy": "990.32843",
+        "baseline": "959.6930979972"
+      },
+      {
+        "time": 1789034400000,
+        "strategy": "989.5933523",
+        "baseline": "958.2441807972"
+      },
+      {
+        "time": 1789038000000,
+        "strategy": "988.7909283",
+        "baseline": "956.6625167972"
+      },
+      {
+        "time": 1789041600000,
+        "strategy": "988.651314",
+        "baseline": "956.3873219972"
+      },
+      {
+        "time": 1789045200000,
+        "strategy": "982.7652723",
+        "baseline": "944.7853007972"
+      },
+      {
+        "time": 1789048800000,
+        "strategy": "984.4998912",
+        "baseline": "948.2044211972"
+      },
+      {
+        "time": 1789052400000,
+        "strategy": "985.9799523",
+        "baseline": "951.1217807972"
+      },
+      {
+        "time": 1789056000000,
+        "strategy": "984.97063",
+        "baseline": "949.1322979972"
+      },
+      {
+        "time": 1789059600000,
+        "strategy": "984.6591923",
+        "baseline": "948.5184207972"
+      },
+      {
+        "time": 1789063200000,
+        "strategy": "985.4610556",
+        "baseline": "950.0989795972"
+      },
+      {
+        "time": 1789066800000,
+        "strategy": "984.98309",
+        "baseline": "949.1568579972"
+      },
+      {
+        "time": 1789070400000,
+        "strategy": "984.4151009",
+        "baseline": "948.0372903972"
+      },
+      {
+        "time": 1789074000000,
+        "strategy": "985.0832684",
+        "baseline": "949.3543203972"
+      },
+      {
+        "time": 1789077600000,
+        "strategy": "984.31025",
+        "baseline": "947.8306179972"
+      },
+      {
+        "time": 1789081200000,
+        "strategy": "982.3942135",
+        "baseline": "944.0539039972"
+      },
+      {
+        "time": 1789084800000,
+        "strategy": "980.7262556",
+        "baseline": "940.7661795972"
+      }
+    ],
+    "trades": [
+      {
+        "key": "level:8",
+        "entryAt": "2026-09-04T00:00:00.000Z",
+        "entryPrice": "81000",
+        "quantity": "0.00123",
+        "stopLossPrice": "76000",
+        "takeProfitPrice": "81500",
+        "fees": "0.09963",
+        "pnl": "-5.5501044"
+      },
+      {
+        "key": "level:7",
+        "entryAt": "2026-09-04T12:00:00.000Z",
+        "entryPrice": "80500",
+        "quantity": "0.00124",
+        "stopLossPrice": "76000",
+        "takeProfitPrice": "81000",
+        "fees": "0.09982",
+        "pnl": "-4.9746072"
+      },
+      {
+        "key": "level:6",
+        "entryAt": "2026-09-04T12:00:00.000Z",
+        "entryPrice": "80000",
+        "quantity": "0.00125",
+        "stopLossPrice": "76000",
+        "takeProfitPrice": "80500",
+        "exit": {
+          "at": "2026-09-06T23:00:00.000Z",
+          "price": "80500",
+          "reason": "take_profit"
+        },
+        "fees": "0.200625",
+        "pnl": "0.424375"
+      },
+      {
+        "key": "level:5",
+        "entryAt": "2026-09-04T12:00:00.000Z",
+        "entryPrice": "79500",
+        "quantity": "0.00125",
+        "stopLossPrice": "76000",
+        "takeProfitPrice": "80000",
+        "exit": {
+          "at": "2026-09-05T16:00:00.000Z",
+          "price": "80000",
+          "reason": "take_profit"
+        },
+        "fees": "0.199375",
+        "pnl": "0.425625"
+      },
+      {
+        "key": "level:4",
+        "entryAt": "2026-09-04T14:00:00.000Z",
+        "entryPrice": "79000",
+        "quantity": "0.00126",
+        "stopLossPrice": "76000",
+        "takeProfitPrice": "79500",
+        "exit": {
+          "at": "2026-09-04T15:00:00.000Z",
+          "price": "79500",
+          "reason": "take_profit"
+        },
+        "fees": "0.19971",
+        "pnl": "0.43029"
+      },
+      {
+        "key": "level:5",
+        "entryAt": "2026-09-06T14:00:00.000Z",
+        "entryPrice": "79500",
+        "quantity": "0.00125",
+        "stopLossPrice": "76000",
+        "takeProfitPrice": "80000",
+        "exit": {
+          "at": "2026-09-06T21:00:00.000Z",
+          "price": "80000",
+          "reason": "take_profit"
+        },
+        "fees": "0.199375",
+        "pnl": "0.425625"
+      },
+      {
+        "key": "level:6",
+        "entryAt": "2026-09-07T01:00:00.000Z",
+        "entryPrice": "80000",
+        "quantity": "0.00125",
+        "stopLossPrice": "76000",
+        "takeProfitPrice": "80500",
+        "fees": "0.1",
+        "pnl": "-4.3891"
+      },
+      {
+        "key": "level:5",
+        "entryAt": "2026-09-07T07:00:00.000Z",
+        "entryPrice": "79500",
+        "quantity": "0.00125",
+        "stopLossPrice": "76000",
+        "takeProfitPrice": "80000",
+        "fees": "0.099375",
+        "pnl": "-3.763475"
+      },
+      {
+        "key": "level:4",
+        "entryAt": "2026-09-07T14:00:00.000Z",
+        "entryPrice": "79000",
+        "quantity": "0.00126",
+        "stopLossPrice": "76000",
+        "takeProfitPrice": "79500",
+        "exit": {
+          "at": "2026-09-09T08:00:00.000Z",
+          "price": "79500",
+          "reason": "take_profit"
+        },
+        "fees": "0.19971",
+        "pnl": "0.43029"
+      },
+      {
+        "key": "level:4",
+        "entryAt": "2026-09-09T09:00:00.000Z",
+        "entryPrice": "79000",
+        "quantity": "0.00126",
+        "stopLossPrice": "76000",
+        "takeProfitPrice": "79500",
+        "exit": {
+          "at": "2026-09-09T12:00:00.000Z",
+          "price": "79500",
+          "reason": "take_profit"
+        },
+        "fees": "0.19971",
+        "pnl": "0.43029"
+      },
+      {
+        "key": "level:4",
+        "entryAt": "2026-09-09T14:00:00.000Z",
+        "entryPrice": "79000",
+        "quantity": "0.00126",
+        "stopLossPrice": "76000",
+        "takeProfitPrice": "79500",
+        "fees": "0.09954",
+        "pnl": "-3.1629528"
+      }
+    ],
+    "limitations": [
+      "Candles give only each hour's open, high, low and close, so within a candle the simulator assumes the worst order: a stop loss fills before a take profit, and an entry that fills during a candle can be stopped out in it but takes no profit until the next one.",
+      "Limit orders fill only when the price trades through them, in full, at their own price. Queue position, partial fills and order book depth are not modelled.",
+      "Taker fills (buys at the ask, stop losses, and closes for deadlines, loss limits and range exits) land 0.05% beyond the price, and a stop the market opens through sells from the open. Real slippage depends on liquidity and can be much larger.",
+      "Fees are 0.1% on maker fills and 0.1% on taker fills, charged in USDT. Binance takes a buy's fee in the asset bought, so its exits sell slightly less.",
+      "The strategy acts once an hour, at each candle's open. New entries, expiries, holding deadlines and loss limits are checked then, so an exit can come up to an hour late and a loss can pass a limit before it is measured.",
+      "A strategy paused by a loss limit stays paused for the rest of the backtest. A customer could resume it.",
+      "At most 5 entries are held at once: Binance allows 5 open stop orders per symbol per account, and the backtest assumes no other order uses them.",
+      "Exchange filters (tick size, lot step and minimum order value) are today's, from Binance's public market data. They may have differed during the period.",
+      "History comes from Binance's live spot market at data-api.binance.vision, not the testnet, which keeps about a day of candles.",
+      "Open entries and the buy-and-hold baseline are valued at the last close, without a sell fee.",
+      "Past results do not predict future ones. Passing software tests is not evidence of profitable trading."
+    ]
+  },
+  "dca": {
+    "instrument": "BTC-USDT",
+    "strategyKind": "dca",
+    "period": {
+      "start": "2026-09-04T00:00:00.000Z",
+      "end": "2026-09-11T00:00:00.000Z"
+    },
+    "candles": 168,
+    "missingHours": 0,
+    "allocation": "1000",
+    "assumptions": {
+      "makerFeePercent": "0.1",
+      "takerFeePercent": "0.1",
+      "slippagePercent": "0.05"
+    },
+    "market": {
+      "tickSize": "0.01",
+      "stepSize": "0.00001",
+      "minNotional": "5",
+      "maxStopOrders": 5
+    },
+    "entryLimit": 5,
+    "state": "completed",
+    "notices": [
+      {
+        "at": "2026-09-09T04:00:00.000Z",
+        "message": "The strategy completed: the DCA schedule ended and every buy has closed."
+      },
+      {
+        "at": "2026-09-11T00:00:00.000Z",
+        "message": "7 DCA buys were skipped: the strategy held as many entries as it may."
+      }
+    ],
+    "rejections": {},
+    "metrics": {
+      "netPnl": "-7.2096867727",
+      "returnPercent": "-0.72096867727",
+      "fees": "1.0459406727",
+      "realizedPnl": "-6.1637461",
+      "unrealizedPnl": "0",
+      "finalEquity": "992.7903132273",
+      "maxDrawdown": {
+        "amount": "7.9334393141",
+        "percent": "0.79313677180528054277",
+        "peakAt": 1788523200000,
+        "troughAt": 1788876000000
+      },
+      "sharpe": {
+        "value": "-9.8115478861027191348",
+        "riskFreeRatePercent": "0",
+        "periodsPerYear": 8760
+      },
+      "trades": {
+        "trades": 13,
+        "closed": 13,
+        "open": 0,
+        "wins": 3,
+        "losses": 10,
+        "breakeven": 0,
+        "winRate": "23.076923076923076923",
+        "lossRate": "76.923076923076923077"
+      }
+    },
+    "baseline": {
+      "netPnl": "-59.2338204028",
+      "returnPercent": "-5.92338204028",
+      "maxDrawdown": {
+        "amount": "59.2338204028",
+        "percent": "5.92338204028",
+        "peakAt": 1788480000000,
+        "troughAt": 1789084800000
+      },
+      "quantity": "0.01228",
+      "entryPrice": "81311.01",
+      "fee": "0.9984992028"
+    },
+    "equity": [
+      {
+        "time": 1788480000000,
+        "strategy": "1000",
+        "baseline": "1000"
+      },
+      {
+        "time": 1788483600000,
+        "strategy": "999.7941015051",
+        "baseline": "994.8399315972"
+      },
+      {
+        "time": 1788487200000,
+        "strategy": "999.7920876051",
+        "baseline": "994.7894607972"
+      },
+      {
+        "time": 1788490800000,
+        "strategy": "999.7254378051",
+        "baseline": "993.1191351972"
+      },
+      {
+        "time": 1788494400000,
+        "strategy": "999.7342627051",
+        "baseline": "993.3402979972"
+      },
+      {
+        "time": 1788498000000,
+        "strategy": "999.8909399895",
+        "baseline": "996.0485291972"
+      },
+      {
+        "time": 1788501600000,
+        "strategy": "999.8180377895",
+        "baseline": "995.1350199972"
+      },
+      {
+        "time": 1788505200000,
+        "strategy": "999.6232529895",
+        "baseline": "992.6942471972"
+      },
+      {
+        "time": 1788508800000,
+        "strategy": "999.4855433895",
+        "baseline": "990.9686615972"
+      },
+      {
+        "time": 1788512400000,
+        "strategy": "1000.1469712664",
+        "baseline": "996.9894227972"
+      },
+      {
+        "time": 1788516000000,
+        "strategy": "1000.0138921664",
+        "baseline": "995.8777143972"
+      },
+      {
+        "time": 1788519600000,
+        "strategy": "1000.1947021664",
+        "baseline": "997.3881543972"
+      },
+      {
+        "time": 1788523200000,
+        "strategy": "1000.2611902664",
+        "baseline": "997.9435787972"
+      },
+      {
+        "time": 1788526800000,
+        "strategy": "996.7305023812",
+        "baseline": "976.1969267972"
+      },
+      {
+        "time": 1788530400000,
+        "strategy": "996.5829339812",
+        "baseline": "975.2723655972"
+      },
+      {
+        "time": 1788534000000,
+        "strategy": "995.4948692146",
+        "baseline": "969.5872167972"
+      },
+      {
+        "time": 1788537600000,
+        "strategy": "995.9982168146",
+        "baseline": "975.8944703972"
+      },
+      {
+        "time": 1788541200000,
+        "strategy": "996.4305596036",
+        "baseline": "979.7798623972"
+      },
+      {
+        "time": 1788544800000,
+        "strategy": "995.9929436036",
+        "baseline": "976.4211595972"
+      },
+      {
+        "time": 1788548400000,
+        "strategy": "996.2264316036",
+        "baseline": "978.2131799972"
+      },
+      {
+        "time": 1788552000000,
+        "strategy": "996.5067356036",
+        "baseline": "980.3645131972"
+      },
+      {
+        "time": 1788555600000,
+        "strategy": "996.2446339786",
+        "baseline": "979.1819491972"
+      },
+      {
+        "time": 1788559200000,
+        "strategy": "996.0912499786",
+        "baseline": "978.2850179972"
+      },
+      {
+        "time": 1788562800000,
+        "strategy": "996.1166389786",
+        "baseline": "978.4334831972"
+      },
+      {
+        "time": 1788566400000,
+        "strategy": "996.1684669786",
+        "baseline": "978.7365535972"
+      },
+      {
+        "time": 1788570000000,
+        "strategy": "995.8814306736",
+        "baseline": "977.6631587972"
+      },
+      {
+        "time": 1788573600000,
+        "strategy": "995.7773786736",
+        "baseline": "977.1717131972"
+      },
+      {
+        "time": 1788577200000,
+        "strategy": "995.8703286736",
+        "baseline": "977.6107231972"
+      },
+      {
+        "time": 1788580800000,
+        "strategy": "995.9038946736",
+        "baseline": "977.7692579972"
+      },
+      {
+        "time": 1788584400000,
+        "strategy": "995.6907206736",
+        "baseline": "976.7624207972"
+      },
+      {
+        "time": 1788588000000,
+        "strategy": "995.8922726736",
+        "baseline": "977.7143663972"
+      },
+      {
+        "time": 1788591600000,
+        "strategy": "996.0651206736",
+        "baseline": "978.5307407972"
+      },
+      {
+        "time": 1788595200000,
+        "strategy": "996.2365906736",
+        "baseline": "979.3406067972"
+      },
+      {
+        "time": 1788598800000,
+        "strategy": "996.0806946736",
+        "baseline": "978.6042979972"
+      },
+      {
+        "time": 1788602400000,
+        "strategy": "996.0320226736",
+        "baseline": "978.3744163972"
+      },
+      {
+        "time": 1788606000000,
+        "strategy": "995.9975206736",
+        "baseline": "978.2114607972"
+      },
+      {
+        "time": 1788609600000,
+        "strategy": "995.9748226736",
+        "baseline": "978.1042563972"
+      },
+      {
+        "time": 1788613200000,
+        "strategy": "996.2214586736",
+        "baseline": "979.2691371972"
+      },
+      {
+        "time": 1788616800000,
+        "strategy": "995.9862366736",
+        "baseline": "978.1581655972"
+      },
+      {
+        "time": 1788620400000,
+        "strategy": "996.2620706736",
+        "baseline": "979.4609507972"
+      },
+      {
+        "time": 1788624000000,
+        "strategy": "996.4863206736",
+        "baseline": "980.5201007972"
+      },
+      {
+        "time": 1788627600000,
+        "strategy": "997.0998946736",
+        "baseline": "983.4180579972"
+      },
+      {
+        "time": 1788631200000,
+        "strategy": "997.1430546736",
+        "baseline": "983.6219059972"
+      },
+      {
+        "time": 1788634800000,
+        "strategy": "996.9906426736",
+        "baseline": "982.9020523972"
+      },
+      {
+        "time": 1788638400000,
+        "strategy": "996.3510946736",
+        "baseline": "979.8814179972"
+      },
+      {
+        "time": 1788642000000,
+        "strategy": "996.3090526736",
+        "baseline": "979.6828503972"
+      },
+      {
+        "time": 1788645600000,
+        "strategy": "996.7463466736",
+        "baseline": "981.7482235972"
+      },
+      {
+        "time": 1788649200000,
+        "strategy": "996.4290686736",
+        "baseline": "980.2496951972"
+      },
+      {
+        "time": 1788652800000,
+        "strategy": "996.5532446736",
+        "baseline": "980.8361879972"
+      },
+      {
+        "time": 1788656400000,
+        "strategy": "996.6474946736",
+        "baseline": "981.2813379972"
+      },
+      {
+        "time": 1788660000000,
+        "strategy": "996.8643086736",
+        "baseline": "982.3053671972"
+      },
+      {
+        "time": 1788663600000,
+        "strategy": "996.7496226736",
+        "baseline": "981.7636963972"
+      },
+      {
+        "time": 1788667200000,
+        "strategy": "997.0635206736",
+        "baseline": "983.2462607972"
+      },
+      {
+        "time": 1788670800000,
+        "strategy": "996.5246736238",
+        "baseline": "981.2569007972"
+      },
+      {
+        "time": 1788674400000,
+        "strategy": "996.8447856238",
+        "baseline": "982.7688143972"
+      },
+      {
+        "time": 1788678000000,
+        "strategy": "996.3131376238",
+        "baseline": "980.2577999972"
+      },
+      {
+        "time": 1788681600000,
+        "strategy": "996.3660476238",
+        "baseline": "980.5076979972"
+      },
+      {
+        "time": 1788685200000,
+        "strategy": "996.3314965915",
+        "baseline": "980.9027455972"
+      },
+      {
+        "time": 1788688800000,
+        "strategy": "996.4583425915",
+        "baseline": "981.4995535972"
+      },
+      {
+        "time": 1788692400000,
+        "strategy": "996.7667401915",
+        "baseline": "982.9505583972"
+      },
+      {
+        "time": 1788696000000,
+        "strategy": "996.5455165915",
+        "baseline": "981.9097055972"
+      },
+      {
+        "time": 1788699600000,
+        "strategy": "996.5530072915",
+        "baseline": "981.9449491972"
+      },
+      {
+        "time": 1788703200000,
+        "strategy": "996.3127306915",
+        "baseline": "980.8144523972"
+      },
+      {
+        "time": 1788706800000,
+        "strategy": "995.5638694915",
+        "baseline": "977.2910747972"
+      },
+      {
+        "time": 1788710400000,
+        "strategy": "996.0165478915",
+        "baseline": "979.4209179972"
+      },
+      {
+        "time": 1788714000000,
+        "strategy": "995.7967231835",
+        "baseline": "978.9972579972"
+      },
+      {
+        "time": 1788717600000,
+        "strategy": "995.9544397835",
+        "baseline": "979.7750731972"
+      },
+      {
+        "time": 1788721200000,
+        "strategy": "996.4773397835",
+        "baseline": "982.3538731972"
+      },
+      {
+        "time": 1788724800000,
+        "strategy": "996.1652182835",
+        "baseline": "980.8145751972"
+      },
+      {
+        "time": 1788728400000,
+        "strategy": "996.2496731835",
+        "baseline": "981.8216579972"
+      },
+      {
+        "time": 1788732000000,
+        "strategy": "996.3302993835",
+        "baseline": "982.2192843972"
+      },
+      {
+        "time": 1788735600000,
+        "strategy": "996.6061664835",
+        "baseline": "983.5797855972"
+      },
+      {
+        "time": 1788739200000,
+        "strategy": "997.4233741035",
+        "baseline": "987.0999703972"
+      },
+      {
+        "time": 1788742800000,
+        "strategy": "997.0042951186",
+        "baseline": "984.8672207972"
+      },
+      {
+        "time": 1788746400000,
+        "strategy": "996.5412325186",
+        "baseline": "981.9952971972"
+      },
+      {
+        "time": 1788750000000,
+        "strategy": "996.4384705186",
+        "baseline": "981.3579651972"
+      },
+      {
+        "time": 1788753600000,
+        "strategy": "995.8883275186",
+        "baseline": "977.9459671972"
+      },
+      {
+        "time": 1788757200000,
+        "strategy": "996.1450872286",
+        "baseline": "979.5130179972"
+      },
+      {
+        "time": 1788760800000,
+        "strategy": "996.2330528286",
+        "baseline": "979.9485895972"
+      },
+      {
+        "time": 1788764400000,
+        "strategy": "995.9845568286",
+        "baseline": "978.7181335972"
+      },
+      {
+        "time": 1788768000000,
+        "strategy": "995.3361856286",
+        "baseline": "975.5076503972"
+      },
+      {
+        "time": 1788771600000,
+        "strategy": "995.4342696286",
+        "baseline": "975.9933243972"
+      },
+      {
+        "time": 1788775200000,
+        "strategy": "995.1279152286",
+        "baseline": "974.4763759972"
+      },
+      {
+        "time": 1788778800000,
+        "strategy": "995.2423672286",
+        "baseline": "975.0430979972"
+      },
+      {
+        "time": 1788782400000,
+        "strategy": "995.3915640286",
+        "baseline": "975.7818627972"
+      },
+      {
+        "time": 1788786000000,
+        "strategy": "995.8545304286",
+        "baseline": "978.0742931972"
+      },
+      {
+        "time": 1788789600000,
+        "strategy": "995.2225520286",
+        "baseline": "974.9449807972"
+      },
+      {
+        "time": 1788793200000,
+        "strategy": "994.8256032286",
+        "baseline": "972.9794439972"
+      },
+      {
+        "time": 1788796800000,
+        "strategy": "993.9081024286",
+        "baseline": "968.4363351972"
+      },
+      {
+        "time": 1788800400000,
+        "strategy": "994.4211648286",
+        "baseline": "970.9768215972"
+      },
+      {
+        "time": 1788804000000,
+        "strategy": "994.8101776286",
+        "baseline": "972.9030623972"
+      },
+      {
+        "time": 1788807600000,
+        "strategy": "994.8360440286",
+        "baseline": "973.0311427972"
+      },
+      {
+        "time": 1788811200000,
+        "strategy": "995.2568008286",
+        "baseline": "975.1145675972"
+      },
+      {
+        "time": 1788814800000,
+        "strategy": "994.9398072286",
+        "baseline": "973.5449379972"
+      },
+      {
+        "time": 1788818400000,
+        "strategy": "994.7562872286",
+        "baseline": "972.6362179972"
+      },
+      {
+        "time": 1788822000000,
+        "strategy": "994.2309984286",
+        "baseline": "970.0351911972"
+      },
+      {
+        "time": 1788825600000,
+        "strategy": "994.6273520286",
+        "baseline": "971.9977807972"
+      },
+      {
+        "time": 1788829200000,
+        "strategy": "995.1260056286",
+        "baseline": "974.4669203972"
+      },
+      {
+        "time": 1788832800000,
+        "strategy": "995.4457024286",
+        "baseline": "976.0499351972"
+      },
+      {
+        "time": 1788836400000,
+        "strategy": "994.1759920286",
+        "baseline": "969.7628207972"
+      },
+      {
+        "time": 1788840000000,
+        "strategy": "994.1171416286",
+        "baseline": "969.4714163972"
+      },
+      {
+        "time": 1788843600000,
+        "strategy": "993.6062922917",
+        "baseline": "966.6768567972"
+      },
+      {
+        "time": 1788847200000,
+        "strategy": "993.4058793917",
+        "baseline": "965.4401379972"
+      },
+      {
+        "time": 1788850800000,
+        "strategy": "992.8996034917",
+        "baseline": "962.3159831972"
+      },
+      {
+        "time": 1788854400000,
+        "strategy": "993.2148393917",
+        "baseline": "964.2612579972"
+      },
+      {
+        "time": 1788858000000,
+        "strategy": "993.0606330167",
+        "baseline": "963.4753379972"
+      },
+      {
+        "time": 1788861600000,
+        "strategy": "993.5731781167",
+        "baseline": "967.6995351972"
+      },
+      {
+        "time": 1788865200000,
+        "strategy": "993.2841330167",
+        "baseline": "965.3173379972"
+      },
+      {
+        "time": 1788868800000,
+        "strategy": "993.0785279167",
+        "baseline": "963.6228207972"
+      },
+      {
+        "time": 1788872400000,
+        "strategy": "993.1082981167",
+        "baseline": "963.8681751972"
+      },
+      {
+        "time": 1788876000000,
+        "strategy": "992.3277509523",
+        "baseline": "957.8714827972"
+      },
+      {
+        "time": 1788879600000,
+        "strategy": "992.9336109523",
+        "baseline": "965.3114435972"
+      },
+      {
+        "time": 1788883200000,
+        "strategy": "993.2700909523",
+        "baseline": "969.4434179972"
+      },
+      {
+        "time": 1788886800000,
+        "strategy": "993.1019809523",
+        "baseline": "967.3790271972"
+      },
+      {
+        "time": 1788890400000,
+        "strategy": "992.8704709523",
+        "baseline": "964.5360843972"
+      },
+      {
+        "time": 1788894000000,
+        "strategy": "992.8020909523",
+        "baseline": "963.6963779972"
+      },
+      {
+        "time": 1788897600000,
+        "strategy": "992.8120909523",
+        "baseline": "963.8191779972"
+      },
+      {
+        "time": 1788901200000,
+        "strategy": "992.7742625723",
+        "baseline": "964.3348151972"
+      },
+      {
+        "time": 1788904800000,
+        "strategy": "992.7763575723",
+        "baseline": "964.3862683972"
+      },
+      {
+        "time": 1788908400000,
+        "strategy": "992.8114875723",
+        "baseline": "965.2490611972"
+      },
+      {
+        "time": 1788912000000,
+        "strategy": "992.7581675723",
+        "baseline": "963.9395219972"
+      },
+      {
+        "time": 1788915600000,
+        "strategy": "992.9175925723",
+        "baseline": "967.8549999972"
+      },
+      {
+        "time": 1788919200000,
+        "strategy": "992.9760175723",
+        "baseline": "969.2899179972"
+      },
+      {
+        "time": 1788922800000,
+        "strategy": "992.8932725723",
+        "baseline": "967.2577007972"
+      },
+      {
+        "time": 1788926400000,
+        "strategy": "992.8492725723",
+        "baseline": "966.1770607972"
+      },
+      {
+        "time": 1788930000000,
+        "strategy": "992.7903132273",
+        "baseline": "972.7283179972"
+      },
+      {
+        "time": 1788933600000,
+        "strategy": "992.7903132273",
+        "baseline": "969.6820183972"
+      },
+      {
+        "time": 1788937200000,
+        "strategy": "992.7903132273",
+        "baseline": "972.5751863972"
+      },
+      {
+        "time": 1788940800000,
+        "strategy": "992.7903132273",
+        "baseline": "974.0291383972"
+      },
+      {
+        "time": 1788944400000,
+        "strategy": "992.7903132273",
+        "baseline": "979.1939835972"
+      },
+      {
+        "time": 1788948000000,
+        "strategy": "992.7903132273",
+        "baseline": "970.0329807972"
+      },
+      {
+        "time": 1788951600000,
+        "strategy": "992.7903132273",
+        "baseline": "969.6400207972"
+      },
+      {
+        "time": 1788955200000,
+        "strategy": "992.7903132273",
+        "baseline": "974.6102279972"
+      },
+      {
+        "time": 1788958800000,
+        "strategy": "992.7903132273",
+        "baseline": "978.0656971972"
+      },
+      {
+        "time": 1788962400000,
+        "strategy": "992.7903132273",
+        "baseline": "972.3499711972"
+      },
+      {
+        "time": 1788966000000,
+        "strategy": "992.7903132273",
+        "baseline": "970.1066607972"
+      },
+      {
+        "time": 1788969600000,
+        "strategy": "992.7903132273",
+        "baseline": "965.6697739972"
+      },
+      {
+        "time": 1788973200000,
+        "strategy": "992.7903132273",
+        "baseline": "968.2264699972"
+      },
+      {
+        "time": 1788976800000,
+        "strategy": "992.7903132273",
+        "baseline": "967.8717007972"
+      },
+      {
+        "time": 1788980400000,
+        "strategy": "992.7903132273",
+        "baseline": "963.4313755972"
+      },
+      {
+        "time": 1788984000000,
+        "strategy": "992.7903132273",
+        "baseline": "961.2273611972"
+      },
+      {
+        "time": 1788987600000,
+        "strategy": "992.7903132273",
+        "baseline": "962.3218775972"
+      },
+      {
+        "time": 1788991200000,
+        "strategy": "992.7903132273",
+        "baseline": "960.1231435972"
+      },
+      {
+        "time": 1788994800000,
+        "strategy": "992.7903132273",
+        "baseline": "957.4097547972"
+      },
+      {
+        "time": 1788998400000,
+        "strategy": "992.7903132273",
+        "baseline": "962.1052583972"
+      },
+      {
+        "time": 1789002000000,
+        "strategy": "992.7903132273",
+        "baseline": "960.5612939972"
+      },
+      {
+        "time": 1789005600000,
+        "strategy": "992.7903132273",
+        "baseline": "959.4966179972"
+      },
+      {
+        "time": 1789009200000,
+        "strategy": "992.7903132273",
+        "baseline": "962.7368187972"
+      },
+      {
+        "time": 1789012800000,
+        "strategy": "992.7903132273",
+        "baseline": "962.3711203972"
+      },
+      {
+        "time": 1789016400000,
+        "strategy": "992.7903132273",
+        "baseline": "963.2542979972"
+      },
+      {
+        "time": 1789020000000,
+        "strategy": "992.7903132273",
+        "baseline": "964.9330967972"
+      },
+      {
+        "time": 1789023600000,
+        "strategy": "992.7903132273",
+        "baseline": "963.4509007972"
+      },
+      {
+        "time": 1789027200000,
+        "strategy": "992.7903132273",
+        "baseline": "959.7176579972"
+      },
+      {
+        "time": 1789030800000,
+        "strategy": "992.7903132273",
+        "baseline": "959.6930979972"
+      },
+      {
+        "time": 1789034400000,
+        "strategy": "992.7903132273",
+        "baseline": "958.2441807972"
+      },
+      {
+        "time": 1789038000000,
+        "strategy": "992.7903132273",
+        "baseline": "956.6625167972"
+      },
+      {
+        "time": 1789041600000,
+        "strategy": "992.7903132273",
+        "baseline": "956.3873219972"
+      },
+      {
+        "time": 1789045200000,
+        "strategy": "992.7903132273",
+        "baseline": "944.7853007972"
+      },
+      {
+        "time": 1789048800000,
+        "strategy": "992.7903132273",
+        "baseline": "948.2044211972"
+      },
+      {
+        "time": 1789052400000,
+        "strategy": "992.7903132273",
+        "baseline": "951.1217807972"
+      },
+      {
+        "time": 1789056000000,
+        "strategy": "992.7903132273",
+        "baseline": "949.1322979972"
+      },
+      {
+        "time": 1789059600000,
+        "strategy": "992.7903132273",
+        "baseline": "948.5184207972"
+      },
+      {
+        "time": 1789063200000,
+        "strategy": "992.7903132273",
+        "baseline": "950.0989795972"
+      },
+      {
+        "time": 1789066800000,
+        "strategy": "992.7903132273",
+        "baseline": "949.1568579972"
+      },
+      {
+        "time": 1789070400000,
+        "strategy": "992.7903132273",
+        "baseline": "948.0372903972"
+      },
+      {
+        "time": 1789074000000,
+        "strategy": "992.7903132273",
+        "baseline": "949.3543203972"
+      },
+      {
+        "time": 1789077600000,
+        "strategy": "992.7903132273",
+        "baseline": "947.8306179972"
+      },
+      {
+        "time": 1789081200000,
+        "strategy": "992.7903132273",
+        "baseline": "944.0539039972"
+      },
+      {
+        "time": 1789084800000,
+        "strategy": "992.7903132273",
+        "baseline": "940.7661795972"
+      }
+    ],
+    "trades": [
+      {
+        "key": "buy:0",
+        "entryAt": "2026-09-04T00:00:00.000Z",
+        "entryPrice": "81311.01",
+        "quantity": "0.00049",
+        "stopLossPrice": "78871.68",
+        "takeProfitPrice": "82124.13",
+        "exit": {
+          "at": "2026-09-04T14:00:00.000Z",
+          "price": "78832.24",
+          "reason": "stop_loss"
+        },
+        "fees": "0.0784701925",
+        "pnl": "-1.2930674925"
+      },
+      {
+        "key": "buy:1",
+        "entryAt": "2026-09-04T04:00:00.000Z",
+        "entryPrice": "80890.44",
+        "quantity": "0.00049",
+        "stopLossPrice": "78463.73",
+        "takeProfitPrice": "81699.35",
+        "exit": {
+          "at": "2026-09-06T04:00:00.000Z",
+          "price": "79987.99",
+          "reason": "holding_deadline"
+        },
+        "fees": "0.0788304307",
+        "pnl": "-0.5210309307"
+      },
+      {
+        "key": "buy:2",
+        "entryAt": "2026-09-04T08:00:00.000Z",
+        "entryPrice": "80697.19",
+        "quantity": "0.00049",
+        "stopLossPrice": "78276.28",
+        "takeProfitPrice": "81504.17",
+        "exit": {
+          "at": "2026-09-06T08:00:00.000Z",
+          "price": "79764.77",
+          "reason": "holding_deadline"
+        },
+        "fees": "0.0786263604",
+        "pnl": "-0.5355121604"
+      },
+      {
+        "key": "buy:3",
+        "entryAt": "2026-09-04T12:00:00.000Z",
+        "entryPrice": "81265.48",
+        "quantity": "0.00049",
+        "stopLossPrice": "78827.52",
+        "takeProfitPrice": "82078.14",
+        "exit": {
+          "at": "2026-09-04T14:00:00.000Z",
+          "price": "78788.1",
+          "reason": "stop_loss"
+        },
+        "fees": "0.0784262542",
+        "pnl": "-1.2923424542"
+      },
+      {
+        "key": "buy:4",
+        "entryAt": "2026-09-04T16:00:00.000Z",
+        "entryPrice": "79469.05",
+        "quantity": "0.00062",
+        "stopLossPrice": "77084.98",
+        "takeProfitPrice": "80263.75",
+        "exit": {
+          "at": "2026-09-06T16:00:00.000Z",
+          "price": "79676.65",
+          "reason": "holding_deadline"
+        },
+        "fees": "0.098670334",
+        "pnl": "0.030041666"
+      },
+      {
+        "key": "buy:5",
+        "entryAt": "2026-09-04T20:00:00.000Z",
+        "entryPrice": "79833.25",
+        "quantity": "0.0005",
+        "stopLossPrice": "77438.26",
+        "takeProfitPrice": "80631.59",
+        "exit": {
+          "at": "2026-09-06T20:00:00.000Z",
+          "price": "79790.08",
+          "reason": "holding_deadline"
+        },
+        "fees": "0.079811665",
+        "pnl": "-0.101396665"
+      },
+      {
+        "key": "buy:6",
+        "entryAt": "2026-09-05T00:00:00.000Z",
+        "entryPrice": "79700.61",
+        "quantity": "0.0005",
+        "stopLossPrice": "77309.6",
+        "takeProfitPrice": "80497.62",
+        "exit": {
+          "at": "2026-09-06T23:00:00.000Z",
+          "price": "80497.62",
+          "reason": "take_profit"
+        },
+        "fees": "0.080099115",
+        "pnl": "0.318405885"
+      },
+      {
+        "key": "buy:13",
+        "entryAt": "2026-09-06T04:00:00.000Z",
+        "entryPrice": "80068.03",
+        "quantity": "0.00049",
+        "stopLossPrice": "77665.99",
+        "takeProfitPrice": "80868.72",
+        "exit": {
+          "at": "2026-09-08T04:00:00.000Z",
+          "price": "78866.81",
+          "reason": "holding_deadline"
+        },
+        "fees": "0.0778780716",
+        "pnl": "-0.6664758716"
+      },
+      {
+        "key": "buy:14",
+        "entryAt": "2026-09-06T08:00:00.000Z",
+        "entryPrice": "79844.59",
+        "quantity": "0.0005",
+        "stopLossPrice": "77449.26",
+        "takeProfitPrice": "80643.04",
+        "exit": {
+          "at": "2026-09-08T08:00:00.000Z",
+          "price": "78442.75",
+          "reason": "holding_deadline"
+        },
+        "fees": "0.07914367",
+        "pnl": "-0.78006367"
+      },
+      {
+        "key": "buy:16",
+        "entryAt": "2026-09-06T16:00:00.000Z",
+        "entryPrice": "79756.37",
+        "quantity": "0.0005",
+        "stopLossPrice": "77363.68",
+        "takeProfitPrice": "80553.94",
+        "exit": {
+          "at": "2026-09-06T23:00:00.000Z",
+          "price": "80553.94",
+          "reason": "take_profit"
+        },
+        "fees": "0.080155155",
+        "pnl": "0.318629845"
+      },
+      {
+        "key": "buy:17",
+        "entryAt": "2026-09-06T20:00:00.000Z",
+        "entryPrice": "79869.92",
+        "quantity": "0.0005",
+        "stopLossPrice": "77473.83",
+        "takeProfitPrice": "80668.62",
+        "exit": {
+          "at": "2026-09-08T20:00:00.000Z",
+          "price": "78406.76",
+          "reason": "holding_deadline"
+        },
+        "fees": "0.07913834",
+        "pnl": "-0.81071834"
+      },
+      {
+        "key": "buy:18",
+        "entryAt": "2026-09-07T00:00:00.000Z",
+        "entryPrice": "80382.01",
+        "quantity": "0.00049",
+        "stopLossPrice": "77970.55",
+        "takeProfitPrice": "81185.84",
+        "exit": {
+          "at": "2026-09-08T13:00:00.000Z",
+          "price": "77931.56",
+          "reason": "stop_loss"
+        },
+        "fees": "0.0775736493",
+        "pnl": "-1.2782941493"
+      },
+      {
+        "key": "buy:19",
+        "entryAt": "2026-09-07T04:00:00.000Z",
+        "entryPrice": "79636.18",
+        "quantity": "0.0005",
+        "stopLossPrice": "77247.1",
+        "takeProfitPrice": "80432.55",
+        "exit": {
+          "at": "2026-09-09T04:00:00.000Z",
+          "price": "78598.69",
+          "reason": "holding_deadline"
+        },
+        "fees": "0.079117435",
+        "pnl": "-0.597862435"
+      }
+    ],
+    "limitations": [
+      "Candles give only each hour's open, high, low and close, so within a candle the simulator assumes the worst order: a stop loss fills before a take profit, and an entry that fills during a candle can be stopped out in it but takes no profit until the next one.",
+      "Limit orders fill only when the price trades through them, in full, at their own price. Queue position, partial fills and order book depth are not modelled.",
+      "Taker fills (buys at the ask, stop losses, and closes for deadlines, loss limits and range exits) land 0.05% beyond the price, and a stop the market opens through sells from the open. Real slippage depends on liquidity and can be much larger.",
+      "Fees are 0.1% on maker fills and 0.1% on taker fills, charged in USDT. Binance takes a buy's fee in the asset bought, so its exits sell slightly less.",
+      "The strategy acts once an hour, at each candle's open. New entries, expiries, holding deadlines and loss limits are checked then, so an exit can come up to an hour late and a loss can pass a limit before it is measured.",
+      "A strategy paused by a loss limit stays paused for the rest of the backtest. A customer could resume it.",
+      "At most 5 entries are held at once: Binance allows 5 open stop orders per symbol per account, and the backtest assumes no other order uses them.",
+      "Exchange filters (tick size, lot step and minimum order value) are today's, from Binance's public market data. They may have differed during the period.",
+      "History comes from Binance's live spot market at data-api.binance.vision, not the testnet, which keeps about a day of candles.",
+      "Open entries and the buy-and-hold baseline are valued at the last close, without a sell fee.",
+      "Past results do not predict future ones. Passing software tests is not evidence of profitable trading."
+    ]
+  },
+  "recordedProposals": {
+    "instrument": "BTC-USDT",
+    "strategyKind": "ai_managed",
+    "fixture": {
+      "id": "sample-btc-2026-09",
+      "title": "Sample proposals, BTC/USDT, 4–10 September 2026",
+      "provenance": "Hand-written for this repository to exercise the replay of recorded proposals: a take profit, a buy at the ask, a stop loss, a short and an oversized entry the checks turn away, a holding deadline and an entry that expires unfilled. The AI assistant did not produce them."
+    },
+    "period": {
+      "start": "2026-09-04T00:00:00.000Z",
+      "end": "2026-09-11T00:00:00.000Z"
+    },
+    "candles": 168,
+    "missingHours": 0,
+    "allocation": "1000",
+    "assumptions": {
+      "makerFeePercent": "0.1",
+      "takerFeePercent": "0.1",
+      "slippagePercent": "0.05"
+    },
+    "market": {
+      "tickSize": "0.01",
+      "stepSize": "0.00001",
+      "minNotional": "5",
+      "maxStopOrders": 5
+    },
+    "entryLimit": 3,
+    "state": "running",
+    "notices": [
+      {
+        "at": "2026-09-08T09:00:00.000Z",
+        "message": "Proposal 4 was turned away: The strategy does not open short positions."
+      },
+      {
+        "at": "2026-09-08T15:00:00.000Z",
+        "message": "Proposal 5 was turned away: The proposed position exceeds the strategy position limit."
+      }
+    ],
+    "rejections": {
+      "direction_not_allowed": 1,
+      "position_limit_exceeded": 1
+    },
+    "metrics": {
+      "netPnl": "-8.171294",
+      "returnPercent": "-0.8171294",
+      "fees": "1.733894",
+      "realizedPnl": "-6.4374",
+      "unrealizedPnl": "0",
+      "finalEquity": "991.828706",
+      "maxDrawdown": {
+        "amount": "12.8097127",
+        "percent": "1.2760133147785706103",
+        "peakAt": 1788832800000,
+        "troughAt": 1789045200000
+      },
+      "sharpe": {
+        "value": "-7.5328210573497518309",
+        "riskFreeRatePercent": "0",
+        "periodsPerYear": 8760
+      },
+      "trades": {
+        "trades": 4,
+        "closed": 4,
+        "open": 0,
+        "wins": 2,
+        "losses": 2,
+        "breakeven": 0,
+        "winRate": "50",
+        "lossRate": "50"
+      }
+    },
+    "baseline": {
+      "netPnl": "-59.2338204028",
+      "returnPercent": "-5.92338204028",
+      "maxDrawdown": {
+        "amount": "59.2338204028",
+        "percent": "5.92338204028",
+        "peakAt": 1788480000000,
+        "troughAt": 1789084800000
+      },
+      "quantity": "0.01228",
+      "entryPrice": "81311.01",
+      "fee": "0.9984992028"
+    },
+    "equity": [
+      {
+        "time": 1788480000000,
+        "strategy": "1000",
+        "baseline": "1000"
+      },
+      {
+        "time": 1788483600000,
+        "strategy": "1000",
+        "baseline": "994.8399315972"
+      },
+      {
+        "time": 1788487200000,
+        "strategy": "1000",
+        "baseline": "994.7894607972"
+      },
+      {
+        "time": 1788490800000,
+        "strategy": "1000",
+        "baseline": "993.1191351972"
+      },
+      {
+        "time": 1788494400000,
+        "strategy": "1000",
+        "baseline": "993.3402979972"
+      },
+      {
+        "time": 1788498000000,
+        "strategy": "1000",
+        "baseline": "996.0485291972"
+      },
+      {
+        "time": 1788501600000,
+        "strategy": "1000",
+        "baseline": "995.1350199972"
+      },
+      {
+        "time": 1788505200000,
+        "strategy": "1000",
+        "baseline": "992.6942471972"
+      },
+      {
+        "time": 1788508800000,
+        "strategy": "1000",
+        "baseline": "990.9686615972"
+      },
+      {
+        "time": 1788512400000,
+        "strategy": "1000",
+        "baseline": "996.9894227972"
+      },
+      {
+        "time": 1788516000000,
+        "strategy": "1000",
+        "baseline": "995.8777143972"
+      },
+      {
+        "time": 1788519600000,
+        "strategy": "1000",
+        "baseline": "997.3881543972"
+      },
+      {
+        "time": 1788523200000,
+        "strategy": "1000",
+        "baseline": "997.9435787972"
+      },
+      {
+        "time": 1788526800000,
+        "strategy": "1000",
+        "baseline": "976.1969267972"
+      },
+      {
+        "time": 1788530400000,
+        "strategy": "1000",
+        "baseline": "975.2723655972"
+      },
+      {
+        "time": 1788534000000,
+        "strategy": "999.67342",
+        "baseline": "969.5872167972"
+      },
+      {
+        "time": 1788537600000,
+        "strategy": "1000.70066",
+        "baseline": "975.8944703972"
+      },
+      {
+        "time": 1788541200000,
+        "strategy": "1001.33346",
+        "baseline": "979.7798623972"
+      },
+      {
+        "time": 1788544800000,
+        "strategy": "1000.78644",
+        "baseline": "976.4211595972"
+      },
+      {
+        "time": 1788548400000,
+        "strategy": "1001.0783",
+        "baseline": "978.2131799972"
+      },
+      {
+        "time": 1788552000000,
+        "strategy": "1001.42868",
+        "baseline": "980.3645131972"
+      },
+      {
+        "time": 1788555600000,
+        "strategy": "1001.23608",
+        "baseline": "979.1819491972"
+      },
+      {
+        "time": 1788559200000,
+        "strategy": "1001.09",
+        "baseline": "978.2850179972"
+      },
+      {
+        "time": 1788562800000,
+        "strategy": "1001.11418",
+        "baseline": "978.4334831972"
+      },
+      {
+        "time": 1788566400000,
+        "strategy": "1001.16354",
+        "baseline": "978.7365535972"
+      },
+      {
+        "time": 1788570000000,
+        "strategy": "1000.98872",
+        "baseline": "977.6631587972"
+      },
+      {
+        "time": 1788573600000,
+        "strategy": "1000.90868",
+        "baseline": "977.1717131972"
+      },
+      {
+        "time": 1788577200000,
+        "strategy": "1000.98018",
+        "baseline": "977.6107231972"
+      },
+      {
+        "time": 1788580800000,
+        "strategy": "1001.006",
+        "baseline": "977.7692579972"
+      },
+      {
+        "time": 1788584400000,
+        "strategy": "1000.84202",
+        "baseline": "976.7624207972"
+      },
+      {
+        "time": 1788588000000,
+        "strategy": "1000.99706",
+        "baseline": "977.7143663972"
+      },
+      {
+        "time": 1788591600000,
+        "strategy": "1001.13002",
+        "baseline": "978.5307407972"
+      },
+      {
+        "time": 1788595200000,
+        "strategy": "1001.26192",
+        "baseline": "979.3406067972"
+      },
+      {
+        "time": 1788598800000,
+        "strategy": "1001.142",
+        "baseline": "978.6042979972"
+      },
+      {
+        "time": 1788602400000,
+        "strategy": "1001.10456",
+        "baseline": "978.3744163972"
+      },
+      {
+        "time": 1788606000000,
+        "strategy": "1001.07802",
+        "baseline": "978.2114607972"
+      },
+      {
+        "time": 1788609600000,
+        "strategy": "1001.06056",
+        "baseline": "978.1042563972"
+      },
+      {
+        "time": 1788613200000,
+        "strategy": "1001.25028",
+        "baseline": "979.2691371972"
+      },
+      {
+        "time": 1788616800000,
+        "strategy": "1001.06934",
+        "baseline": "978.1581655972"
+      },
+      {
+        "time": 1788620400000,
+        "strategy": "1001.28152",
+        "baseline": "979.4609507972"
+      },
+      {
+        "time": 1788624000000,
+        "strategy": "1001.45402",
+        "baseline": "980.5201007972"
+      },
+      {
+        "time": 1788627600000,
+        "strategy": "1001.682",
+        "baseline": "983.4180579972"
+      },
+      {
+        "time": 1788631200000,
+        "strategy": "1001.682",
+        "baseline": "983.6219059972"
+      },
+      {
+        "time": 1788634800000,
+        "strategy": "1001.682",
+        "baseline": "982.9020523972"
+      },
+      {
+        "time": 1788638400000,
+        "strategy": "1001.682",
+        "baseline": "979.8814179972"
+      },
+      {
+        "time": 1788642000000,
+        "strategy": "1001.682",
+        "baseline": "979.6828503972"
+      },
+      {
+        "time": 1788645600000,
+        "strategy": "1001.682",
+        "baseline": "981.7482235972"
+      },
+      {
+        "time": 1788649200000,
+        "strategy": "1001.682",
+        "baseline": "980.2496951972"
+      },
+      {
+        "time": 1788652800000,
+        "strategy": "1001.682",
+        "baseline": "980.8361879972"
+      },
+      {
+        "time": 1788656400000,
+        "strategy": "1001.682",
+        "baseline": "981.2813379972"
+      },
+      {
+        "time": 1788660000000,
+        "strategy": "1001.682",
+        "baseline": "982.3053671972"
+      },
+      {
+        "time": 1788663600000,
+        "strategy": "1001.682",
+        "baseline": "981.7636963972"
+      },
+      {
+        "time": 1788667200000,
+        "strategy": "1001.682",
+        "baseline": "983.2462607972"
+      },
+      {
+        "time": 1788670800000,
+        "strategy": "1001.682",
+        "baseline": "981.2569007972"
+      },
+      {
+        "time": 1788674400000,
+        "strategy": "1001.682",
+        "baseline": "982.7688143972"
+      },
+      {
+        "time": 1788678000000,
+        "strategy": "1001.682",
+        "baseline": "980.2577999972"
+      },
+      {
+        "time": 1788681600000,
+        "strategy": "1001.682",
+        "baseline": "980.5076979972"
+      },
+      {
+        "time": 1788685200000,
+        "strategy": "1001.682",
+        "baseline": "980.9027455972"
+      },
+      {
+        "time": 1788688800000,
+        "strategy": "1001.682",
+        "baseline": "981.4995535972"
+      },
+      {
+        "time": 1788692400000,
+        "strategy": "1001.682",
+        "baseline": "982.9505583972"
+      },
+      {
+        "time": 1788696000000,
+        "strategy": "1001.682",
+        "baseline": "981.9097055972"
+      },
+      {
+        "time": 1788699600000,
+        "strategy": "1001.682",
+        "baseline": "981.9449491972"
+      },
+      {
+        "time": 1788703200000,
+        "strategy": "1001.682",
+        "baseline": "980.8144523972"
+      },
+      {
+        "time": 1788706800000,
+        "strategy": "1001.682",
+        "baseline": "977.2910747972"
+      },
+      {
+        "time": 1788710400000,
+        "strategy": "1001.7901343",
+        "baseline": "979.4209179972"
+      },
+      {
+        "time": 1788714000000,
+        "strategy": "1001.7211343",
+        "baseline": "978.9972579972"
+      },
+      {
+        "time": 1788717600000,
+        "strategy": "1001.8478143",
+        "baseline": "979.7750731972"
+      },
+      {
+        "time": 1788721200000,
+        "strategy": "1002.2678143",
+        "baseline": "982.3538731972"
+      },
+      {
+        "time": 1788724800000,
+        "strategy": "1002.0171143",
+        "baseline": "980.8145751972"
+      },
+      {
+        "time": 1788728400000,
+        "strategy": "1002.1811343",
+        "baseline": "981.8216579972"
+      },
+      {
+        "time": 1788732000000,
+        "strategy": "1002.2458943",
+        "baseline": "982.2192843972"
+      },
+      {
+        "time": 1788735600000,
+        "strategy": "1002.4674743",
+        "baseline": "983.5797855972"
+      },
+      {
+        "time": 1788739200000,
+        "strategy": "1002.7965343",
+        "baseline": "987.0999703972"
+      },
+      {
+        "time": 1788742800000,
+        "strategy": "1002.7965343",
+        "baseline": "984.8672207972"
+      },
+      {
+        "time": 1788746400000,
+        "strategy": "1002.7965343",
+        "baseline": "981.9952971972"
+      },
+      {
+        "time": 1788750000000,
+        "strategy": "1002.7965343",
+        "baseline": "981.3579651972"
+      },
+      {
+        "time": 1788753600000,
+        "strategy": "1002.7965343",
+        "baseline": "977.9459671972"
+      },
+      {
+        "time": 1788757200000,
+        "strategy": "1002.7965343",
+        "baseline": "979.5130179972"
+      },
+      {
+        "time": 1788760800000,
+        "strategy": "1002.7965343",
+        "baseline": "979.9485895972"
+      },
+      {
+        "time": 1788764400000,
+        "strategy": "1002.7965343",
+        "baseline": "978.7181335972"
+      },
+      {
+        "time": 1788768000000,
+        "strategy": "1002.7965343",
+        "baseline": "975.5076503972"
+      },
+      {
+        "time": 1788771600000,
+        "strategy": "1002.7965343",
+        "baseline": "975.9933243972"
+      },
+      {
+        "time": 1788775200000,
+        "strategy": "1002.7965343",
+        "baseline": "974.4763759972"
+      },
+      {
+        "time": 1788778800000,
+        "strategy": "1002.7965343",
+        "baseline": "975.0430979972"
+      },
+      {
+        "time": 1788782400000,
+        "strategy": "1002.7965343",
+        "baseline": "975.7818627972"
+      },
+      {
+        "time": 1788786000000,
+        "strategy": "1002.7965343",
+        "baseline": "978.0742931972"
+      },
+      {
+        "time": 1788789600000,
+        "strategy": "1002.7965343",
+        "baseline": "974.9449807972"
+      },
+      {
+        "time": 1788793200000,
+        "strategy": "1002.7965343",
+        "baseline": "972.9794439972"
+      },
+      {
+        "time": 1788796800000,
+        "strategy": "1002.0255043",
+        "baseline": "968.4363351972"
+      },
+      {
+        "time": 1788800400000,
+        "strategy": "1002.6461443",
+        "baseline": "970.9768215972"
+      },
+      {
+        "time": 1788804000000,
+        "strategy": "1003.1167243",
+        "baseline": "972.9030623972"
+      },
+      {
+        "time": 1788807600000,
+        "strategy": "1003.1480143",
+        "baseline": "973.0311427972"
+      },
+      {
+        "time": 1788811200000,
+        "strategy": "1003.6569943",
+        "baseline": "975.1145675972"
+      },
+      {
+        "time": 1788814800000,
+        "strategy": "1003.2735343",
+        "baseline": "973.5449379972"
+      },
+      {
+        "time": 1788818400000,
+        "strategy": "1003.0515343",
+        "baseline": "972.6362179972"
+      },
+      {
+        "time": 1788822000000,
+        "strategy": "1002.4161043",
+        "baseline": "970.0351911972"
+      },
+      {
+        "time": 1788825600000,
+        "strategy": "1002.8955643",
+        "baseline": "971.9977807972"
+      },
+      {
+        "time": 1788829200000,
+        "strategy": "1003.4987743",
+        "baseline": "974.4669203972"
+      },
+      {
+        "time": 1788832800000,
+        "strategy": "1003.8855043",
+        "baseline": "976.0499351972"
+      },
+      {
+        "time": 1788836400000,
+        "strategy": "1002.3495643",
+        "baseline": "969.7628207972"
+      },
+      {
+        "time": 1788840000000,
+        "strategy": "1002.2783743",
+        "baseline": "969.4714163972"
+      },
+      {
+        "time": 1788843600000,
+        "strategy": "1001.5956643",
+        "baseline": "966.6768567972"
+      },
+      {
+        "time": 1788847200000,
+        "strategy": "1001.2935343",
+        "baseline": "965.4401379972"
+      },
+      {
+        "time": 1788850800000,
+        "strategy": "1000.5303043",
+        "baseline": "962.3159831972"
+      },
+      {
+        "time": 1788854400000,
+        "strategy": "999.8077516",
+        "baseline": "964.2612579972"
+      },
+      {
+        "time": 1788858000000,
+        "strategy": "999.8077516",
+        "baseline": "963.4753379972"
+      },
+      {
+        "time": 1788861600000,
+        "strategy": "999.8077516",
+        "baseline": "967.6995351972"
+      },
+      {
+        "time": 1788865200000,
+        "strategy": "999.8077516",
+        "baseline": "965.3173379972"
+      },
+      {
+        "time": 1788868800000,
+        "strategy": "999.8077516",
+        "baseline": "963.6228207972"
+      },
+      {
+        "time": 1788872400000,
+        "strategy": "999.8077516",
+        "baseline": "963.8681751972"
+      },
+      {
+        "time": 1788876000000,
+        "strategy": "999.8077516",
+        "baseline": "957.8714827972"
+      },
+      {
+        "time": 1788879600000,
+        "strategy": "999.8077516",
+        "baseline": "965.3114435972"
+      },
+      {
+        "time": 1788883200000,
+        "strategy": "999.8077516",
+        "baseline": "969.4434179972"
+      },
+      {
+        "time": 1788886800000,
+        "strategy": "999.8077516",
+        "baseline": "967.3790271972"
+      },
+      {
+        "time": 1788890400000,
+        "strategy": "999.8077516",
+        "baseline": "964.5360843972"
+      },
+      {
+        "time": 1788894000000,
+        "strategy": "999.8077516",
+        "baseline": "963.6963779972"
+      },
+      {
+        "time": 1788897600000,
+        "strategy": "999.8077516",
+        "baseline": "963.8191779972"
+      },
+      {
+        "time": 1788901200000,
+        "strategy": "999.8077516",
+        "baseline": "964.3348151972"
+      },
+      {
+        "time": 1788904800000,
+        "strategy": "999.8077516",
+        "baseline": "964.3862683972"
+      },
+      {
+        "time": 1788908400000,
+        "strategy": "999.8077516",
+        "baseline": "965.2490611972"
+      },
+      {
+        "time": 1788912000000,
+        "strategy": "999.8077516",
+        "baseline": "963.9395219972"
+      },
+      {
+        "time": 1788915600000,
+        "strategy": "999.8077516",
+        "baseline": "967.8549999972"
+      },
+      {
+        "time": 1788919200000,
+        "strategy": "999.8077516",
+        "baseline": "969.2899179972"
+      },
+      {
+        "time": 1788922800000,
+        "strategy": "999.8077516",
+        "baseline": "967.2577007972"
+      },
+      {
+        "time": 1788926400000,
+        "strategy": "999.8077516",
+        "baseline": "966.1770607972"
+      },
+      {
+        "time": 1788930000000,
+        "strategy": "999.8077516",
+        "baseline": "972.7283179972"
+      },
+      {
+        "time": 1788933600000,
+        "strategy": "999.1854716",
+        "baseline": "969.6820183972"
+      },
+      {
+        "time": 1788937200000,
+        "strategy": "1000.1278716",
+        "baseline": "972.5751863972"
+      },
+      {
+        "time": 1788940800000,
+        "strategy": "1000.6014716",
+        "baseline": "974.0291383972"
+      },
+      {
+        "time": 1788944400000,
+        "strategy": "1002.2838316",
+        "baseline": "979.1939835972"
+      },
+      {
+        "time": 1788948000000,
+        "strategy": "999.2997916",
+        "baseline": "970.0329807972"
+      },
+      {
+        "time": 1788951600000,
+        "strategy": "999.1717916",
+        "baseline": "969.6400207972"
+      },
+      {
+        "time": 1788955200000,
+        "strategy": "1000.7907516",
+        "baseline": "974.6102279972"
+      },
+      {
+        "time": 1788958800000,
+        "strategy": "1001.9163116",
+        "baseline": "978.0656971972"
+      },
+      {
+        "time": 1788962400000,
+        "strategy": "1000.0545116",
+        "baseline": "972.3499711972"
+      },
+      {
+        "time": 1788966000000,
+        "strategy": "999.3237916",
+        "baseline": "970.1066607972"
+      },
+      {
+        "time": 1788969600000,
+        "strategy": "997.8785516",
+        "baseline": "965.6697739972"
+      },
+      {
+        "time": 1788973200000,
+        "strategy": "998.7113516",
+        "baseline": "968.2264699972"
+      },
+      {
+        "time": 1788976800000,
+        "strategy": "998.5957916",
+        "baseline": "967.8717007972"
+      },
+      {
+        "time": 1788980400000,
+        "strategy": "997.1494316",
+        "baseline": "963.4313755972"
+      },
+      {
+        "time": 1788984000000,
+        "strategy": "996.4315116",
+        "baseline": "961.2273611972"
+      },
+      {
+        "time": 1788987600000,
+        "strategy": "996.7880316",
+        "baseline": "962.3218775972"
+      },
+      {
+        "time": 1788991200000,
+        "strategy": "996.0718316",
+        "baseline": "960.1231435972"
+      },
+      {
+        "time": 1788994800000,
+        "strategy": "995.1879916",
+        "baseline": "957.4097547972"
+      },
+      {
+        "time": 1788998400000,
+        "strategy": "996.7174716",
+        "baseline": "962.1052583972"
+      },
+      {
+        "time": 1789002000000,
+        "strategy": "996.2145516",
+        "baseline": "960.5612939972"
+      },
+      {
+        "time": 1789005600000,
+        "strategy": "995.8677516",
+        "baseline": "959.4966179972"
+      },
+      {
+        "time": 1789009200000,
+        "strategy": "996.9231916",
+        "baseline": "962.7368187972"
+      },
+      {
+        "time": 1789012800000,
+        "strategy": "996.8040716",
+        "baseline": "962.3711203972"
+      },
+      {
+        "time": 1789016400000,
+        "strategy": "997.0917516",
+        "baseline": "963.2542979972"
+      },
+      {
+        "time": 1789020000000,
+        "strategy": "997.6385916",
+        "baseline": "964.9330967972"
+      },
+      {
+        "time": 1789023600000,
+        "strategy": "997.1557916",
+        "baseline": "963.4509007972"
+      },
+      {
+        "time": 1789027200000,
+        "strategy": "995.9397516",
+        "baseline": "959.7176579972"
+      },
+      {
+        "time": 1789030800000,
+        "strategy": "995.9317516",
+        "baseline": "959.6930979972"
+      },
+      {
+        "time": 1789034400000,
+        "strategy": "995.4597916",
+        "baseline": "958.2441807972"
+      },
+      {
+        "time": 1789038000000,
+        "strategy": "994.9445916",
+        "baseline": "956.6625167972"
+      },
+      {
+        "time": 1789041600000,
+        "strategy": "994.8549516",
+        "baseline": "956.3873219972"
+      },
+      {
+        "time": 1789045200000,
+        "strategy": "991.0757916",
+        "baseline": "944.7853007972"
+      },
+      {
+        "time": 1789048800000,
+        "strategy": "992.1895116",
+        "baseline": "948.2044211972"
+      },
+      {
+        "time": 1789052400000,
+        "strategy": "993.1397916",
+        "baseline": "951.1217807972"
+      },
+      {
+        "time": 1789056000000,
+        "strategy": "992.4917516",
+        "baseline": "949.1322979972"
+      },
+      {
+        "time": 1789059600000,
+        "strategy": "992.2917916",
+        "baseline": "948.5184207972"
+      },
+      {
+        "time": 1789063200000,
+        "strategy": "991.828706",
+        "baseline": "950.0989795972"
+      },
+      {
+        "time": 1789066800000,
+        "strategy": "991.828706",
+        "baseline": "949.1568579972"
+      },
+      {
+        "time": 1789070400000,
+        "strategy": "991.828706",
+        "baseline": "948.0372903972"
+      },
+      {
+        "time": 1789074000000,
+        "strategy": "991.828706",
+        "baseline": "949.3543203972"
+      },
+      {
+        "time": 1789077600000,
+        "strategy": "991.828706",
+        "baseline": "947.8306179972"
+      },
+      {
+        "time": 1789081200000,
+        "strategy": "991.828706",
+        "baseline": "944.0539039972"
+      },
+      {
+        "time": 1789084800000,
+        "strategy": "991.828706",
+        "baseline": "940.7661795972"
+      }
+    ],
+    "trades": [
+      {
+        "key": "proposal:0",
+        "entryAt": "2026-09-04T14:00:00.000Z",
+        "entryPrice": "79000",
+        "quantity": "0.002",
+        "stopLossPrice": "77800",
+        "takeProfitPrice": "80000",
+        "exit": {
+          "at": "2026-09-05T16:00:00.000Z",
+          "price": "80000",
+          "reason": "take_profit"
+        },
+        "fees": "0.318",
+        "pnl": "1.682"
+      },
+      {
+        "key": "proposal:1",
+        "entryAt": "2026-09-06T15:00:00.000Z",
+        "entryPrice": "79582.85",
+        "quantity": "0.002",
+        "stopLossPrice": "78900",
+        "takeProfitPrice": "80300",
+        "exit": {
+          "at": "2026-09-06T23:00:00.000Z",
+          "price": "80300",
+          "reason": "take_profit"
+        },
+        "fees": "0.3197657",
+        "pnl": "1.1145343"
+      },
+      {
+        "key": "proposal:2",
+        "entryAt": "2026-09-07T15:00:00.000Z",
+        "entryPrice": "79000",
+        "quantity": "0.003",
+        "stopLossPrice": "78200",
+        "takeProfitPrice": "80200",
+        "exit": {
+          "at": "2026-09-08T07:00:00.000Z",
+          "price": "78160.9",
+          "reason": "stop_loss"
+        },
+        "fees": "0.4714827",
+        "pnl": "-2.9887827"
+      },
+      {
+        "key": "proposal:5",
+        "entryAt": "2026-09-09T05:00:00.000Z",
+        "entryPrice": "79000",
+        "quantity": "0.004",
+        "stopLossPrice": "76500",
+        "takeProfitPrice": "81000",
+        "exit": {
+          "at": "2026-09-10T17:00:00.000Z",
+          "price": "77161.4",
+          "reason": "holding_deadline"
+        },
+        "fees": "0.6246456",
+        "pnl": "-7.9790456"
+      }
+    ],
+    "limitations": [
+      "This replays a fixture of recorded proposals. It shows how the execution checks and the simulator treat those decisions, not how the AI trades.",
+      "Candles give only each hour's open, high, low and close, so within a candle the simulator assumes the worst order: a stop loss fills before a take profit, and an entry that fills during a candle can be stopped out in it but takes no profit until the next one.",
+      "Limit orders fill only when the price trades through them, in full, at their own price. Queue position, partial fills and order book depth are not modelled.",
+      "Taker fills (buys at the ask, stop losses, and closes for deadlines, loss limits and range exits) land 0.05% beyond the price, and a stop the market opens through sells from the open. Real slippage depends on liquidity and can be much larger.",
+      "Fees are 0.1% on maker fills and 0.1% on taker fills, charged in USDT. Binance takes a buy's fee in the asset bought, so its exits sell slightly less.",
+      "The strategy acts once an hour, at each candle's open. New entries, expiries, holding deadlines and loss limits are checked then, so an exit can come up to an hour late and a loss can pass a limit before it is measured.",
+      "A strategy paused by a loss limit stays paused for the rest of the backtest. A customer could resume it.",
+      "At most 3 entries are held at once: Binance allows 5 open stop orders per symbol per account, and the backtest assumes no other order uses them.",
+      "Exchange filters (tick size, lot step and minimum order value) are today's, from Binance's public market data. They may have differed during the period.",
+      "History comes from Binance's live spot market at data-api.binance.vision, not the testnet, which keeps about a day of candles.",
+      "Open entries and the buy-and-hold baseline are valued at the last close, without a sell fee.",
+      "Past results do not predict future ones. Passing software tests is not evidence of profitable trading."
+    ]
+  }
+}

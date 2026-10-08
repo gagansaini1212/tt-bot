@@ -58,9 +58,15 @@ importers:
 
   apps/web:
     dependencies:
+      '@crypto-trading/backtest':
+        specifier: workspace:*
+        version: link:../../packages/backtest
       '@crypto-trading/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@crypto-trading/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@crypto-trading/exchanges':
         specifier: workspace:*
         version: link:../../packages/exchanges
@@ -151,6 +157,31 @@ importers:
         version: 4.23.15
       typescript:
         specifier: ^5
+        version: 5.9.3
+
+  packages/backtest:
+    dependencies:
+      '@crypto-trading/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@crypto-trading/exchanges':
+        specifier: workspace:*
+        version: link:../exchanges
+      decimal.js:
+        specifier: ^10.6.0
+        version: 10.6.0
+      zod:
+        specifier: ^4.1.8
+        version: 4.6.5
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.19.0
+      tsx:
+        specifier: ^4.20.5
+        version: 4.23.15
+      typescript:
+        specifier: ^5.9.2
         version: 5.9.3
 
   packages/database:

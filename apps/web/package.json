@@ -11,7 +11,9 @@
     "test": "tsx --conditions=react-server --experimental-test-module-mocks --test \"src/**/*.test.ts\""
   },
   "dependencies": {
+    "@crypto-trading/backtest": "workspace:*",
     "@crypto-trading/database": "workspace:*",
+    "@crypto-trading/domain": "workspace:*",
     "@crypto-trading/exchanges": "workspace:*",
     "better-auth": "1.7.6",
     "class-variance-authority": "^0.7.1",

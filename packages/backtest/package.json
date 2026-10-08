@@ -1,0 +1,25 @@
+{
+  "name": "@crypto-trading/backtest",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json",
+    "test": "tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@crypto-trading/domain": "workspace:*",
+    "@crypto-trading/exchanges": "workspace:*",
+    "decimal.js": "^10.6.0",
+    "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  }
+}
