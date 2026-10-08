@@ -8,7 +8,7 @@
     "check": "tsc --noEmit",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx --conditions=react-server --test src/**/*.test.ts"
+    "test": "tsx --conditions=react-server --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@crypto-trading/exchanges": "workspace:*",
