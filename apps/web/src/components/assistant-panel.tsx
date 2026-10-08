@@ -8,8 +8,9 @@ import {
   type UIEvent,
 } from "react";
 import { Bot, Send, Square } from "lucide-react";
-import { useEveAgent } from "eve/react";
+import { useEveAgent, type EveMessagePart } from "eve/react";
 
+import { AssistantToolPart } from "@/components/assistant-tool-part";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -120,16 +121,16 @@ export function AssistantPanel({
                 <p className="mb-1 text-[11px] font-medium uppercase tracking-wider">
                   {message.role === "user" ? "You" : "Assistant"}
                 </p>
-                {message.parts.map((part, index) =>
-                  part.type === "text" ? (
-                    <p
-                      className="text-sm leading-5"
-                      key={`${message.id}-${index}`}
-                    >
-                      {part.text}
-                    </p>
-                  ) : null,
-                )}
+                {message.parts.map((part, index) => (
+                  <MessagePart
+                    key={
+                      part.type === "dynamic-tool"
+                        ? part.toolCallId
+                        : `${message.id}-${index}`
+                    }
+                    part={part}
+                  />
+                ))}
               </div>
             ))
           )}
@@ -172,4 +173,17 @@ export function AssistantPanel({
       </CardContent>
     </Card>
   );
+}
+
+function MessagePart({ part }: { part: EveMessagePart }) {
+  switch (part.type) {
+    case "text":
+      return <p className="text-sm leading-5">{part.text}</p>;
+    case "dynamic-tool":
+      return <AssistantToolPart part={part} />;
+    default:
+      // Reasoning, step boundaries, attachments and authorization prompts are
+      // not shown: the panel sends text only and the agent has no connections.
+      return null;
+  }
 }
