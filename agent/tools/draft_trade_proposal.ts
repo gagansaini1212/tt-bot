@@ -36,23 +36,25 @@ export default defineTool({
 });
 
 /**
- * Resolves the customer from the caller's route-auth principal. Signed-in
- * customers arrive as `user` principals. eve's `localDev()` admits requests as
- * a synthetic `local-dev` principal only while the process is a local
- * development server, so that principal stands in for the local customer.
- * Anonymous, service, and runtime callers are not customers.
+ * Resolves the customer from the caller's route-auth principal. Customer
+ * sign-in does not exist yet, so the only accepted caller is eve's `localDev()`
+ * principal, which eve issues only while the process is a local development
+ * server; it stands in for the local customer. Every other route-auth caller is
+ * rejected, including Vercel OIDC `user` principals, which identify Vercel team
+ * members and connected accounts rather than customers. Accept the customer
+ * authenticator here when customer sign-in is added.
  */
 function customerIdFor(caller: SessionAuthContext | null): string {
-  const isLocalDeveloper =
+  if (
     caller?.authenticator === "local-dev" &&
-    caller.principalType === "local-dev";
-  if (caller && (caller.principalType === "user" || isLocalDeveloper)) {
+    caller.principalType === "local-dev"
+  ) {
     return caller.principalId;
   }
 
   throw new Error(
     caller
-      ? `An authenticated customer is required to draft a proposal. The caller is authenticated as "${caller.principalType}", not as a customer.`
+      ? `An authenticated customer is required to draft a proposal. The caller authenticated through "${caller.authenticator}" as "${caller.principalType}", which does not identify a customer.`
       : "An authenticated customer is required to draft a proposal.",
   );
 }
