@@ -38,8 +38,8 @@ export function orders({
     });
     return desk;
   };
-  const off = loaded.ok ? "" : loaded.message;
-  const disabled = { status: "rejected" as const, message: off };
+  const disabledMessage = loaded.ok ? "" : loaded.message;
+  const disabled = { status: "rejected" as const, message: disabledMessage };
   return {
     ticket: handler({
       query: z.strictObject({}),
@@ -47,7 +47,7 @@ export function orders({
         const desk = deskFor(exchange);
         return desk
           ? { status: "connected", ticket: await desk.ticket() }
-          : { status: "connected", disabled: off };
+          : { status: "connected", disabled: disabledMessage };
       },
     }),
     place: handler({

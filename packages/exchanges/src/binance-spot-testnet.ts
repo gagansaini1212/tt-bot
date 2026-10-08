@@ -1,6 +1,8 @@
 import { createHmac, createPrivateKey, sign } from "node:crypto";
 import { z } from "zod";
 import {
+  binanceSymbol,
+  instrumentForSymbol,
   positiveDecimal,
   protectedEntrySchema,
   protectedLegIds,
@@ -669,7 +671,7 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
         this.getOpenOrderLists(),
       ]);
     const orders = [...btcOrders, ...ethOrders];
-    const orderLists = lists.filter((list) => instrumentOf(list.symbol));
+    const orderLists = lists.filter((list) => instrumentForSymbol(list.symbol));
     // Binance documents no rule for whether openOrders includes the legs it
     // holds back until an entry fills, so look up any that are missing.
     const open = new Set(
@@ -681,7 +683,7 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
           list.orders
             .filter((leg) => !open.has(`${leg.symbol}:${leg.orderId}`))
             .map((leg) =>
-              this.getOrderById(instrumentOf(list.symbol)!, leg.orderId),
+              this.getOrderById(instrumentForSymbol(list.symbol)!, leg.orderId),
             ),
         ),
       )
@@ -760,15 +762,7 @@ function symbolRules(
   });
 }
 
-function instrumentOf(binanceSymbol: string) {
-  return testnetInstrumentSchema.options.find(
-    (instrument) => symbol(instrument) === binanceSymbol,
-  );
-}
-
-function symbol(instrument: TestnetInstrument) {
-  return testnetInstrumentSchema.parse(instrument).replace("-", "");
-}
+const symbol = binanceSymbol;
 function boundedLimit(max: number) {
   return z.number().int().min(1).max(max);
 }

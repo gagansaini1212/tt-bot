@@ -48,6 +48,14 @@ export const manualCancelRequestSchema = z.strictObject({
 });
 export type ManualCancelRequest = z.infer<typeof manualCancelRequestSchema>;
 
+const manualOrderCheckSchema = z.object({
+  name: z.enum(["price", "limits", "cap", "filters", "balance"]),
+  label: z.string(),
+  passed: z.boolean(),
+  detail: z.string(),
+});
+export type ManualOrderCheck = z.infer<typeof manualOrderCheckSchema>;
+
 /** What the dashboard shows after a placement, status lookup or cancel. */
 export const manualOrderOutcomeSchema = z.object({
   status: z.enum([
@@ -72,16 +80,7 @@ export const manualOrderOutcomeSchema = z.object({
   message: z.string().max(500),
   listClientOrderId: listClientOrderIdSchema.optional(),
   unprotectedQuantity: decimal.optional(),
-  checks: z
-    .array(
-      z.object({
-        name: z.enum(["price", "limits", "cap", "filters", "balance"]),
-        label: z.string(),
-        passed: z.boolean(),
-        detail: z.string(),
-      }),
-    )
-    .optional(),
+  checks: z.array(manualOrderCheckSchema).optional(),
 });
 export type ManualOrderOutcome = z.infer<typeof manualOrderOutcomeSchema>;
 
@@ -186,19 +185,27 @@ export const manualOrderTicketSchema = z.object({
 });
 export type ManualOrderTicket = z.infer<typeof manualOrderTicketSchema>;
 
-export type ManualOrderCheck = {
-  name: "price" | "limits" | "cap" | "filters" | "balance";
-  label: string;
-  passed: boolean;
-  detail: string;
-};
-
 export type ManualOrderPlan = {
   passed: boolean;
   checks: ManualOrderCheck[];
   entry?: ProtectedEntry;
   notional?: string;
 };
+
+/**
+ * The most a market entry pays: the best ask plus the configured slippage,
+ * floored to the tick so it never exceeds that slippage.
+ */
+export function marketEntryPrice(
+  bestAsk: string,
+  slippage: string,
+  tickSize: string,
+) {
+  return floorToStep(
+    new Decimal(bestAsk).times(new Decimal(1).plus(slippage)),
+    tickSize,
+  ).toFixed();
+}
 
 /**
  * Runs the account-limit check from `authorizeTradeProposal`, the per-order
@@ -229,13 +236,11 @@ export function planManualOrder(
       );
     if (!market?.bestAsk)
       return failure("No current ask price from Binance. Refresh and retry.");
-    // Floored to the tick, so the bound never exceeds the configured slippage.
-    price = floorToStep(
-      new Decimal(market.bestAsk).times(
-        new Decimal(1).plus(ticket.marketSlippage),
-      ),
+    price = marketEntryPrice(
+      market.bestAsk,
+      ticket.marketSlippage,
       market.rules.tickSize,
-    ).toFixed();
+    );
     checks.push({
       name: "price",
       label: "Market price",

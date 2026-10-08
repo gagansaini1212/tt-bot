@@ -6,6 +6,18 @@ import { z } from "zod";
 export const testnetInstrumentSchema = z.enum(["BTC-USDT", "ETH-USDT"]);
 export type TestnetInstrument = z.infer<typeof testnetInstrumentSchema>;
 
+/** BTC-USDT → BTCUSDT */
+export function binanceSymbol(instrument: TestnetInstrument) {
+  return testnetInstrumentSchema.parse(instrument).replace("-", "");
+}
+
+/** BTCUSDT → BTC-USDT, or undefined for other markets. */
+export function instrumentForSymbol(symbol: string) {
+  return testnetInstrumentSchema.options.find(
+    (instrument) => binanceSymbol(instrument) === symbol,
+  );
+}
+
 const decimal = z.string().regex(/^\d+(\.\d+)?$/);
 export const positiveDecimal = decimal.refine((value) => /[1-9]/.test(value));
 

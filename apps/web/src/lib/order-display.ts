@@ -3,9 +3,8 @@ import Decimal from "decimal.js";
 import type { TestnetOrder, TestnetSnapshot } from "@crypto-trading/exchanges";
 import {
   floorToStep,
+  instrumentForSymbol,
   protectedLeg,
-  testnetInstrumentSchema,
-  type TestnetInstrument,
 } from "@crypto-trading/exchanges/order-rules";
 
 /** A new client ID for one order list. Retries of that order reuse it. */
@@ -34,11 +33,7 @@ export function quantityForShare(
   return quantity.greaterThan(0) ? quantity.toFixed() : undefined;
 }
 
-export function instrumentOf(symbol: string): TestnetInstrument | undefined {
-  return testnetInstrumentSchema.options.find(
-    (instrument) => instrument.replace("-", "") === symbol,
-  );
-}
+export const instrumentOf = instrumentForSymbol;
 
 export function baseAsset(symbol: string) {
   return instrumentOf(symbol)?.split("-")[0] ?? symbol;

@@ -33,8 +33,9 @@ export async function getOrderTicket(): Promise<OrderTicketState> {
 }
 
 /**
- * A write's outcome when the worker did not answer. Some failures mean the
- * request was never sent. After the others it may have reached Binance.
+ * A write's outcome when the worker did not confirm it. A missing token, an
+ * invalid URL, a worker without credentials or a refused body mean the order
+ * never reached Binance. After any other failure it may have.
  */
 function writeFailure(
   failure: WorkerFailure,

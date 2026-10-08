@@ -18,12 +18,13 @@ import {
 } from "lucide-react";
 import {
   manualOrderRequestSchema,
+  marketEntryPrice,
   planManualOrder,
   type ManualOrderOutcome,
   type ManualOrderTicket,
 } from "@crypto-trading/exchanges/manual-order";
 import {
-  floorToStep,
+  binanceSymbol,
   type TestnetInstrument,
 } from "@crypto-trading/exchanges/order-rules";
 
@@ -45,6 +46,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import {
+  baseAsset,
   isDecimal,
   newListClientOrderId,
   quantityForShare,
@@ -212,15 +214,14 @@ function orderForm(draft: Draft, ticket: ManualOrderTicket) {
   const market = ticket.markets.find(
     (entry) => entry.rules.instrument === instrument,
   );
-  const base = instrument.split("-")[0];
+  const base = baseAsset(binanceSymbol(instrument));
   const marketPrice =
     market?.bestAsk && ticket.marketSlippage !== null
-      ? floorToStep(
-          new Decimal(market.bestAsk).times(
-            new Decimal(1).plus(ticket.marketSlippage),
-          ),
+      ? marketEntryPrice(
+          market.bestAsk,
+          ticket.marketSlippage,
           market.rules.tickSize,
-        ).toFixed()
+        )
       : undefined;
   const entryPrice = draft.type === "limit" ? draft.price : marketPrice;
   const parsed = manualOrderRequestSchema.safeParse({

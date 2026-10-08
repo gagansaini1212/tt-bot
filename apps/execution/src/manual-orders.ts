@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import Decimal from "decimal.js";
 import { z } from "zod";
 import {
+  binanceSymbol,
   BinanceTestnetError,
   cancelImpact,
   listClientOrderIdSchema,
@@ -42,7 +43,7 @@ export type ManualOrderExchange = Pick<
   | "cancelOrderById"
 >;
 
-const percent = /^\d+(\.\d+)?$/;
+const decimalPattern = /^\d+(\.\d+)?$/;
 const MAX_MARKET_SLIPPAGE_PERCENT = 5;
 
 /**
@@ -67,19 +68,19 @@ export function loadManualTradingConfig(
       "Set TESTNET_MANUAL_INSTRUMENTS to BTC-USDT, ETH-USDT or both in the execution worker to place orders from the dashboard.",
     );
   const allocation = env.TESTNET_MANUAL_ALLOCATION_USDT ?? "";
-  if (!percent.test(allocation) || !new Decimal(allocation).gt(0))
+  if (!decimalPattern.test(allocation) || !new Decimal(allocation).gt(0))
     return off(
       "Set a positive TESTNET_MANUAL_ALLOCATION_USDT in the execution worker to place orders from the dashboard.",
     );
   const cap = env.TESTNET_MAX_ORDER_NOTIONAL_USDT ?? "";
-  if (!percent.test(cap) || !new Decimal(cap).gt(0))
+  if (!decimalPattern.test(cap) || !new Decimal(cap).gt(0))
     return off(
       "Set a positive TESTNET_MAX_ORDER_NOTIONAL_USDT in the execution worker to place orders from the dashboard.",
     );
   const slippage = env.TESTNET_MARKET_MAX_SLIPPAGE_PERCENT?.trim();
   if (
     slippage &&
-    (!percent.test(slippage) ||
+    (!decimalPattern.test(slippage) ||
       !new Decimal(slippage).gt(0) ||
       new Decimal(slippage).gt(MAX_MARKET_SLIPPAGE_PERCENT))
   )
@@ -513,7 +514,7 @@ function resolveTarget(
   // A leg Binance holds back until the entry fills may not be listed as open.
   const list = lists.find(
     (entry) =>
-      entry.symbol === instrument.replace("-", "") &&
+      entry.symbol === binanceSymbol(instrument) &&
       entry.orders.some((leg) => leg.orderId === orderId),
   );
   return list && open.find((entry) => entry.orderListId === list.orderListId);
