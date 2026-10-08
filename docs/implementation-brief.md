@@ -2,6 +2,8 @@
 
 Status: consolidated from accepted interview answers Q1–47; awaiting final shared-understanding confirmation before implementation.
 
+> **Amended 2026-10-08 by [ADR 0004](adr/0004-hold-several-protected-entries-per-strategy.md).** One strategy may hold several protected entries, which allows DCA, grid and AI-managed strategies. "No additions or averaging down initially" no longer holds: an addition is a new protected entry with its own stop loss, take profit and holding deadline, within the strategy's allocation, position limit and entry limit. Holding deadlines start at each entry's first fill. One strategy still owns an instrument's position per exchange account. The rest of this brief is unchanged.
+
 ## Product
 
 Build a local-first, multi-customer trading application using eve. Customers connect their own exchange accounts, assign capital per account and strategy, choose assets and holding horizons, and authorize automated trading within their own limits beneath platform maximums.

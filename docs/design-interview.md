@@ -1,5 +1,7 @@
 # Trading agent design interview
 
+> **Amended 2026-10-08 by [ADR 0004](adr/0004-hold-several-protected-entries-per-strategy.md).** A strategy may now hold several protected entries, each with its own stop loss, take profit and holding deadline, to support DCA, grid and AI-managed strategies (issue #16). This replaces the round seven answer "No automatic averaging down or additions to an existing position initially". Holding deadlines now start at each entry's first fill. The answers below are kept as they were given.
+
 ## Stated requirements
 
 - Build with eve.
