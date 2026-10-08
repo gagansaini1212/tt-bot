@@ -8,23 +8,13 @@ import {
   depthPath,
   niceTicks,
   type DepthCurve,
+  type DepthDomain,
 } from "@/lib/depth-chart";
 
 const HEIGHT = 240;
 const MARGIN = { top: 12, right: 56, bottom: 24, left: 4 };
 
-/**
- * Cumulative bids (left) and asks (right) around the mid price, drawn as SVG
- * with the market colors, so it follows the theme through CSS alone. The
- * order book beside it lists the same levels as a table.
- */
-export function DepthChart({
-  curve,
-  priceDigits,
-  quantityDigits,
-  base,
-  label,
-}: {
+type DepthChartProps = {
   curve: DepthCurve;
   priceDigits: number;
   quantityDigits: number;
@@ -32,11 +22,20 @@ export function DepthChart({
   base: string;
   /** The market, such as "BTC/USDT". */
   label: string;
-}) {
+  /** The exact mid price, formatted, when both sides have a level. */
+  mid?: string;
+};
+
+/**
+ * Cumulative bids (left) and asks (right) around the mid price, drawn as SVG
+ * with the market colors, so it follows the theme through CSS alone. The
+ * order book beside it lists the same levels as a table.
+ */
+export function DepthChart(props: DepthChartProps) {
+  // Measured even while the book is empty, so a book that fills in later
+  // still gets a width.
   const containerRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
-  const [hoverPrice, setHoverPrice] = useState<number | null>(null);
-  const clipId = `depth-${useId().replace(/[^\w-]/g, "")}`;
 
   useEffect(() => {
     const observer = new ResizeObserver(([entry]) =>
@@ -46,20 +45,37 @@ export function DepthChart({
     return () => observer.disconnect();
   }, []);
 
-  const domain = depthDomain(curve);
-  if (!domain)
-    return (
-      <p className="text-sm text-muted-foreground">The order book is empty.</p>
-    );
+  const domain = depthDomain(props.curve);
+  return (
+    <div ref={containerRef}>
+      {domain ? (
+        <DepthPlot {...props} domain={domain} width={width} />
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          The order book is empty.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function DepthPlot({
+  curve,
+  priceDigits,
+  quantityDigits,
+  base,
+  label,
+  mid: exactMid,
+  domain,
+  width,
+}: DepthChartProps & { domain: DepthDomain; width: number }) {
+  const [hoverPrice, setHoverPrice] = useState<number | null>(null);
+  const clipId = `depth-${useId().replace(/[^\w-]/g, "")}`;
 
   const { mid, min, max, maxTotal } = domain;
   const price = new Intl.NumberFormat("en-US", {
     minimumFractionDigits: priceDigits,
     maximumFractionDigits: priceDigits,
-  });
-  const midPrice = new Intl.NumberFormat("en-US", {
-    minimumFractionDigits: priceDigits,
-    maximumFractionDigits: priceDigits + 1,
   });
   const quantity = new Intl.NumberFormat("en-US", {
     maximumFractionDigits: quantityDigits,
@@ -83,6 +99,7 @@ export function DepthChart({
       ? [min, mid, max]
       : [min, (min + mid) / 2, mid, (mid + max) / 2, max];
 
+  const midText = exactMid ?? price.format(mid);
   const range = `±${(((max - mid) / mid) * 100).toFixed(2)}%`;
   const bids = depthAt(curve, mid, min).total;
   const asks = depthAt(curve, mid, max).total;
@@ -110,15 +127,15 @@ export function DepthChart({
           </>
         ) : (
           <>
-            Mid <span className="text-foreground">{midPrice.format(mid)}</span>{" "}
-            · {range} shown
+            Mid <span className="text-foreground">{midText}</span> · {range}{" "}
+            shown
           </>
         )}
       </p>
-      <div className="h-60 w-full" ref={containerRef}>
+      <div className="h-60 w-full">
         {width > 0 ? (
           <svg
-            aria-label={`Market depth for ${label}: ${quantity.format(bids)} ${base} of bids and ${quantity.format(asks)} ${base} of asks within ${range} of the mid price, ${midPrice.format(mid)}.`}
+            aria-label={`Market depth for ${label}: ${quantity.format(bids)} ${base} of bids and ${quantity.format(asks)} ${base} of asks within ${range} of the mid price, ${midText}.`}
             className="block text-[11px]"
             height={HEIGHT}
             role="img"
