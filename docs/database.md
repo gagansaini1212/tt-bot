@@ -119,7 +119,7 @@ Each protected entry ([ADR 0004](adr/0004-hold-several-protected-entries-per-str
 
 `exchange_orders` keeps what Binance last reported for each order: the entry, and each exit once Binance sizes it after the entry fills. Placements, status checks and cancels update it. Cancels are audited as `order.cancelled`.
 
-A stop-limit entry is an intent with a `trigger` in `manual_order` and status `pending`, and nothing is sent ([ADR 0006](adr/0006-hold-stop-limit-triggers-and-sell-unprotected-quantity.md)). When its stop price trades, the loop moves it to `submitting`, queues its reconcile job, and sends it like any dashboard entry. The customer can cancel it while it is `pending`, which makes it `cancelled`.
+A stop-limit entry is an intent with a `trigger` in `manual_order` and status `pending`, and nothing is sent ([ADR 0007](adr/0007-hold-stop-limit-triggers-and-sell-unprotected-quantity.md)). When its stop price trades, the loop moves it to `submitting`, queues its reconcile job, and sends it like any dashboard entry. The customer can cancel it while it is `pending`, which makes it `cancelled`.
 
 Before PostgreSQL, intents were files in `.testnet-orders/`. The worker refuses to start or place CLI orders while that directory holds any. `pnpm exchange import-journal` copies them in for the dev customer, keeping each outcome; an unconfirmed one becomes `unknown`. Delete the directory afterwards.
 
