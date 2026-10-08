@@ -33,7 +33,7 @@ export function AccountBalances({ balances }: { balances: Balance[] }) {
         <h2 className="text-sm font-medium">Virtual balances</h2>
         <input
           aria-label="Filter balances"
-          className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-48"
+          className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring sm:w-48"
           onChange={(event) => setSearch(event.target.value)}
           placeholder="Search assets…"
           type="search"
