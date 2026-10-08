@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { after, before, describe, test } from "node:test";
-import { DEV_CUSTOMER_ID, DEV_EXCHANGE_ACCOUNT_ID } from "./dev-seed";
+import { verifyPassword } from "better-auth/crypto";
+import {
+  DEV_CUSTOMER_ID,
+  DEV_EXCHANGE_ACCOUNT_ID,
+  DEV_USER_EMAIL,
+  DEV_USER_ID,
+  DEV_USER_PASSWORD,
+} from "./dev-seed";
 import {
   assertRowLevelSecurity,
   createDatabase,
   withCustomerScope,
 } from "./index";
 import {
+  allowDevelopmentSignIn,
   createDevelopmentLogin,
   seedDevelopment,
   verifyAppConnection,
@@ -64,6 +72,11 @@ describe("development seed", { skip: databaseTestsSkipped }, () => {
         },
       ],
     );
+    await assert.rejects(
+      verifyAppConnection(database.appUrl),
+      /permission denied for table auth_users/,
+    );
+    await allowDevelopmentSignIn(database.admin, database.appUrl);
     await verifyAppConnection(database.appUrl);
     await assert.rejects(
       verifyAppConnection(database.adminUrl),
@@ -96,6 +109,75 @@ describe("development seed", { skip: databaseTestsSkipped }, () => {
         createDevelopmentLogin(database.admin, url.toString()),
         /user name and password/,
       );
+    } finally {
+      await database.admin.unsafe(`drop role if exists ${role}`);
+    }
+  });
+
+  test("creates the dev login for the dev customer once", async () => {
+    await seedDevelopment(database.admin);
+    const logins = await database.admin`
+      select id, customer_id, email, email_verified from auth_users
+    `;
+    assert.deepEqual(
+      [...logins],
+      [
+        {
+          id: DEV_USER_ID,
+          customer_id: DEV_CUSTOMER_ID,
+          email: DEV_USER_EMAIL,
+          email_verified: true,
+        },
+      ],
+    );
+    const [account] = await database.admin<{ password: string }[]>`
+      select password from auth_accounts
+      where user_id = ${DEV_USER_ID} and account_id = ${DEV_USER_ID}
+        and provider_id = 'credential'
+    `;
+    assert.ok(
+      await verifyPassword({
+        hash: account.password,
+        password: DEV_USER_PASSWORD,
+      }),
+    );
+
+    // A second run leaves a changed password as it is.
+    await database.admin`
+      update auth_accounts set password = 'changed' where user_id = ${DEV_USER_ID}
+    `;
+    await seedDevelopment(database.admin);
+    const accounts = await database.admin`
+      select password from auth_accounts where user_id = ${DEV_USER_ID}
+    `;
+    assert.deepEqual([...accounts], [{ password: "changed" }]);
+  });
+
+  test("lets DATABASE_URL's login role use the sign-in tables once", async () => {
+    const role = `ct_test_${randomBytes(6).toString("hex")}`;
+    const url = new URL(database.adminUrl);
+    url.username = role;
+    url.password = "login";
+    try {
+      await createDevelopmentLogin(database.admin, url.toString());
+      const login = createDatabase(url.toString(), { max: 1 });
+      try {
+        await assert.rejects(
+          login`select from auth_sessions`,
+          /permission denied/,
+        );
+        assert.equal(
+          await allowDevelopmentSignIn(database.admin, url.toString()),
+          true,
+        );
+        assert.equal(
+          await allowDevelopmentSignIn(database.admin, url.toString()),
+          false,
+        );
+        await login`select from auth_sessions`;
+      } finally {
+        await login.end();
+      }
     } finally {
       await database.admin.unsafe(`drop role if exists ${role}`);
     }

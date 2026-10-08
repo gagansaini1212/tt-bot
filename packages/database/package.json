@@ -14,6 +14,7 @@
     "test": "tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
+    "better-auth": "1.7.6",
     "postgres": "^3.4.7"
   },
   "devDependencies": {
