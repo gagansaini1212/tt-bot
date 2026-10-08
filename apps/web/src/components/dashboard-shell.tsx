@@ -14,6 +14,7 @@ import {
   Workflow,
 } from "lucide-react";
 
+import { KillSwitch } from "@/components/kill-switch";
 import { OrderTicket } from "@/components/order-ticket";
 import {
   SignedInCustomer,
@@ -156,6 +157,7 @@ export function DashboardShell({
               <Brand />
             </Link>
             <div className="flex shrink-0 items-center gap-2">
+              <KillSwitch compact />
               <Button onClick={() => setTradeOpen(true)} size="lg">
                 <ArrowLeftRight />
                 Trade
@@ -203,6 +205,7 @@ export function DashboardShell({
             <span className="text-xs text-muted-foreground">
               Binance Spot Testnet · virtual funds
             </span>
+            <KillSwitch />
             <Button onClick={() => setTradeOpen(true)}>
               <ArrowLeftRight />
               Trade

@@ -4,6 +4,7 @@ import { AccountRefresh } from "@/components/account-refresh";
 import { PageHeader } from "@/components/page-header";
 import { ExchangeKeysPanel } from "@/components/settings/exchange-keys-panel";
 import { NotificationsPanel } from "@/components/settings/notifications-panel";
+import { PortfolioLimitsPanel } from "@/components/settings/portfolio-limits-panel";
 import { RiskLimitsPanel } from "@/components/settings/risk-limits-panel";
 import { SettingsTabs } from "@/components/settings/settings-tabs";
 import {
@@ -13,6 +14,7 @@ import {
   getWebhook,
 } from "@/lib/settings";
 import { settingsTab } from "@/lib/settings-tabs";
+import { getPortfolioLimits } from "@/lib/strategies";
 
 export const metadata: Metadata = { title: "Settings" };
 export const dynamic = "force-dynamic";
@@ -21,9 +23,10 @@ export default async function SettingsPage({
   searchParams,
 }: PageProps<"/settings">) {
   const initial = settingsTab((await searchParams).tab);
-  const [keys, limits, webhook, notifications] = await Promise.all([
+  const [keys, limits, portfolio, webhook, notifications] = await Promise.all([
     getExchangeKeys(),
     getRiskLimits(),
+    getPortfolioLimits(),
     getWebhook(),
     getNotifications(),
   ]);
@@ -35,14 +38,19 @@ export default async function SettingsPage({
     <>
       <PageHeader
         action={<AccountRefresh />}
-        description="Your Binance Spot Testnet keys, the limits on orders you place by hand, and where alerts go. Testnet only: live trading is turned off."
+        description="Your Binance Spot Testnet keys, the limits on orders you place by hand and on your strategies together, and where alerts go. Testnet only: live trading is turned off."
         title="Settings"
       />
       <SettingsTabs
         initial={initial}
         panels={{
           keys: <ExchangeKeysPanel state={keys} />,
-          risk: <RiskLimitsPanel state={limits} />,
+          risk: (
+            <>
+              <RiskLimitsPanel state={limits} />
+              <PortfolioLimitsPanel state={portfolio} />
+            </>
+          ),
           notifications: (
             <NotificationsPanel
               notifications={notifications}

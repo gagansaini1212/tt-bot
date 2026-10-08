@@ -8,6 +8,11 @@ import {
   webhookRequestSchema,
 } from "@crypto-trading/exchanges/settings";
 
+import {
+  PORTFOLIO_DRAWDOWN_LIMITS,
+  portfolioLimitsChangeRequestSchema,
+} from "@crypto-trading/exchanges/strategies";
+
 import { requireFreshSession } from "@/lib/fresh-session";
 import { isLocalRequest } from "@/lib/local-request";
 import {
@@ -21,6 +26,7 @@ import {
   testExchangeConnection,
   type SettingsActionResult,
 } from "@/lib/settings";
+import { savePortfolioLimits } from "@/lib/strategies";
 
 // These actions change what the worker trades with, so like the order
 // actions they refuse any request that is not from this machine. Keys and
@@ -94,6 +100,21 @@ export async function changeRiskLimits(
         "Check the limits and try again.",
     };
   const result = await saveRiskLimits(request.data);
+  refresh();
+  return result;
+}
+
+export async function changePortfolioLimits(
+  input: unknown,
+): Promise<SettingsActionResult> {
+  if (!(await isLocalRequest())) return REFUSED;
+  const request = portfolioLimitsChangeRequestSchema.safeParse(input);
+  if (!request.success)
+    return {
+      result: "invalid",
+      message: `The daily drawdown limit must be a percentage from ${PORTFOLIO_DRAWDOWN_LIMITS.min} to ${PORTFOLIO_DRAWDOWN_LIMITS.max}, with at most 2 decimals.`,
+    };
+  const result = await savePortfolioLimits(request.data);
   refresh();
   return result;
 }

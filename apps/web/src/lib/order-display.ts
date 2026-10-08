@@ -4,14 +4,19 @@ import type { TestnetOrder, TestnetSnapshot } from "@crypto-trading/exchanges";
 import {
   floorToStep,
   instrumentForSymbol,
+  isStrategyListId,
   protectedLeg,
 } from "@crypto-trading/exchanges/order-rules";
 
-/** A new client ID for one order list. Retries of that order reuse it. */
-export function newListClientOrderId() {
+/**
+ * A new client ID for one order list. Retries of that order reuse it. IDs
+ * that start like a strategy's are drawn again.
+ */
+export function newListClientOrderId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   const base64 = btoa(String.fromCharCode(...bytes));
-  return `ct_${base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
+  const id = `ct_${base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
+  return isStrategyListId(id) ? newListClientOrderId() : id;
 }
 
 export function isDecimal(value: string) {

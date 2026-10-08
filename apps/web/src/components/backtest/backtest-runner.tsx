@@ -2,12 +2,10 @@
 
 import {
   useEffect,
-  useId,
   useRef,
   useState,
   useSyncExternalStore,
   useTransition,
-  type ComponentProps,
   type FormEvent,
 } from "react";
 import {
@@ -29,10 +27,9 @@ import {
   loadPeriodSummary,
   runBacktest,
 } from "@/app/strategies/backtest-actions";
+import { Choice, Field } from "@/components/form-fields";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button, buttonVariants } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
 import type { BacktestOutcome, PeriodSummaryOutcome } from "@/lib/backtest";
 import { formatPriceText } from "@/lib/backtest-display";
 import {
@@ -79,18 +76,24 @@ function withSuggestedPrices(
 /**
  * Runs a strategy's rules over up to 30 days of past hourly candles, on the
  * same planners, execution checks and loss limits as live strategies, and
- * shows the metrics, the equity curve and the trades.
+ * shows the metrics, the equity curve and the trades. `initialForm` starts
+ * it from a strategy's rules, whose prices it keeps.
  */
-export function BacktestRunner() {
+export function BacktestRunner({
+  initialForm,
+}: {
+  initialForm?: BacktestForm;
+} = {}) {
   const today = useSyncExternalStore(noSubscription, utcToday, serverToday);
-  const [form, setForm] = useState<BacktestForm>(DEFAULT_FORM);
+  const [form, setForm] = useState<BacktestForm>(initialForm ?? DEFAULT_FORM);
   const [summary, setSummary] = useState<PeriodSummaryOutcome>();
   const [outcome, setOutcome] = useState<BacktestOutcome>();
   const [problem, setProblem] = useState<string>();
   const [running, startRunning] = useTransition();
   const [loadingSummary, startLoadingSummary] = useTransition();
-  // Prices follow the period's open until the customer edits one.
-  const followOpen = useRef(true);
+  // Prices follow the period's open until the customer edits one, unless
+  // they came from a strategy's rules.
+  const followOpen = useRef(!initialForm);
 
   const fixture = RECORDED_PROPOSAL_FIXTURES.find(
     (entry) => entry.id === form.fixtureId,
@@ -591,85 +594,6 @@ function StandingFields({
         <Plus />
         Add an entry
       </Button>
-    </fieldset>
-  );
-}
-
-function Field({
-  label,
-  hint,
-  onChange,
-  ...props
-}: Omit<ComponentProps<typeof Input>, "onChange"> & {
-  label: string;
-  hint?: string;
-  onChange: (value: string) => void;
-}) {
-  const id = useId();
-  return (
-    <div className="min-w-0 space-y-1.5">
-      <Label htmlFor={id}>{label}</Label>
-      <Input
-        aria-describedby={hint ? `${id}-hint` : undefined}
-        id={id}
-        onChange={(event) => onChange(event.target.value)}
-        {...props}
-      />
-      {hint ? (
-        <p className="text-xs text-muted-foreground" id={`${id}-hint`}>
-          {hint}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-/** A segmented control built from radio buttons. */
-function Choice<T extends string>({
-  label,
-  value,
-  options,
-  onChange,
-  className,
-}: {
-  label: string;
-  value: T;
-  options: { value: T; label: string }[];
-  onChange: (value: T) => void;
-  className?: string;
-}) {
-  const name = useId();
-  return (
-    <fieldset className={cn("min-w-0", className)}>
-      <legend className="mb-1.5 text-sm font-medium">{label}</legend>
-      <div className="flex w-fit max-w-full flex-wrap gap-0.5 rounded-lg border border-border bg-background/40 p-0.5">
-        {options.map((option) => {
-          const selected = option.value === value;
-          return (
-            <label
-              className={cn(
-                buttonVariants({
-                  variant: selected ? "secondary" : "ghost",
-                  size: "sm",
-                }),
-                "cursor-pointer has-[:focus-visible]:ring-3 has-[:focus-visible]:ring-ring/50",
-                selected ? undefined : "text-muted-foreground",
-              )}
-              key={option.value}
-            >
-              <input
-                checked={selected}
-                className="sr-only"
-                name={name}
-                onChange={() => onChange(option.value)}
-                type="radio"
-                value={option.value}
-              />
-              {option.label}
-            </label>
-          );
-        })}
-      </div>
     </fieldset>
   );
 }

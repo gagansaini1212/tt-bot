@@ -1,4 +1,5 @@
 import { BacktestRunner } from "@/components/backtest/backtest-runner";
+import type { BacktestForm } from "@/lib/backtest-form";
 import {
   Card,
   CardContent,
@@ -7,10 +8,22 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
-/** The Strategies page's backtest runner, self-contained. */
-export function BacktestSection() {
+/**
+ * The Strategies page's backtest runner. `seed` starts it from a strategy's
+ * rules; a new seed starts it again.
+ */
+export function BacktestSection({
+  seed,
+}: {
+  seed?: { form: BacktestForm; key: number };
+} = {}) {
   return (
-    <Card aria-labelledby="backtest-title" className="mt-6" role="region">
+    <Card
+      aria-labelledby="backtest-title"
+      className="mt-6 scroll-mt-6"
+      id="backtest"
+      role="region"
+    >
       <CardHeader>
         <CardTitle>
           <h2 id="backtest-title">Backtest</h2>
@@ -23,7 +36,7 @@ export function BacktestSection() {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <BacktestRunner />
+        <BacktestRunner initialForm={seed?.form} key={seed?.key ?? 0} />
       </CardContent>
     </Card>
   );

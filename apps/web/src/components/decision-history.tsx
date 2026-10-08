@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { FlaskConical } from "lucide-react";
+import { RECORDED_FIXTURE_MODEL } from "@crypto-trading/exchanges/strategies";
 import type {
   DecisionView,
   ProposalOrderLeg,
@@ -74,6 +76,12 @@ function Decision({ decision, now }: { decision: DecisionView; now: number }) {
                 ? "Assistant proposal"
                 : "Decision not to trade"}
           </p>
+          {decision.model === RECORDED_FIXTURE_MODEL ? (
+            <Badge className="mt-1" variant="outline">
+              <FlaskConical />
+              Recorded fixture, not AI analysis
+            </Badge>
+          ) : null}
         </div>
         {proposal ? (
           <Badge variant={proposalStatusVariant(proposal.status)}>
@@ -96,9 +104,11 @@ function Decision({ decision, now }: { decision: DecisionView; now: number }) {
         </p>
       ) : null}
       {proposal?.order ? <OrderList proposal={proposal} now={now} /> : null}
-      {proposal && !proposal.strategyId ? (
+      {proposal ? (
         // Kept mounted after a decision, so its outcome stays in view when
-        // the page refreshes with the new status.
+        // the page refreshes with the new status. A strategy's proposals
+        // are drafts only when its customer approves each one, and approving
+        // checks them against the strategy's limits.
         <ProposalActions proposalId={proposal.id} status={proposal.status} />
       ) : null}
       <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">

@@ -1,45 +1,23 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 
-import { BacktestSection } from "@/components/backtest/backtest-section";
+import { AccountRefresh } from "@/components/account-refresh";
 import { PageHeader } from "@/components/page-header";
-import { Badge } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
-import {
-  Card,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { cn } from "@/lib/utils";
+import { StrategiesView } from "@/components/strategies/strategies-view";
+import { getStrategies } from "@/lib/strategies";
 
 export const metadata: Metadata = { title: "Strategies" };
+export const dynamic = "force-dynamic";
 
-export default function StrategiesPage() {
+export default async function StrategiesPage() {
+  const state = await getStrategies();
   return (
     <>
       <PageHeader
-        action={<Badge variant="outline">Not implemented</Badge>}
-        description="Automated strategy configuration and management are not available yet."
+        action={<AccountRefresh />}
+        description="Grid, DCA, AI-managed and standing price instruction strategies on Binance Spot Testnet, each with its own allocation and loss limits. The execution worker runs them and checks every entry before it is sent. Virtual funds; live trading is turned off."
         title="Strategies"
       />
-      <Card className="mt-6">
-        <CardHeader>
-          <CardTitle>Manual testnet trading</CardTitle>
-          <CardDescription>
-            The connected account currently supports manual development orders.
-            Strategy budgets, position ownership, stop-loss protection, and
-            holding deadlines still need to be implemented.
-          </CardDescription>
-          <Link
-            className={cn(buttonVariants({ variant: "outline" }), "mt-4 w-fit")}
-            href="/accounts"
-          >
-            View exchange account
-          </Link>
-        </CardHeader>
-      </Card>
-      <BacktestSection />
+      <StrategiesView state={state} />
     </>
   );
 }
