@@ -237,6 +237,12 @@ const fingerprintContext = (apiKey: string) => [
   apiKey,
 ];
 
+/**
+ * How a read-only account's key was found to be read only: the venue said
+ * so, or the customer confirmed it because the venue would not (ADR 0013).
+ */
+export type ReadOnlyCheck = "verified" | "confirmed";
+
 /** Keys sealed for one account, ready to write with `writeSealedKeys`. */
 export type SealedKeys = {
   keyType: ExchangeKeyType;
@@ -245,6 +251,8 @@ export type SealedKeys = {
   passphrase: Buffer | null;
   fingerprint: Buffer;
   apiKeyLast4: string;
+  // Audited with the keys, for an account on a read-only venue.
+  readOnly?: ReadOnlyCheck;
 };
 
 type Row = {
@@ -359,16 +367,21 @@ export class ExchangeCredentialStore {
   }
 
   /**
-   * Replaces the account's keys. Requires a master key. Throws
-   * `KeysInUseError` if another exchange account holds the same keys, and
-   * `AccountRemovedError` if the account was removed.
+   * Replaces the account's keys, auditing how a read-only account's key
+   * was found read only. Requires a master key. Throws `KeysInUseError` if
+   * another exchange account holds the same keys, and `AccountRemovedError`
+   * if the account was removed.
    */
   async save(
     scope: AccountScope,
     keyType: ExchangeKeyType,
     keys: ExchangeKeys,
+    readOnly?: ReadOnlyCheck,
   ): Promise<SavedKeysInfo> {
-    const sealed = this.seal(scope, keyType, keys);
+    const sealed = {
+      ...this.seal(scope, keyType, keys),
+      ...(readOnly ? { readOnly } : {}),
+    };
     return this.#scoped(scope, (tx) => writeSealedKeys(tx, scope, sealed));
   }
 
@@ -450,6 +463,7 @@ export async function writeSealedKeys(
     keyType: sealed.keyType,
     apiKeyLast4: sealed.apiKeyLast4,
     hasPassphrase,
+    ...(sealed.readOnly ? { readOnly: sealed.readOnly } : {}),
   });
   return {
     keyType: sealed.keyType,

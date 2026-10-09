@@ -7,9 +7,11 @@ import { test, type TestContext } from "node:test";
 import { z } from "zod";
 import {
   BinanceSpotTestnet,
+  HtxSpot,
   type AccountAdapter,
   type MarketDataAdapter,
 } from "@crypto-trading/exchanges";
+import { FakeHtx } from "@crypto-trading/exchanges/fixtures/fake-htx";
 import type { AccountLister, AccountResolver } from "./accounts";
 import { binanceExchangeInfo } from "./fixtures/binance-exchange-info";
 import { fixedExchanges } from "./fixtures/fixed-exchanges";
@@ -286,7 +288,8 @@ test("query parameters are validated strictly", async (t) => {
     "/snapshot?refresh=1",
     "/market/tickers?symbols=",
     "/market/tickers?symbols=BTCUSDT,",
-    "/market/tickers?symbols=btcusdt",
+    // A venue's symbols are all capitals or all lowercase, never mixed.
+    "/market/tickers?symbols=BtcUsdt",
     "/market/tickers?symbols=BTC-USDT",
     "/market/tickers?symbols=BTCUSDT&symbols=ETHUSDT",
     `/market/tickers?symbols=${Array.from({ length: 501 }, (_, i) => `T${i}USDT`)}`,
@@ -1319,6 +1322,62 @@ test("a read-only account takes no orders, whatever the request", async (t) => {
     fake.calls.filter((url) => url.pathname.startsWith("/api/v3/order")).length,
     0,
   );
+});
+
+test("an HTX account is read through HTX's own adapter, and takes no orders", async (t) => {
+  const htx = new FakeHtx();
+  const { call, json } = await serve(t, {
+    exchange: new HtxSpot({
+      apiKey: htx.apiKey,
+      apiSecret: htx.apiSecret,
+      fetch: htx.fetch,
+    }),
+    routes: createRoutes({
+      ...memory(),
+      env: {
+        TESTNET_MANUAL_INSTRUMENTS: "BTC-USDT",
+        TESTNET_MANUAL_ALLOCATION_USDT: "300",
+      },
+    }),
+  });
+  const ticket = await json("/orders/ticket");
+  assert.match(ticket.disabled, /HTX is read only here, so it takes no orders/);
+  const placed = await call("/orders", post("/orders", order));
+  assert.equal((await placed.json()).outcome.status, "rejected");
+  const cancelled = await call(
+    "/orders/cancel",
+    post("/orders/cancel", {
+      instrument: "BTC-USDT",
+      orderId: "357630527817871",
+      acceptUnprotected: false,
+    }),
+  );
+  assert.match((await cancelled.json()).outcome.message, /read only/);
+  // Its balances, open orders and fills are read for display.
+  const { snapshot } = await json("/snapshot");
+  assert.equal(snapshot.venue, "htx");
+  assert.equal(snapshot.canTrade, false);
+  assert.deepEqual(
+    snapshot.orders.map((entry: { orderId: string }) => entry.orderId),
+    ["357630527817871", "9007199254740993"],
+  );
+  assert.equal(snapshot.fills.length, 3);
+  // HTX's market data, by HTX's own lowercase symbols.
+  const { tickers } = await json(
+    "/market/tickers?venue=htx&symbols=btcusdt,ethusdt",
+  );
+  assert.deepEqual(
+    tickers.map((entry: { symbol: string }) => entry.symbol),
+    ["btcusdt", "ethusdt"],
+  );
+  // Nothing but GETs reached HTX, and no order, cancel or withdrawal path.
+  assert.deepEqual(htx.refused, []);
+  assert.ok(htx.requests.length > 0);
+  for (const request of htx.requests)
+    assert.doesNotMatch(
+      request.path,
+      /orders\/place|submitcancel|batchcancel|batchCancelOpenOrders|batch-orders|algo-orders|\/dw\//i,
+    );
 });
 
 test("the assistant's decisions go to the account they name, or else the customer's one trading account", async (t) => {

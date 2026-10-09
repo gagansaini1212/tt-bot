@@ -116,7 +116,7 @@ describe("PostgresReportingDirectory", { skip: databaseTestsSkipped }, () => {
       {
         id: mine.ids[1],
         venue: "htx",
-        venueName: "htx",
+        venueName: "HTX",
         label: "Savings",
         accountingCurrency: "USDT",
         mode: "live",

@@ -98,6 +98,14 @@ export type ExchangeAccountsState = z.infer<typeof exchangeAccountsStateSchema>;
 
 const exchangeAccountId = z.uuid();
 
+/**
+ * The customer's word that a key has read permission only: it can neither
+ * trade nor withdraw. A read-only venue's key needs it when the venue will
+ * not report the key's permissions, as HTX will not for a sub-account's key
+ * (ADR 0013). Where the venue reports them, the worker checks them instead.
+ */
+const confirmReadOnly = z.literal(true).optional();
+
 /** A new exchange account with its keys. */
 export const addExchangeAccountRequestSchema = z.strictObject({
   venue: venueIdSchema,
@@ -105,6 +113,7 @@ export const addExchangeAccountRequestSchema = z.strictObject({
   mode: exchangeAccountModeSchema,
   accountingCurrency: z.enum(ACCOUNTING_CURRENCIES),
   credentials: exchangeKeysRequestSchema,
+  confirmReadOnly,
 });
 export type AddExchangeAccountRequest = z.infer<
   typeof addExchangeAccountRequestSchema
@@ -122,6 +131,7 @@ export type RelabelExchangeAccountRequest = z.infer<
 export const replaceExchangeKeysRequestSchema = z.strictObject({
   exchangeAccountId,
   credentials: exchangeKeysRequestSchema,
+  confirmReadOnly,
 });
 export type ReplaceExchangeKeysRequest = z.infer<
   typeof replaceExchangeKeysRequestSchema

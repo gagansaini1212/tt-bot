@@ -142,13 +142,22 @@ export type MarketSellRequest = z.infer<typeof marketSellSchema>;
 // Public market data. Prices and quantities stay decimal strings.
 
 /**
- * A venue's own symbol, as tickers carry it. Binance lists some in
+ * A Binance symbol, as its tickers carry it. Binance lists some in
  * non-Latin scripts. This still rejects lowercase, separators and anything
  * that needs escaping.
  */
 export const tickerSymbolSchema = z
   .string()
   .regex(/^[\p{Lu}\p{Lo}\p{Nd}]{2,20}$/u);
+/**
+ * Any venue's own symbol, as its tickers carry it: in capitals, as
+ * Binance's BTCUSDT, or in lowercase, as HTX's btcusdt, never mixed. Letters
+ * of scripts without case and digits may join either. Separators and
+ * anything that needs escaping are still refused.
+ */
+export const venueTickerSymbolSchema = z
+  .string()
+  .regex(/^(?:[\p{Lu}\p{Lo}\p{Nd}]{2,40}|[\p{Ll}\p{Lo}\p{Nd}]{2,40})$/u);
 export const MAX_TICKER_SYMBOLS = 100;
 // Symbols per worker /market/tickers request, which filters its list of all
 // tickers. Shared here so the web client can stay under it.

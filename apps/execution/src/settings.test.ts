@@ -17,9 +17,12 @@ import {
 import {
   BinanceSpotTestnet,
   binanceSpotTestnetVenue,
+  HtxSpot,
+  htxVenue,
   VenueRegistry,
   type KeyPermissions,
 } from "@crypto-trading/exchanges";
+import { FakeHtx } from "@crypto-trading/exchanges/fixtures/fake-htx";
 import { accountResolver, accountVenue } from "./accounts";
 import { ExchangeAccountStore } from "./exchange-accounts";
 import {
@@ -85,10 +88,13 @@ describe("Settings routes", { skip: databaseTestsSkipped }, () => {
     {
       locked = false,
       permissions,
+      htx = new FakeHtx(),
     }: {
       locked?: boolean;
-      // What new keys may do, as the venue would report it.
+      // What new Binance keys may do, as the venue would report it.
       permissions?: () => Promise<KeyPermissions | null>;
+      // HTX, which reports its keys' permissions itself.
+      htx?: FakeHtx;
     } = {},
   ) {
     const box = locked ? undefined : new SecretBox(randomBytes(32));
@@ -99,6 +105,7 @@ describe("Settings routes", { skip: databaseTestsSkipped }, () => {
       store: keys,
       registry: new VenueRegistry([
         binanceSpotTestnetVenue({ fetch: fake.fetch }),
+        htxVenue({ fetch: htx.fetch }),
       ]),
       venueOf: accountVenue(db),
       environment: { kind: "hmac", apiKey: envKey, secret: "env-secret" },
@@ -117,11 +124,17 @@ describe("Settings routes", { skip: databaseTestsSkipped }, () => {
             accounts: new ExchangeAccountStore(db),
             keys,
             exchanges,
-            connect: (_, saved) =>
-              Object.assign(
-                new BinanceSpotTestnet({ ...saved, fetch: fake.fetch }),
-                permissions ? { getKeyPermissions: permissions } : {},
-              ),
+            connect: (venue, saved) =>
+              venue === "htx"
+                ? new HtxSpot({
+                    apiKey: saved.apiKey,
+                    apiSecret: saved.apiSecret ?? "",
+                    fetch: htx.fetch,
+                  })
+                : Object.assign(
+                    new BinanceSpotTestnet({ ...saved, fetch: fake.fetch }),
+                    permissions ? { getKeyPermissions: permissions } : {},
+                  ),
             environmentKeys: { keyType: "hmac", apiKeyLast4: envKey.slice(-4) },
           },
           settings: {
@@ -443,6 +456,111 @@ describe("Settings routes", { skip: databaseTestsSkipped }, () => {
     );
     report = { trade: true, withdraw: false };
     assert.equal((await add()).change.result, "saved");
+  });
+
+  test("an HTX account is read only: keys that can trade are refused, and keys HTX will not describe need the customer's confirmation", async (t) => {
+    const htx = new FakeHtx({
+      apiKey: `${"H".repeat(28)}-HTX1`,
+      apiSecret: "htx-secret-one-0123456789",
+    });
+    const { call, responses } = await serve(t, { htx });
+    const customerId = randomUUID();
+    await database.admin`insert into customers (id, display_name) values (${customerId}, 'HTX')`;
+    const account = (label: string, extra: object = {}) => ({
+      venue: "htx",
+      label,
+      mode: "live",
+      accountingCurrency: "USDT",
+      credentials: hmac(htx.apiKey, htx.apiSecret),
+      ...extra,
+    });
+    const add = (label: string, extra: object = {}) =>
+      call("POST", "/exchange-accounts", account(label, extra), customerId);
+    const accounts = async () =>
+      (await call("GET", "/exchange-accounts", undefined, customerId))
+        .exchangeAccounts.accounts;
+    const audited = async (id: string) =>
+      (
+        await database.admin<{ payload: { readOnly?: string } }[]>`
+          select payload from audit_events
+          where event_type = 'exchange_keys.saved'
+            and payload->>'exchangeAccountId' = ${id}
+          order by occurred_at desc limit 1
+        `
+      )[0]?.payload.readOnly;
+
+    // HTX accounts are live and read only, never simulation.
+    assert.equal(
+      (await add("Wrong mode", { mode: "simulation" })).change.result,
+      "invalid",
+    );
+    // A key HTX reports can trade is refused.
+    htx.permission = "readOnly,trade";
+    const trading = await add("HTX");
+    assert.equal(trading.change.result, "refused");
+    assert.match(trading.change.message, /can trade/);
+    assert.deepEqual(await accounts(), []);
+    // A key HTX reports as read only is saved, and so audited.
+    htx.permission = "readOnly";
+    const verified = await add("HTX");
+    assert.equal(verified.change.result, "saved");
+    assert.match(
+      verified.change.message,
+      /HTX reports that these keys can neither trade nor withdraw/,
+    );
+    const [saved] = await accounts();
+    assert.equal(saved.venue, "htx");
+    assert.equal(saved.mode, "live");
+    assert.equal(saved.supportedFeatures.access, "read_only");
+    assert.equal(await audited(saved.id), "verified");
+    const tested = await call(
+      "POST",
+      "/exchange-accounts/test",
+      { exchangeAccountId: saved.id },
+      customerId,
+    );
+    assert.equal(tested.test.result, "connected");
+    assert.match(tested.test.message, /neither trade nor withdraw/);
+
+    // A sub-account's key: HTX will not report its permissions.
+    htx.subUser = true;
+    const unconfirmed = await call(
+      "POST",
+      "/exchange-accounts/keys",
+      {
+        exchangeAccountId: saved.id,
+        credentials: hmac(htx.apiKey, htx.apiSecret),
+      },
+      customerId,
+    );
+    assert.equal(unconfirmed.change.result, "refused");
+    assert.match(
+      unconfirmed.change.message,
+      /will not report these keys' permissions/,
+    );
+    assert.equal(await audited(saved.id), "verified");
+    const confirmed = await call(
+      "POST",
+      "/exchange-accounts/keys",
+      {
+        exchangeAccountId: saved.id,
+        credentials: hmac(htx.apiKey, htx.apiSecret),
+        confirmReadOnly: true,
+      },
+      customerId,
+    );
+    assert.equal(confirmed.change.result, "saved");
+    assert.match(
+      confirmed.change.message,
+      /you confirmed they can neither trade nor withdraw/,
+    );
+    assert.equal(await audited(saved.id), "confirmed");
+    // The keys never come back.
+    assert.doesNotMatch(
+      responses.join("\n"),
+      /htx-secret-one-0123456789|H{28}-HTX1/,
+    );
+    assert.deepEqual(htx.refused, []);
   });
 
   test("an account the product still manages things on is not removed", async (t) => {

@@ -34,6 +34,7 @@ import {
   type ExchangeSource,
   type PermissionCheck,
   type PreparedKeys,
+  type ReadOnlyCheck,
   type VenueConnector,
 } from "../exchange-credentials";
 import { customerHandler } from "../http";
@@ -150,17 +151,23 @@ export function exchangeAccounts(
   /**
    * Checks new keys for `venue` and asks the venue what they may do, before
    * anything is saved. Returns the change to answer with if they are not
-   * usable.
+   * usable. On a read-only venue that will not report the keys'
+   * permissions, as HTX will not for a sub-account's key, the keys are
+   * refused unless the customer confirmed they are read only (ADR 0013).
    */
   async function vet(
     venue: Venue,
     request: ExchangeKeysRequest,
+    confirmReadOnly: boolean,
+    again: string,
   ): Promise<
     | { ok: false; refusal: ReturnType<typeof change> }
     | {
         ok: true;
         prepared: Extract<PreparedKeys, { ok: true }>;
         note: string;
+        // How a read-only venue's key was found read only.
+        readOnly?: ReadOnlyCheck;
       }
   > {
     const prepared = prepareCredentials(venue, request, connect);
@@ -177,7 +184,29 @@ export function exchangeAccounts(
     const permissions = await checkKeyPermissions(venue, prepared.reader);
     if (permissions.result !== "allowed")
       return { ok: false, refusal: change("refused", permissions.message) };
-    return { ok: true, prepared, note: permissionNote(venue, permissions) };
+    if (canPlaceOrders(venue))
+      return { ok: true, prepared, note: permissionNote(venue, permissions) };
+    if (permissions.verified)
+      return {
+        ok: true,
+        prepared,
+        note: `${venue.name} reports that these keys can neither trade nor withdraw. `,
+        readOnly: "verified",
+      };
+    if (!confirmReadOnly)
+      return {
+        ok: false,
+        refusal: change(
+          "refused",
+          `${venue.name} will not report these keys' permissions, as for a sub-account's key, so the worker cannot check that they are read only. Confirm that the key has read permission only, without trade or withdraw permission, then ${again}.`,
+        ),
+      };
+    return {
+      ok: true,
+      prepared,
+      note: `${venue.name} cannot report these keys' permissions; you confirmed they can neither trade nor withdraw. `,
+      readOnly: "confirmed",
+    };
   }
 
   return {
@@ -212,7 +241,12 @@ export function exchangeAccounts(
             `A ${venue.name} account can only be ${modes.map((mode) => MODE_NAMES[mode]).join(" or ")}.`,
           );
         if (!keys.canSave) return noMasterKey();
-        const vetted = await vet(venue, body.credentials);
+        const vetted = await vet(
+          venue,
+          body.credentials,
+          body.confirmReadOnly === true,
+          "add the account again",
+        );
         if (!vetted.ok) return vetted.refusal;
         const scope = { customerId, exchangeAccountId: randomUUID() };
         let added;
@@ -225,7 +259,14 @@ export function exchangeAccounts(
               mode: body.mode,
               accountingCurrency: body.accountingCurrency,
             },
-            keys.seal(scope, vetted.prepared.keyType, vetted.prepared.keys),
+            {
+              ...keys.seal(
+                scope,
+                vetted.prepared.keyType,
+                vetted.prepared.keys,
+              ),
+              ...(vetted.readOnly ? { readOnly: vetted.readOnly } : {}),
+            },
           );
         } catch (error) {
           if (error instanceof KeysInUseError) return keysInUse();
@@ -272,10 +313,20 @@ export function exchangeAccounts(
             `The execution worker has no adapter for ${account.venue}.`,
           );
         if (!keys.canSave) return noMasterKey();
-        const vetted = await vet(venue, body.credentials);
+        const vetted = await vet(
+          venue,
+          body.credentials,
+          body.confirmReadOnly === true,
+          "save the keys again",
+        );
         if (!vetted.ok) return vetted.refusal;
         try {
-          await keys.save(scope, vetted.prepared.keyType, vetted.prepared.keys);
+          await keys.save(
+            scope,
+            vetted.prepared.keyType,
+            vetted.prepared.keys,
+            vetted.readOnly,
+          );
         } catch (error) {
           if (error instanceof KeysInUseError) return keysInUse();
           // Removed while the venue was checking the keys.

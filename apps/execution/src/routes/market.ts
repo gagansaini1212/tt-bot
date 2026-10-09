@@ -3,7 +3,7 @@ import {
   MAX_DEPTH_LIMIT,
   MAX_KLINE_LIMIT,
   MAX_TICKER_FILTER,
-  tickerSymbolSchema,
+  venueTickerSymbolSchema,
   findMarketRules,
   UnlistedMarketError,
   type MarketDataAdapter,
@@ -55,7 +55,7 @@ export function tickers(now: () => number) {
       symbols: z
         .string()
         .transform((value) => value.split(","))
-        .pipe(z.array(tickerSymbolSchema).max(MAX_TICKER_FILTER))
+        .pipe(z.array(venueTickerSymbolSchema).max(MAX_TICKER_FILTER))
         .optional(),
     }),
     async handle({ exchange, query }) {

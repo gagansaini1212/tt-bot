@@ -11,6 +11,7 @@ import {
   canTrade,
   credentialsFromKeys,
   ExchangeError,
+  htxVenue,
   limitOrderSchema,
   VenueRegistry,
   type ExchangeOrder,
@@ -125,7 +126,8 @@ async function main() {
   }
   // The venues the worker connects to, each with its own market catalogue,
   // limits and clock, shared by every account on it and by no other venue.
-  const registry = new VenueRegistry([binanceSpotTestnetVenue()]);
+  // HTX is read only: its clients cannot trade (ADR 0009).
+  const registry = new VenueRegistry([binanceSpotTestnetVenue(), htxVenue()]);
   // The worker's own keys, from its .env file. They serve the dev customer's
   // testnet account until keys are saved for it in Settings. Checked now, so
   // keys the venue cannot use stop the worker before it starts.
