@@ -51,9 +51,11 @@ function share(slice: MixSlice) {
 export function AssetMixChart({
   slices,
   total,
+  currency,
 }: {
   slices: MixSlice[];
   total: string;
+  currency: string;
 }) {
   const [active, setActive] = useState<number>();
   const colors = slices.map((slice, index) =>
@@ -121,7 +123,7 @@ export function AssetMixChart({
             {focus ? share(focus) : formatAmount(total)}
           </span>
           <span className="text-xs text-muted-foreground">
-            {focus ? `${formatAmount(focus.value)} USDT` : "USDT"}
+            {focus ? `${formatAmount(focus.value)} ${currency}` : currency}
           </span>
         </div>
       </div>

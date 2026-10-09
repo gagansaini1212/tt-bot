@@ -14,8 +14,10 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { VALUATION_FRESHNESS_MS } from "@crypto-trading/domain";
+
 import { getAccountPortfolio } from "@/lib/account-portfolio";
-import { assetMix, valuePortfolio, type Portfolio } from "@/lib/portfolio";
+import { assetMix, unvaluedHoldings, type Portfolio } from "@/lib/portfolio";
 
 export const dynamic = "force-dynamic";
 
@@ -29,7 +31,7 @@ export default async function AccountsPage() {
     <>
       <PageHeader
         action={<AccountRefresh />}
-        description="Asset holdings in your connected Binance Spot Testnet account, valued in USDT, and each asset's share of net worth."
+        description="Asset holdings in your connected Binance Spot Testnet account, valued in your reporting currency, and each asset's share of the account's value."
         title="Accounts"
       />
 
@@ -61,16 +63,15 @@ export default async function AccountsPage() {
               <>
                 <Alert>
                   <TriangleAlert className="text-amber-600 dark:text-amber-400" />
-                  <AlertTitle>USDT prices are unavailable</AlertTitle>
+                  <AlertTitle>Values are unavailable</AlertTitle>
                   <AlertDescription>
                     Values and the asset mix will appear when prices load.{" "}
                     {portfolio.message}
                   </AlertDescription>
                 </Alert>
                 <Holdings
-                  holdings={
-                    valuePortfolio(testnet.snapshot.balances, []).holdings
-                  }
+                  currency="—"
+                  holdings={unvaluedHoldings(testnet.snapshot.balances)}
                 />
               </>
             )}
@@ -83,6 +84,12 @@ export default async function AccountsPage() {
 
 function ValuedHoldings({ portfolio }: { portfolio: Portfolio }) {
   const slices = assetMix(portfolio);
+  const missing = portfolio.holdings.filter(
+    (holding) => holding.unconverted?.status === "missing",
+  );
+  const stale = portfolio.holdings.filter(
+    (holding) => holding.unconverted?.status === "stale",
+  );
   return (
     <>
       <section aria-labelledby="asset-mix-heading">
@@ -90,27 +97,45 @@ function ValuedHoldings({ portfolio }: { portfolio: Portfolio }) {
           Asset mix
         </h2>
         {slices.length > 0 ? (
-          <AssetMixChart slices={slices} total={portfolio.total} />
+          <AssetMixChart
+            currency={portfolio.currency}
+            slices={slices}
+            total={portfolio.total}
+          />
         ) : (
           <p className="text-sm text-muted-foreground">
             No priced balances to show.
           </p>
         )}
       </section>
-      {portfolio.unpriced.length > 0 ? (
+      {missing.length > 0 ? (
         <Alert>
           <TriangleAlert className="text-amber-600 dark:text-amber-400" />
           <AlertTitle>
             Left out of net worth and the asset mix:{" "}
-            {portfolio.unpriced.join(", ")}
+            {missing.map((holding) => holding.asset).join(", ")}
           </AlertTitle>
           <AlertDescription>
-            No market with USDT, or with BTC, ETH or BNB, gives these assets a
-            current and 24-hour open price, so they are not priced.
+            Binance Spot Testnet has no market that converts these into{" "}
+            {portfolio.currency}, directly or through USDT or USDC, so they have
+            no value here. They are never counted as zero.
           </AlertDescription>
         </Alert>
       ) : null}
-      <Holdings holdings={portfolio.holdings} />
+      {stale.length > 0 ? (
+        <Alert>
+          <TriangleAlert className="text-amber-600 dark:text-amber-400" />
+          <AlertTitle>
+            Left out until their prices are fresh:{" "}
+            {stale.map((holding) => holding.asset).join(", ")}
+          </AlertTitle>
+          <AlertDescription>
+            Their markets last traded more than {VALUATION_FRESHNESS_MS / 1000}{" "}
+            seconds ago, so their price is stale. Each row says since when.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+      <Holdings currency={portfolio.currency} holdings={portfolio.holdings} />
     </>
   );
 }

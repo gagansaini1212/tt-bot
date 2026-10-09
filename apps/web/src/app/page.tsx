@@ -5,7 +5,7 @@ import { getExecutionState } from "@/lib/execution";
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const [{ account, portfolio }, execution] = await Promise.all([
+  const [{ account, overview }, execution] = await Promise.all([
     getAccountPortfolio(),
     getExecutionState(),
   ]);
@@ -13,7 +13,7 @@ export default async function DashboardPage() {
     <TestnetOverview
       account={account}
       execution={execution}
-      portfolio={portfolio}
+      overview={overview}
     />
   );
 }

@@ -17,6 +17,7 @@ import {
   formatDecimal,
   formatPercent,
   formatPrice,
+  formatUtc,
 } from "@/lib/format";
 import type { Holding } from "@/lib/portfolio";
 import { createStoredFlag } from "@/lib/stored-flag";
@@ -27,8 +28,14 @@ const hideDust = createStoredFlag(
   () => localStorage,
 );
 
-/** Holdings, highest value first. */
-export function Holdings({ holdings }: { holdings: Holding[] }) {
+/** Holdings, highest value first, valued in `currency`. */
+export function Holdings({
+  holdings,
+  currency,
+}: {
+  holdings: Holding[];
+  currency: string;
+}) {
   const switchId = useId();
   const [search, setSearch] = useState("");
   const hiding = useSyncExternalStore(
@@ -54,7 +61,7 @@ export function Holdings({ holdings }: { holdings: Holding[] }) {
               onCheckedChange={hideDust.set}
             />
             <label className="text-sm" htmlFor={switchId}>
-              Hide zero &amp; dust balances (&lt; $1.00)
+              Hide zero &amp; dust balances (&lt; 1.00 {currency})
             </label>
           </div>
           <input
@@ -72,8 +79,8 @@ export function Holdings({ holdings }: { holdings: Holding[] }) {
         {hidden > 0
           ? ` · ${hidden} zero or dust ${hidden === 1 ? "balance" : "balances"} hidden`
           : ""}
-        . Dust is worth less than 1 USDT; balances without a price are always
-        shown.
+        . Dust is worth less than 1 {currency}; balances without a value are
+        always shown.
       </p>
       <div
         className="max-h-[32rem] overflow-auto rounded-md border border-border"
@@ -88,8 +95,8 @@ export function Holdings({ holdings }: { holdings: Holding[] }) {
               <TableHead>Asset</TableHead>
               <TableHead>Available</TableHead>
               <TableHead>Locked</TableHead>
-              <TableHead>Price · USDT</TableHead>
-              <TableHead>Value · USDT</TableHead>
+              <TableHead>Price · {currency}</TableHead>
+              <TableHead>Value · {currency}</TableHead>
               <TableHead>24h</TableHead>
             </TableRow>
           </TableHeader>
@@ -116,13 +123,14 @@ export function Holdings({ holdings }: { holdings: Holding[] }) {
 }
 
 function HoldingRow({ holding }: { holding: Holding }) {
-  const { valuation } = holding;
-  const change = valuation?.changePercent
-    ? {
-        percent: formatPercent(valuation.changePercent),
-        amount: formatChange(valuation.change),
-      }
-    : undefined;
+  const { valuation, unconverted } = holding;
+  const change =
+    valuation?.changePercent && valuation.change !== null
+      ? {
+          percent: formatPercent(valuation.changePercent),
+          amount: formatChange(valuation.change),
+        }
+      : undefined;
   return (
     <TableRow>
       <TableCell className="font-medium">{holding.asset}</TableCell>
@@ -145,7 +153,13 @@ function HoldingRow({ holding }: { holding: Holding }) {
         {valuation ? (
           formatAmount(valuation.value)
         ) : (
-          <span className="font-sans text-muted-foreground">Not priced</span>
+          <span className="font-sans text-muted-foreground">
+            {unconverted?.status === "stale"
+              ? `Price stale since ${formatUtc(unconverted.since)}`
+              : unconverted?.status === "missing"
+                ? "No conversion route"
+                : "Not priced"}
+          </span>
         )}
       </TableCell>
       <TableCell className="whitespace-nowrap font-mono text-xs">

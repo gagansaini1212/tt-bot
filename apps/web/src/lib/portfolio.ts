@@ -1,109 +1,158 @@
 import Decimal from "decimal.js";
-import type { Ticker } from "@crypto-trading/exchanges";
+import {
+  convertAmount,
+  instrumentLabel,
+  valueAccount,
+  type AccountValuation,
+  type ConversionRoute,
+  type PriceSource,
+} from "@crypto-trading/domain";
+import type { Ticker } from "@crypto-trading/exchanges/contract";
+import { venueFor, venueIdSchema } from "@crypto-trading/exchanges/venues";
 
-// Enough significant digits that sums and products of Binance's decimal
-// strings stay exact. Only prices through an inverse market (1 ÷ rate) are
-// rounded, to 64 significant digits.
-const Exact = Decimal.clone({ precision: 64 });
+// Enough significant digits that sums and products of the domain's exact
+// decimals stay exact for display.
+const Exact = Decimal.clone({ precision: 100 });
 const ZERO = new Exact(0);
-const ONE = new Exact(1);
 const HUNDRED = new Exact(100);
-// Balances worth less than this many USDT count as dust.
-const DUST_LIMIT = ONE;
-// Assets without a USDT market are priced through the first of these that
-// has a market with both the asset and USDT.
-const BRIDGES = ["BTC", "ETH", "BNB"];
+// Balances worth less than one unit of the reporting currency count as dust.
+const DUST_LIMIT = new Exact(1);
 /** Slices in the asset mix: the largest holdings, then "Other". The chart has a colour for each. */
 export const MIX_SLICES = 6;
 
 type Balance = { asset: string; free: string; locked: string };
 
-/** USDT per unit now (`last`) and at the start of the 24-hour ticker window (`open`). */
-type Rate = { last: Decimal; open: Decimal; source: string };
+/**
+ * One venue's prices from its 24-hour tickers: the last price is the mark,
+ * the open is the price 24 hours earlier, and each price was observed at
+ * the market's last trade. A venue the dashboard has no tickers for prices
+ * nothing.
+ */
+export function tickerPrices(
+  venue: string,
+  tickers: readonly Ticker[],
+): PriceSource {
+  const known = venueIdSchema.safeParse(venue);
+  if (!known.success) return () => undefined;
+  const { symbols } = venueFor(known.data);
+  const bySymbol = new Map(tickers.map((ticker) => [ticker.symbol, ticker]));
+  return (instrument) => {
+    const ticker = bySymbol.get(symbols.toVenueSymbol(instrument));
+    return ticker
+      ? {
+          price: ticker.lastPrice,
+          openPrice: ticker.openPrice,
+          observedAt: ticker.closeTime,
+        }
+      : undefined;
+  };
+}
 
-const USDT_RATE: Rate = { last: ONE, open: ONE, source: "USDT counts as 1" };
+/** The markets a route goes through, such as "1 ÷ USDT/TRY × USDC/USDT". */
+export function routeSource(route: ConversionRoute) {
+  if (!route.legs.length) return `Already in ${route.to}`;
+  return route.legs
+    .map((leg) =>
+      leg.side === "base"
+        ? instrumentLabel(leg.instrument)
+        : `1 ÷ ${instrumentLabel(leg.instrument)}`,
+    )
+    .join(" × ");
+}
 
 export type HoldingValue = {
-  /** USDT per unit. */
+  /** Reporting currency per unit. */
   price: string;
-  /** Quantity × price, in USDT. */
+  /** Quantity × price, in the reporting currency. */
   value: string;
-  /** Change in this quantity's value over the 24-hour ticker window, in USDT. */
-  change: string;
-  /** The price's 24-hour change; null for USDT, which always counts as 1. */
+  /** Change in this quantity's value over the 24-hour window; null without open prices. */
+  change: string | null;
+  /** The price's 24-hour change; null when it needs no conversion, or has no open price. */
   changePercent: string | null;
-  /** The markets the price comes from, such as "1 ÷ BTCJPY × BTCUSDT". */
+  /** The markets the price comes from, such as "BTC/USDT". */
   source: string;
 };
 
 export type Holding = Balance & {
   /** Available plus locked. */
   quantity: string;
-  /** Missing when no USDT price was found; never counted as zero. */
+  /** Missing when the holding could not be converted; never counted as zero. */
   valuation?: HoldingValue;
-  /** Zero, or valued below 1 USDT. A balance without a price is not dust. */
+  /** Why a nonzero holding has no value: no route on its venue, or a stale price. */
+  unconverted?: { status: "missing" } | { status: "stale"; since: number };
+  /** Zero, or valued below 1 in the reporting currency. A balance without a value is not dust. */
   dust: boolean;
 };
 
 export type Portfolio = {
-  /** Highest value first, then balances without a price by asset. */
+  /** The reporting currency every value is in. */
+  currency: string;
+  /** Highest value first, then balances without a value by asset. */
   holdings: Holding[];
-  /** Value of the priced holdings, in USDT. */
+  /** Value of the converted holdings. */
   total: string;
-  /** Σ quantity × (last − open) over the priced holdings, in USDT. */
+  /** Σ quantity × (last − open) over the converted holdings with open prices. */
   change: string;
   /** `change` as a percentage of the same holdings' value at the open prices; null when that is zero. */
   changePercent: string | null;
-  /** Assets with a nonzero balance and no USDT price, left out of the totals. */
+  /** Assets with a nonzero balance and no value, left out of the totals. */
   unpriced: string[];
+  /** The account's figures, for totals across accounts. */
+  valuation: AccountValuation;
 };
 
 /**
- * Values each balance (available plus locked) in USDT from Binance 24-hour
- * tickers: through `<ASSET>USDT`, the inverse of `USDT<ASSET>`, or a bridge
- * asset such as BTC. Assets with no route stay unpriced and are listed
- * rather than counted as zero.
+ * Values each balance (available plus locked) in `currency` with `prices`
+ * from the account's own venue, through the conversion routes of ADR 0009.
+ * Balances without a route, or with a stale price, keep no value and are
+ * listed rather than counted as zero.
  */
 export function valuePortfolio(
   balances: readonly Balance[],
-  tickers: readonly Ticker[],
+  currency: string,
+  prices: PriceSource,
+  now: Date,
 ): Portfolio {
-  const markets = new Map<string, Rate>();
-  for (const { symbol, lastPrice, openPrice } of tickers) {
-    const last = new Exact(lastPrice);
-    const open = new Exact(openPrice);
-    // A market without both prices can value nothing.
-    if (last.gt(0) && open.gt(0))
-      markets.set(symbol, { last, open, source: symbol });
-  }
-
-  let total = ZERO;
-  let opening = ZERO;
-  const valued = balances.map((balance) => {
-    const quantity = new Exact(balance.free).plus(balance.locked);
-    const rate =
-      balance.asset === "USDT" ? USDT_RATE : findRate(balance.asset, markets);
+  const quantities = balances.map((balance) => ({
+    asset: balance.asset,
+    quantity: new Exact(balance.free).plus(balance.locked).toFixed(),
+  }));
+  const valuation = valueAccount(quantities, currency, prices, now);
+  const valued = balances.map((balance, index) => {
+    const { quantity, conversion } = valuation.holdings[index];
     const holding: Holding = {
       ...balance,
-      quantity: quantity.toFixed(),
-      dust: quantity.isZero(),
+      quantity,
+      dust: new Exact(quantity).isZero(),
     };
-    if (!rate) return { holding, value: undefined };
-    const value = quantity.times(rate.last);
-    const before = quantity.times(rate.open);
-    total = total.plus(value);
-    opening = opening.plus(before);
+    if (conversion.status !== "converted") {
+      if (!holding.dust)
+        holding.unconverted =
+          conversion.status === "stale"
+            ? { status: "stale", since: conversion.since }
+            : { status: "missing" };
+      return { holding, value: undefined };
+    }
+    const value = new Exact(conversion.value);
+    const unit = convertAmount("1", balance.asset, currency, prices, now);
+    const price = unit.status === "converted" ? unit.value : "0";
+    const priceAtOpen = unit.status === "converted" ? unit.valueAtOpen : null;
     // Compared at the cent shown, so a value displayed as 1.00 is not dust.
     holding.dust = value.toDecimalPlaces(2, Exact.ROUND_HALF_UP).lt(DUST_LIMIT);
     holding.valuation = {
-      price: rate.last.toFixed(),
+      price,
       value: value.toFixed(),
-      change: value.minus(before).toFixed(),
-      changePercent:
-        rate === USDT_RATE
+      change:
+        conversion.valueAtOpen === null
           ? null
-          : percent(rate.last.minus(rate.open), rate.open),
-      source: rate.source,
+          : value.minus(conversion.valueAtOpen).toFixed(),
+      changePercent:
+        conversion.route.legs.length &&
+        priceAtOpen &&
+        !new Exact(priceAtOpen).isZero()
+          ? percent(new Exact(price).minus(priceAtOpen), new Exact(priceAtOpen))
+          : null,
+      source: routeSource(conversion.route),
     };
     return { holding, value };
   });
@@ -114,51 +163,32 @@ export function valuePortfolio(
       (a.value && b.value ? b.value.cmp(a.value) : 0) ||
       a.holding.asset.localeCompare(b.holding.asset, "en"),
   );
-  const change = total.minus(opening);
+  const changeBase = new Exact(valuation.changeBase);
   return {
+    currency,
     holdings: valued.map(({ holding }) => holding),
-    total: total.toFixed(),
-    change: change.toFixed(),
-    changePercent: opening.isZero() ? null : percent(change, opening),
-    unpriced: valued
-      .filter(({ holding }) => !holding.valuation && !holding.dust)
-      .map(({ holding }) => holding.asset),
+    total: valuation.total,
+    change: valuation.change,
+    changePercent: changeBase.isZero()
+      ? null
+      : percent(new Exact(valuation.change), changeBase),
+    unpriced: valuation.unconverted.map(({ asset }) => asset),
+    valuation,
   };
 }
 
-function findRate(asset: string, markets: Map<string, Rate>) {
-  const direct = pair(asset, "USDT", markets);
-  if (direct) return direct;
-  for (const bridge of BRIDGES) {
-    if (bridge === asset) continue;
-    const leg = pair(asset, bridge, markets);
-    const bridgeRate = leg && pair(bridge, "USDT", markets);
-    if (leg && bridgeRate)
+/** Balances listed without values, for when prices are unavailable. */
+export function unvaluedHoldings(balances: readonly Balance[]): Holding[] {
+  return balances
+    .map((balance) => {
+      const quantity = new Exact(balance.free).plus(balance.locked);
       return {
-        last: leg.last.times(bridgeRate.last),
-        open: leg.open.times(bridgeRate.open),
-        source: `${leg.source} × ${bridgeRate.source}`,
+        ...balance,
+        quantity: quantity.toFixed(),
+        dust: quantity.isZero(),
       };
-  }
-  return undefined;
-}
-
-/** `quote` per unit of `base`, from BASEQUOTE or the inverse of QUOTEBASE. */
-function pair(
-  base: string,
-  quote: string,
-  markets: Map<string, Rate>,
-): Rate | undefined {
-  const direct = markets.get(base + quote);
-  if (direct) return direct;
-  const inverse = markets.get(quote + base);
-  return inverse
-    ? {
-        last: ONE.div(inverse.last),
-        open: ONE.div(inverse.open),
-        source: `1 ÷ ${inverse.source}`,
-      }
-    : undefined;
+    })
+    .sort((a, b) => a.asset.localeCompare(b.asset, "en"));
 }
 
 function percent(change: Decimal, base: Decimal) {
@@ -168,7 +198,7 @@ function percent(change: Decimal, base: Decimal) {
 export type MixSlice = {
   /** An asset, or "Other" when `folded` is above zero. */
   label: string;
-  /** In USDT. */
+  /** In the reporting currency. */
   value: string;
   /** Percentage of the portfolio's total. */
   share: string;

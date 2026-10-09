@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { Plus, ShieldAlert } from "lucide-react";
 import type {
@@ -35,8 +35,11 @@ import type { WorkerState } from "@/lib/worker-client";
  */
 export function StrategiesView({
   state,
+  acrossAccounts,
 }: {
   state: WorkerState<{ state: StrategiesState; readAt: number }>;
+  // The strategies on every exchange account together, shown only.
+  acrossAccounts?: ReactNode;
 }) {
   // A key starts the editor, or the backtest, afresh.
   const [editor, setEditor] = useState<{
@@ -87,9 +90,9 @@ export function StrategiesView({
             <h2>Portfolio today</h2>
           </CardTitle>
           <CardDescription className="mt-1">
-            Every strategy&apos;s result since midnight UTC, against their
-            allocations together. Reaching the daily drawdown limit pauses every
-            strategy.
+            Every strategy&apos;s result on this exchange account since midnight
+            UTC, against their allocations together. Reaching the account&apos;s
+            daily drawdown limit pauses every strategy on it.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -144,6 +147,7 @@ export function StrategiesView({
               </AlertDescription>
             </Alert>
           )}
+          {acrossAccounts}
           {aiSource.kind === "fixture" ? (
             <p className="text-xs text-muted-foreground">
               AI-managed strategies replay a recorded fixture: no model is

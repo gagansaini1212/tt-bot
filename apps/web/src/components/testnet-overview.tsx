@@ -28,18 +28,18 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { WelcomeCard } from "@/components/welcome-card";
-import type { PortfolioState } from "@/lib/account-portfolio";
-import { contentId } from "@/lib/content-id";
+import type { OverviewState } from "@/lib/account-portfolio";
+import { assistantAccounts } from "@/lib/assistant-context";
 import type { ExecutionView } from "@/lib/execution";
 import type { TestnetAccountState } from "@/lib/testnet-account";
 
 export function TestnetOverview({
   account,
-  portfolio,
+  overview,
   execution,
 }: {
   account: TestnetAccountState;
-  portfolio: PortfolioState;
+  overview: OverviewState;
   execution: ExecutionView;
 }) {
   const connected = account.status === "connected";
@@ -90,7 +90,7 @@ export function TestnetOverview({
         <AccountContent
           account={account}
           execution={execution}
-          portfolio={portfolio}
+          overview={overview}
         />
       ) : (
         <Card className="mt-6">
@@ -109,45 +109,21 @@ export function TestnetOverview({
 
 function AccountContent({
   account,
-  portfolio,
+  overview,
   execution,
 }: {
   account: Extract<TestnetAccountState, { status: "connected" }>;
-  portfolio: PortfolioState;
+  overview: OverviewState;
   execution: ExecutionView;
 }) {
   const { snapshot } = account;
   const available = (asset: string) =>
     snapshot.balances.find((balance) => balance.asset === asset)?.free ?? "0";
   const fills = snapshot.fills.slice(0, 10);
-  const snapshotContent = {
-    capturedAt: snapshot.capturedAt,
-    dataKind: "Binance Spot Testnet, virtual funds",
-    account: {
-      venue: "Binance Spot Testnet",
-      quoteCurrency: "USDT",
-      canTrade: snapshot.canTrade,
-      liveTradingLocked: true,
-    },
-    balanceScope:
-      "BTC, ETH and USDT. Other asset balances are listed on Accounts.",
-    balances: snapshot.balances.filter((balance) =>
-      ["BTC", "ETH", "USDT"].includes(balance.asset),
-    ),
-    openOrders: snapshot.orders,
-    recentFills: fills,
-    strategyManagement:
-      "Manual development trades. The execution worker watches each order's exits and sells any bought quantity left without a stop loss. Strategy ownership and profit/loss are not tracked for these holdings.",
-  };
-  // AI decisions name the snapshot they were based on by this ID.
-  const accountSnapshot = {
-    snapshotId: contentId(snapshotContent),
-    ...snapshotContent,
-  };
 
   return (
     <>
-      <PortfolioSummary portfolio={portfolio} />
+      <PortfolioSummary overview={overview} />
 
       <section
         className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"
@@ -223,10 +199,8 @@ function AccountContent({
         </div>
 
         <div className="min-w-0 space-y-6">
-          <AssistantPanel
-            accountSnapshot={accountSnapshot}
-            accountLabel="Binance Spot Testnet"
-          />
+          {/* AI decisions name the account snapshot they were based on. */}
+          <AssistantPanel accounts={assistantAccounts(account, overview)} />
           <NotificationsCard execution={execution} />
           <Card>
             <CardHeader>

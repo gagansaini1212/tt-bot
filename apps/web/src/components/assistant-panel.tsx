@@ -23,16 +23,12 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
-
-type JsonValue = string | number | boolean | null | JsonObject | JsonValue[];
-
-type JsonObject = {
-  [key: string]: JsonValue;
-};
+import type { JsonObject } from "@/lib/json";
 
 type AssistantPanelProps = {
-  accountSnapshot: JsonObject;
-  accountLabel: string;
+  // Each exchange account, labelled with its venue and account, with its
+  // own snapshot.
+  accounts: JsonObject[];
 };
 
 // Distance from the bottom, in pixels, that still counts as following the
@@ -45,10 +41,7 @@ const starterPrompts = [
   { icon: "💡", prompt: "Suggest a limit buy strategy for ETH" },
 ];
 
-export function AssistantPanel({
-  accountSnapshot,
-  accountLabel,
-}: AssistantPanelProps) {
+export function AssistantPanel({ accounts }: AssistantPanelProps) {
   const [draft, setDraft] = useState("");
   const agent = useEveAgent();
   const busy = agent.status === "submitted" || agent.status === "streaming";
@@ -118,9 +111,8 @@ export function AssistantPanel({
     await agent.send(message, {
       clientContext: {
         route: "/",
-        account: accountLabel,
         mode: "testnet",
-        accountSnapshot,
+        accounts,
       },
     });
   }
@@ -152,7 +144,8 @@ export function AssistantPanel({
           {messages.length === 0 ? (
             <p className="text-sm leading-6 text-muted-foreground">
               Ask about your balances, recent trades, or open orders. The
-              assistant uses the account snapshot shown here.
+              assistant uses each exchange account&apos;s own snapshot, and
+              names the account each fact comes from.
             </p>
           ) : (
             messages.map((message) => (
