@@ -168,20 +168,15 @@ export const binanceVenueSymbols: VenueSymbolCodec = {
   assetCode: (venueAsset) => venueAsset,
 };
 
-// HTX documents client order IDs as letters, digits, `_` and `-`, at most 64
-// characters, in its Spot API's trading introduction.
-const HTX_CLIENT_ORDER_ID = /^[A-Za-z0-9_-]{1,64}$/;
-
 /**
- * HTX would take the application's IDs unchanged, should it ever trade. While
- * it is read only, this only tells the application's orders from others.
+ * HTX is read only (ADR 0013): the application sends it no orders, so it
+ * has no client order ID to give one, and `toVenue` refuses. `fromVenue`
+ * only tells the application's orders from others: none of an HTX
+ * account's orders are the application's.
  */
 export const htxClientOrderIds: ClientOrderIdCodec = {
-  toVenue(orderId) {
-    const id = appOrderIdSchema.parse(orderId);
-    if (!HTX_CLIENT_ORDER_ID.test(id))
-      throw new Error("HTX cannot carry this client order ID.");
-    return id;
+  toVenue() {
+    throw new Error("HTX is read only: the application sends it no orders.");
   },
   fromVenue(venueClientOrderId) {
     return appOrderIdSchema.safeParse(venueClientOrderId).success

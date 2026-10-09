@@ -23,11 +23,17 @@ export const MIX_SLICES = 6;
 
 type Balance = { asset: string; free: string; locked: string };
 
+// A ticker's open counts as the price 24 hours earlier only when its window
+// is about 24 hours. HTX's opens at midnight Singapore time instead.
+const DAY_MS = 86_400_000;
+const WINDOW_TOLERANCE_MS = 3_600_000;
+
 /**
- * One venue's prices from its 24-hour tickers: the last price is the mark,
- * the open is the price 24 hours earlier, and each price was observed at
- * the market's last trade. A venue the dashboard has no tickers for prices
- * nothing.
+ * One venue's prices from its tickers: the last price is the mark, the open
+ * is the price 24 hours earlier where the ticker's window is 24 hours, and
+ * each price was observed at the market's last trade. A holding priced by a
+ * ticker with another window, such as HTX's, has no 24-hour change. A venue
+ * the dashboard has no tickers for prices nothing.
  */
 export function tickerPrices(
   venue: string,
@@ -39,13 +45,15 @@ export function tickerPrices(
   const bySymbol = new Map(tickers.map((ticker) => [ticker.symbol, ticker]));
   return (instrument) => {
     const ticker = bySymbol.get(symbols.toVenueSymbol(instrument));
-    return ticker
-      ? {
-          price: ticker.lastPrice,
-          openPrice: ticker.openPrice,
-          observedAt: ticker.closeTime,
-        }
-      : undefined;
+    if (!ticker) return undefined;
+    const daily =
+      Math.abs(ticker.closeTime - ticker.openTime - DAY_MS) <=
+      WINDOW_TOLERANCE_MS;
+    return {
+      price: ticker.lastPrice,
+      openPrice: daily ? ticker.openPrice : null,
+      observedAt: ticker.closeTime,
+    };
   };
 }
 

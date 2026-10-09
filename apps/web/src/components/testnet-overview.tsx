@@ -84,7 +84,7 @@ export function TestnetOverview({
         </AlertTitle>
         <AlertDescription>
           {connected
-            ? `Updated ${account.snapshot.capturedAt.slice(11, 19)} UTC. Refreshes every 10 seconds. These balances and fills come from ${venue?.name ?? "the exchange"}${readOnly ? ", which the product only monitors and never trades" : ""}.`
+            ? `Updated ${account.snapshot.capturedAt.slice(11, 19)} UTC. Refreshes every 10 seconds. These balances and fills come from ${venue?.name ?? account.snapshot.venue}${readOnly ? ", which the product only monitors and never trades" : ""}.`
             : account.message}
         </AlertDescription>
       </Alert>

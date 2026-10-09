@@ -1,6 +1,6 @@
 # Name venues, markets and orders the same way on every venue
 
-Status: accepted, 2026-10-09, for milestone M4 (issues #19, #20 and #23 part A). [ADR 0009](0009-keep-exchange-accounts-isolated-across-venues.md) builds on it: it keeps exchange accounts on different venues isolated, and makes HTX a read-only venue.
+Status: accepted, 2026-10-09, for milestone M4 (issues #19, #20 and #23 part A). [ADR 0009](0009-keep-exchange-accounts-isolated-across-venues.md) builds on it: it keeps exchange accounts on different venues isolated, and makes HTX a read-only venue. [ADR 0013](0013-connect-htx-accounts-read-only.md) amends HTX's client order ID row: the application sends HTX no orders, so HTX's codec refuses to translate an ID.
 
 Until M4 the application spoke Binance Spot Testnet's language everywhere. Instruments were an enum of `BTC-USDT` and `ETH-USDT`. Orders, lists and fills carried Binance's numeric IDs and its `BTCUSDT` symbols. The snapshot said `provider: "binance-spot-testnet"`, and client order IDs had to match Binance's rule. A second venue would break each of these: Kraken's order IDs look like `OU22CG-KLAF2-FWUDD7`, Coinbase names markets `BTC-USD`, OKX allows no `_` in a client order ID, and HTX is a venue the product can only read.
 

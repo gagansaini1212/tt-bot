@@ -191,7 +191,9 @@ test("each venue keeps its own clock: a skew on one is corrected there only", as
   assert.equal(s.registry.get("htx")!.limits.clock.offset, 600_000);
   assert.equal(await kind(s.binanceAccount.getAccount()), "served");
   assert.equal(s.binance.timeRequests, 2);
-  // HTX cannot say its time: HTX is unavailable, Binance is served.
+  // A minute later HTX cannot say its time: HTX is unavailable, Binance is
+  // served.
+  s.advance(60_000);
   s.htx.now = () => htxClock() + 1_200_000;
   s.htx.failNext(
     "/v1/common/timestamp",

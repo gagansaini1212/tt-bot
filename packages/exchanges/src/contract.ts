@@ -157,7 +157,7 @@ export const tickerSymbolSchema = z
  */
 export const venueTickerSymbolSchema = z
   .string()
-  .regex(/^(?:[\p{Lu}\p{Lo}\p{Nd}]{2,40}|[\p{Ll}\p{Lo}\p{Nd}]{2,40})$/u);
+  .regex(/^(?:[\p{Lu}\p{Lo}\p{Nd}]{2,20}|[\p{Ll}\p{Lo}\p{Nd}]{2,40})$/u);
 export const MAX_TICKER_SYMBOLS = 100;
 // Symbols per worker /market/tickers request, which filters its list of all
 // tickers. Shared here so the web client can stay under it.

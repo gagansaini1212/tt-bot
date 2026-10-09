@@ -184,8 +184,8 @@ export function exchangeAccounts(
     const permissions = await checkKeyPermissions(venue, prepared.reader);
     if (permissions.result !== "allowed")
       return { ok: false, refusal: change("refused", permissions.message) };
-    if (canPlaceOrders(venue))
-      return { ok: true, prepared, note: permissionNote(venue, permissions) };
+    // A venue that trades needs no word on read only.
+    if (canPlaceOrders(venue)) return { ok: true, prepared, note: "" };
     if (permissions.verified)
       return {
         ok: true,

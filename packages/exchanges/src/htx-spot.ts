@@ -24,6 +24,7 @@ import {
   type ExchangeFill,
   type ExchangeOrder,
   type Kline,
+  type KeyPermissions,
   type KlineInterval,
   type Ticker,
 } from "./contract";
@@ -88,6 +89,12 @@ const optionalAmount = z
 // Order, fill and account IDs, kept as strings.
 const htxId = z.string().regex(/^\d{1,20}$/);
 const millis = z
+  .string()
+  .regex(/^\d{1,16}$/)
+  .transform(Number)
+  .pipe(z.number().int().nonnegative().refine(Number.isSafeInteger));
+// Counts and HTX's own sequence numbers, which are not times.
+const wholeNumber = z
   .string()
   .regex(/^\d{1,16}$/)
   .transform(Number)
@@ -309,6 +316,9 @@ const FORBIDDEN = new Set(["403", "1002"]);
 // HTX documents no error for a stale timestamp: it answers as it does a
 // wrong signature.
 const SIGNATURE_NOT_VALID = new Set(["api-signature-not-valid", "1003"]);
+// How often one account may have HTX's time read again after a refused
+// signature: as often as the venue's clock is read anyway.
+const CLOCK_RETRY_MS = 60_000;
 // The wait when HTX sends no Retry-After. Its documented windows are 1 to 2
 // seconds.
 export const HTX_RATE_LIMIT_WAIT_SECONDS = 10;
@@ -342,9 +352,6 @@ export class HtxError extends ExchangeError {
     this.forbidden = forbidden;
   }
 }
-
-/** The permissions HTX reports for an API key. */
-type HtxKeyPermissions = { trade: boolean; withdraw: boolean };
 
 export type HtxSpotOptions = (
   | {
@@ -384,6 +391,9 @@ export class HtxSpot implements AccountReader {
   readonly #fetch: typeof fetch;
   readonly #now: () => number;
   #spotAccountId?: Promise<string>;
+  // When this account last had HTX's time read again after a refused
+  // signature.
+  #clockRetriedAt = -Infinity;
 
   constructor(options: HtxSpotOptions) {
     this.#fetch = options.fetch ?? fetch;
@@ -431,7 +441,8 @@ export class HtxSpot implements AccountReader {
    * A GET request, signed unless `signed` is false. There is no other kind.
    * A signed request HTX refuses as not validly signed is sent once more
    * after HTX's time is read again, since HTX answers a stale timestamp the
-   * same way; a GET changes nothing, so sending it twice is safe.
+   * same way; a GET changes nothing, so sending it twice is safe. An account
+   * does this at most once a minute.
    */
   async #request<T>(
     path: string,
@@ -521,11 +532,20 @@ export class HtxSpot implements AccountReader {
           retryAfterSeconds: retryAfter,
         });
       }
-      if (signed && code !== undefined && SIGNATURE_NOT_VALID.has(code)) {
-        // Perhaps HTX's clock moved: read it again before the next request.
+      // Perhaps HTX's clock moved: read it again and send the request once
+      // more. At most once a minute per account, so a key HTX refuses for
+      // good never makes HTX's clock, which every HTX account shares, be
+      // read on each of its requests.
+      if (
+        signed &&
+        !retried &&
+        code !== undefined &&
+        SIGNATURE_NOT_VALID.has(code) &&
+        this.#now() - this.#clockRetriedAt >= CLOCK_RETRY_MS
+      ) {
+        this.#clockRetriedAt = this.#now();
         this.#limits.clock.invalidate();
-        if (!retried)
-          return this.#request(path, parameters, schema, signed, true);
+        return this.#request(path, parameters, schema, signed, true);
       }
       if (response.status >= 500 || (code && UNAVAILABLE.has(code)))
         throw new HtxError("unavailable", { code });
@@ -722,7 +742,7 @@ export class HtxSpot implements AccountReader {
    * when HTX will not say. It answers only a parent user's key: a
    * sub-user's key is refused there.
    */
-  async getKeyPermissions(): Promise<HtxKeyPermissions | null> {
+  async getKeyPermissions(): Promise<KeyPermissions | null> {
     try {
       const { data: uid } = await this.#request(
         "/v2/user/uid",
@@ -744,42 +764,19 @@ export class HtxSpot implements AccountReader {
         .split(",")
         .map((permission) => permission.trim())
         .filter(Boolean);
-      // A permission HTX has not documented may allow anything.
-      if (
-        permissions.some(
-          (permission) =>
-            !["readOnly", "trade", "withdraw"].includes(permission),
-        )
-      )
-        throw new HtxError("unavailable", {
-          reason:
-            "HTX reported an API key permission this adapter does not know.",
-        });
+      // A permission HTX has not documented may allow anything, so the key
+      // counts as one that can trade, which no HTX account may hold.
+      const undocumented = permissions.some(
+        (permission) => !["readOnly", "trade", "withdraw"].includes(permission),
+      );
       return {
-        trade: permissions.includes("trade"),
+        trade: undocumented || permissions.includes("trade"),
         withdraw: permissions.includes("withdraw"),
       };
     } catch (error) {
       if (error instanceof HtxError && error.forbidden) return null;
       throw error;
     }
-  }
-
-  /**
-   * Refuses an API key that can trade or withdraw. Resolves to `verified`
-   * when HTX reports a read-only key, and to `unverified` when it will not
-   * report the key's permissions, as for a sub-user's key: the customer must
-   * then confirm the key is read only.
-   */
-  async checkReadOnlyKey(): Promise<"verified" | "unverified"> {
-    const permissions = await this.getKeyPermissions();
-    if (!permissions) return "unverified";
-    if (permissions.trade || permissions.withdraw)
-      throw new HtxError("rejected", {
-        reason:
-          "This HTX API key can trade or withdraw. Connect a key with read permission only.",
-      });
-    return "verified";
   }
 
   /**
@@ -886,14 +883,15 @@ export class HtxSpot implements AccountReader {
       z.object({
         data: z.array(
           z.object({
-            id: millis,
+            // The open time, in seconds.
+            id: wholeNumber,
             open: amount,
             close: amount,
             low: amount,
             high: amount,
             amount,
             vol: amount,
-            count: millis,
+            count: wholeNumber,
           }),
         ),
       }),
@@ -934,7 +932,7 @@ export class HtxSpot implements AccountReader {
       },
       z.object({
         tick: z.object({
-          version: millis,
+          version: wholeNumber,
           bids: htxLevelsSchema,
           asks: htxLevelsSchema,
         }),

@@ -168,6 +168,26 @@ test("only the account's own venue prices it", () => {
   assert.deepEqual(elsewhere.unpriced, ["BTC"]);
 });
 
+test("a ticker whose open is not 24 hours back, as HTX's, values the holding without a 24h change", () => {
+  // HTX's ticker opens at midnight Singapore time, here 6 hours before.
+  const htxTicker = {
+    ...ticker("btcusdt", "60000", "50000"),
+    openTime: traded - 6 * 3_600_000,
+  };
+  const portfolio = valuePortfolio(
+    [balance("BTC", "1"), balance("USDT", "10")],
+    "USDT",
+    tickerPrices("htx", [htxTicker]),
+    now,
+  );
+  const btc = portfolio.holdings.find((holding) => holding.asset === "BTC");
+  assert.equal(btc?.valuation?.value, "60000");
+  assert.equal(btc?.valuation?.change, null);
+  assert.equal(portfolio.total, "60010");
+  // Nothing is counted as a change since the open.
+  assert.equal(portfolio.valuation.change, "0");
+});
+
 test("sums and products are exact", () => {
   const portfolio = value(
     [balance("USDT", "0.1", "0.2"), balance("BTC", "123456789.12345678")],

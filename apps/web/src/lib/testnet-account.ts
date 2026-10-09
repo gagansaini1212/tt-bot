@@ -74,7 +74,7 @@ export async function getTestnetAccount(
     return {
       status: "unavailable",
       message:
-        "The execution worker is running, but its account snapshot is more than 30 seconds old. Check the worker's connection to the exchange, then refresh.",
+        "The execution worker is running, but its account snapshot is more than 30 seconds old. Check the worker's connection to the account's venue, then refresh.",
     };
   if (freshness === "future")
     return {

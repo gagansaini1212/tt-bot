@@ -123,6 +123,15 @@ test("totals every account in the reporting currency, and names the accounts and
   assert.equal(overview.status, "connected");
   if (overview.status !== "connected") return;
   const { combined } = overview.overview;
+  // The dashboard acts on one account; the Overview lists the others apart.
+  assert.deepEqual(
+    overview.overview.accounts.map(({ name, current }) => [name, current]),
+    [
+      ["Binance Spot Testnet", true],
+      ["htx · Savings", false],
+      ["Binance Spot Testnet · Second", false],
+    ],
+  );
 
   assert.equal(combined.currency, "USDT");
   assert.equal(combined.total, "700");

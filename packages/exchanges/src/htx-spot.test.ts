@@ -198,7 +198,7 @@ test("signed requests carry HTX's clock and pass the fake's independent signatur
 });
 
 test("a clock that moves is read again: HTX answers a stale timestamp as a bad signature", async () => {
-  const { exchange, htx, requests } = setup();
+  const { exchange, htx, requests, advance } = setup();
   await exchange.getAccount();
   assert.equal(requests("/v1/common/timestamp").length, 1);
   // HTX's clock jumps ten minutes while the adapter still trusts its offset.
@@ -213,10 +213,36 @@ test("a clock that moves is read again: HTX answers a stale timestamp as a bad s
     balances[2].parameters.get("Timestamp"),
     htxTimestamp(NOW + 600_000),
   );
-  // When HTX's time cannot be read, the account is unavailable, not refused.
+  // A minute later, when HTX's time cannot be read, the account is
+  // unavailable, not refused.
+  advance(60_000);
   htx.now = () => clock() + 1_200_000;
   htx.failNext("/v1/common/timestamp", () => new Response("", { status: 503 }));
   assert.equal((await kinds(exchange.getAccount())).kind, "unavailable");
+});
+
+test("a key HTX refuses has HTX's time read again at most once a minute", async () => {
+  let now = NOW;
+  const htx = new FakeHtx({ now: () => now });
+  const wrong = new HtxSpot({
+    apiKey: htx.apiKey,
+    apiSecret: "not-the-secret-0123456789",
+    now: () => now,
+    fetch: htx.fetch,
+  });
+  const timeReads = () =>
+    htx.requests.filter((request) => request.path === "/v1/common/timestamp")
+      .length;
+  assert.equal((await kinds(wrong.getAccount())).kind, "rejected");
+  assert.equal(timeReads(), 2);
+  // Within the minute, a refusal is final at once.
+  assert.equal((await kinds(wrong.getAccount())).kind, "rejected");
+  assert.equal(timeReads(), 2);
+  // A minute on, the venue's clock is due to be read anyway, and the refusal
+  // has it read again once more.
+  now += 60_000;
+  assert.equal((await kinds(wrong.getAccount())).kind, "rejected");
+  assert.equal(timeReads(), 4);
 });
 
 test("balances add up exactly, leave out empty assets and say the account cannot trade", async () => {
@@ -354,13 +380,12 @@ test("the snapshot covers listed instruments with one open-orders request, newes
   );
 });
 
-test("a key with trade or withdraw permission is refused; a read-only key is verified", async () => {
+test("HTX reports a key's trade and withdraw permissions, and an undocumented one counts as trade", async () => {
   const { exchange, htx, requests } = setup();
   assert.deepEqual(await exchange.getKeyPermissions(), {
     trade: false,
     withdraw: false,
   });
-  assert.equal(await exchange.checkReadOnlyKey(), "verified");
   const [query] = requests("/v2/user/api-key");
   assert.equal(query.parameters.get("uid"), htx.uid);
   assert.equal(query.parameters.get("accessKey"), htx.apiKey);
@@ -368,33 +393,28 @@ test("a key with trade or withdraw permission is refused; a read-only key is ver
     ["readOnly,trade", { trade: true, withdraw: false }],
     ["readOnly,withdraw", { trade: false, withdraw: true }],
     ["trade,readOnly,withdraw", { trade: true, withdraw: true }],
+    // A permission HTX has not documented could allow anything.
+    ["readOnly,transfer", { trade: true, withdraw: false }],
   ] as const) {
     htx.permission = permission;
-    assert.deepEqual(await exchange.getKeyPermissions(), expected);
-    const refused = await kinds(exchange.checkReadOnlyKey());
-    assert.equal(refused.kind, "rejected");
-    assert.match(refused.message, /can trade or withdraw/);
+    assert.deepEqual(await exchange.getKeyPermissions(), expected, permission);
   }
-  // A permission HTX has not documented could allow anything.
-  htx.permission = "readOnly,transfer";
-  assert.equal((await kinds(exchange.checkReadOnlyKey())).kind, "unavailable");
 });
 
-test("a sub-user's key, which HTX will not describe, is unverified rather than accepted or refused", async () => {
+test("a sub-user's key, which HTX will not describe, has no reported permissions; other failures are errors", async () => {
   const { exchange, htx } = setup();
   htx.subUser = true;
   assert.equal(await exchange.getKeyPermissions(), null);
-  assert.equal(await exchange.checkReadOnlyKey(), "unverified");
   // HTX may also refuse with HTTP 403.
   htx.subUser = false;
   htx.failNext(
     "/v2/user/uid",
     () => new Response("Forbidden", { status: 403 }),
   );
-  assert.equal(await exchange.checkReadOnlyKey(), "unverified");
+  assert.equal(await exchange.getKeyPermissions(), null);
   // Any other failure is an error, never a pass.
   htx.failNext("/v2/user/api-key", () => new Response("", { status: 502 }));
-  assert.equal((await kinds(exchange.checkReadOnlyKey())).kind, "unavailable");
+  assert.equal((await kinds(exchange.getKeyPermissions())).kind, "unavailable");
 });
 
 test("rate limits, outages and unreadable answers become venue-neutral errors that reveal nothing", async () => {
@@ -634,7 +654,7 @@ test("a public market data client sends nothing signed", async () => {
   assert.ok(htx.requests.every((request) => !request.signed));
 });
 
-test("HTX is a read-only venue with real funds, lowercase symbols and the application's client IDs", () => {
+test("HTX is a read-only venue with real funds and lowercase symbols, and takes no client order IDs", () => {
   const htx = venueFor("htx");
   assert.equal(htx.name, "HTX");
   assert.deepEqual(htx.capabilities, {
@@ -653,7 +673,8 @@ test("HTX is a read-only venue with real funds, lowercase symbols and the applic
   assert.equal(htxVenueSymbols.toVenueSymbol("BTC-USDT"), "btcusdt");
   assert.equal(htxVenueSymbols.toVenueSymbol("人生K线-USDT"), "人生k线usdt");
   assert.equal(htxVenueSymbols.assetCode("usdt"), "USDT");
-  assert.equal(htxClientOrderIds.toVenue("ct_sgabc123_tp"), "ct_sgabc123_tp");
+  // The application sends HTX no orders, so it has no client order ID for one.
+  assert.throws(() => htxClientOrderIds.toVenue("ct_sgabc123_tp"), /read only/);
   assert.equal(htxClientOrderIds.fromVenue("ct_web_001"), "ct_web_001");
   for (const foreign of ["", "23456", "web_8f2c1d"])
     assert.equal(htxClientOrderIds.fromVenue(foreign), undefined);
@@ -661,10 +682,10 @@ test("HTX is a read-only venue with real funds, lowercase symbols and the applic
 });
 
 test("the HTX adapter exposes no trading methods and sends nothing but GETs", async () => {
-  // Every method it has: AccountReader's and the key check, nothing else.
+  // Every method it has: AccountReader's, the key report included, and
+  // nothing else.
   const methods = Object.getOwnPropertyNames(HtxSpot.prototype).sort();
   assert.deepEqual(methods, [
-    "checkReadOnlyKey",
     "constructor",
     "getAccount",
     "getDepth",
@@ -715,7 +736,7 @@ test("the HTX adapter exposes no trading methods and sends nothing but GETs", as
   await exchange.getSnapshot(["BTC-USDT", "ETH-USDT"]);
   await exchange.getOrderById("BTC-USDT", "357632718898331");
   await exchange.getOrderFills("BTC-USDT", "357630527817871");
-  await exchange.checkReadOnlyKey();
+  await exchange.getKeyPermissions();
   await exchange.getTickers();
   await exchange.getKlines("BTC-USDT", "1h");
   await exchange.getDepth("BTC-USDT");
