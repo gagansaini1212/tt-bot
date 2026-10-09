@@ -234,6 +234,8 @@ function documentedRejection(message: unknown) {
 
 // Binance's "Order does not exist."
 const NO_SUCH_ORDER = -2013;
+// Binance's "Invalid symbol.", for a market it does not list.
+const INVALID_SYMBOL = -1121;
 
 /** An ExchangeError from Binance Spot Testnet, with Binance's numeric code. */
 export class BinanceTestnetError extends ExchangeError {
@@ -696,14 +698,24 @@ export class BinanceSpotTestnet implements TradingAdapter {
     );
     return toOrderListReport(report, order.instrument);
   }
-  async getOrderList(listClientOrderId: string) {
+  /**
+   * The list the application placed with `listClientOrderId`. Given the
+   * instrument it was placed on, as the worker always knows, the list needs
+   * no catalogue to name its market.
+   */
+  async getOrderList(listClientOrderId: string, instrument?: Instrument) {
     const list = await this.#request(
       "GET",
       "/api/v3/orderList",
       { origClientOrderId: clientId(listClientOrderId) },
       binanceOrderListSchema,
     );
-    return toOrderList(list, await this.#instrumentFor(list.symbol));
+    return toOrderList(
+      list,
+      instrument && list.symbol === symbol(instrument)
+        ? instrument
+        : await this.#instrumentFor(list.symbol),
+    );
   }
   #openOrderLists() {
     return this.#request(
@@ -713,15 +725,20 @@ export class BinanceSpotTestnet implements TradingAdapter {
       z.array(binanceOrderListSchema),
     );
   }
-  /** Every open order list on the account, on markets the catalogue lists. */
-  async getOpenOrderLists() {
+  /**
+   * The account's open order lists on `instrument`, or on every market the
+   * catalogue lists. Only the second needs the catalogue.
+   */
+  async getOpenOrderLists(instrument?: Instrument) {
     const lists = await this.#openOrderLists();
+    if (instrument)
+      return lists
+        .filter((list) => list.symbol === symbol(instrument))
+        .map((list) => toOrderList(list, instrument));
     const normalized: ExchangeOrderList[] = [];
     for (const list of lists) {
-      const instrument = await this.markets.instrumentForVenueSymbol(
-        list.symbol,
-      );
-      if (instrument) normalized.push(toOrderList(list, instrument));
+      const listed = await this.markets.instrumentForVenueSymbol(list.symbol);
+      if (listed) normalized.push(toOrderList(list, listed));
     }
     return normalized;
   }
@@ -764,17 +781,40 @@ export class BinanceSpotTestnet implements TradingAdapter {
   getMarketRules(instrument: Instrument) {
     return this.markets.rules(instrument);
   }
+  /**
+   * Balances, and open orders and recent fills on `instruments` that Binance
+   * lists. Others are left out.
+   */
   async getSnapshot(
     instruments: readonly Instrument[],
   ): Promise<AccountSnapshot> {
-    const wanted = [...new Set(instruments)];
-    const [account, orderLists, fillLists, lists] = await Promise.all([
+    const unique = [...new Set(instruments)];
+    // A market Binance does not list answers "Invalid symbol" and is left
+    // out, rather than failing the lot. This needs no catalogue.
+    const unlisted = (error: unknown) => {
+      if (
+        error instanceof BinanceTestnetError &&
+        error.kind === "rejected" &&
+        error.code === INVALID_SYMBOL
+      )
+        return undefined;
+      throw error;
+    };
+    const [account, perInstrument, lists] = await Promise.all([
       this.getAccount(),
-      Promise.all(wanted.map((instrument) => this.getOpenOrders(instrument))),
-      Promise.all(wanted.map((instrument) => this.getFills(instrument))),
+      Promise.all(
+        unique.map((instrument) =>
+          Promise.all([
+            this.getOpenOrders(instrument),
+            this.getFills(instrument),
+          ]).catch(unlisted),
+        ),
+      ),
       this.#openOrderLists(),
     ]);
-    const orders = orderLists.flat();
+    const wanted = unique.filter((_, index) => perInstrument[index]);
+    const orders = perInstrument.flatMap((found) => found?.[0] ?? []);
+    const fillLists = perInstrument.map((found) => found?.[1] ?? []);
     const bySymbol = new Map(
       wanted.map((instrument) => [symbol(instrument), instrument]),
     );

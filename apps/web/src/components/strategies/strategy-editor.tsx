@@ -61,14 +61,17 @@ const KINDS: { value: StrategyKindName; label: string }[] = [
   { value: "standing_price_instruction", label: "Standing price instruction" },
 ];
 
-type Pair = { value: Instrument; label: string };
+type MarketOption = { value: Instrument; label: string };
 
 /**
  * The markets a strategy can choose: the account's allowed instruments that
  * the venue lists, as the worker reports them, and any the strategy being
  * edited already trades.
  */
-function pairOptions(markets: StrategyMarket[], form: StrategyForm): Pair[] {
+function marketOptions(
+  markets: StrategyMarket[],
+  form: StrategyForm,
+): MarketOption[] {
   const instruments = new Set<Instrument>([
     ...markets.map((market) => market.instrument),
     form.instrument,
@@ -133,7 +136,7 @@ export function StrategyEditor({
     setForm((current) => ({ ...current, ...change }));
   const market = (instrument: Instrument) =>
     markets.find((entry) => entry.instrument === instrument);
-  const pairs = pairOptions(markets, form);
+  const marketChoices = marketOptions(markets, form);
 
   const build = () => {
     const built = buildStrategyDraft(form);
@@ -238,7 +241,7 @@ export function StrategyEditor({
                   className="col-span-2 md:col-span-1"
                   label="Pair"
                   onChange={(instrument) => update({ instrument })}
-                  options={pairs}
+                  options={marketChoices}
                   value={form.instrument}
                 />
               )}
@@ -271,7 +274,7 @@ export function StrategyEditor({
               <AiFields
                 aiSource={aiSource}
                 form={form}
-                pairs={pairs}
+                marketChoices={marketChoices}
                 onChange={(ai) => update({ ai: { ...form.ai, ...ai } })}
               />
             )}
@@ -695,19 +698,19 @@ function StandingFields({
 function AiFields({
   form,
   aiSource,
-  pairs,
+  marketChoices,
   onChange,
 }: {
   form: StrategyForm;
   aiSource: AiSource;
-  pairs: Pair[];
+  marketChoices: MarketOption[];
   onChange: (change: Partial<StrategyForm["ai"]>) => void;
 }) {
   const { ai } = form;
   const toggle = (instrument: Instrument, on: boolean) =>
     onChange({
-      instruments: pairs
-        .map((pair) => pair.value)
+      instruments: marketChoices
+        .map((option) => option.value)
         .filter((value) =>
           value === instrument ? on : ai.instruments.includes(value),
         ),
@@ -724,15 +727,18 @@ function AiFields({
       <fieldset>
         <legend className="mb-1.5 text-sm font-medium">Markets</legend>
         <div className="flex flex-wrap gap-4">
-          {pairs.map((pair) => (
-            <label className="flex items-center gap-2 text-sm" key={pair.value}>
+          {marketChoices.map((option) => (
+            <label
+              className="flex items-center gap-2 text-sm"
+              key={option.value}
+            >
               <input
-                checked={ai.instruments.includes(pair.value)}
+                checked={ai.instruments.includes(option.value)}
                 className="size-4 accent-primary"
-                onChange={(event) => toggle(pair.value, event.target.checked)}
+                onChange={(event) => toggle(option.value, event.target.checked)}
                 type="checkbox"
               />
-              {pair.label}
+              {option.label}
             </label>
           ))}
         </div>

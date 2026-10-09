@@ -25,7 +25,6 @@ import {
   type ManualOrderOutcome,
   type ManualOrderTicket,
 } from "@crypto-trading/exchanges/manual-order";
-import {} from "@crypto-trading/exchanges/order-rules";
 
 import {
   checkOrderStatus,

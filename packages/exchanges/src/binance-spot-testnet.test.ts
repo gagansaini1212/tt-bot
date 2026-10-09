@@ -975,3 +975,72 @@ test("the loop's price, fills and market sell map to Binance's contract", async 
     }),
   );
 });
+
+test("a snapshot leaves out an allowed market the venue does not list, instead of failing", async () => {
+  const { exchange, requests } = setup((url) => {
+    if (url.pathname === "/api/v3/account")
+      return Response.json({ canTrade: true, balances: [] });
+    if (url.searchParams.get("symbol") === "SOLUSDT")
+      return Response.json(
+        { code: -1121, msg: "Invalid symbol." },
+        { status: 400 },
+      );
+    return Response.json([]);
+  });
+  const snapshot = await exchange.getSnapshot(["BTC-USDT", "SOL-USDT"]);
+  assert.equal(snapshot.venue, "binance-spot-testnet");
+  assert.deepEqual(snapshot.orders, []);
+  assert.deepEqual(snapshot.fills, []);
+  // Binance was asked, and its "Invalid symbol" left SOL-USDT out, with no
+  // catalogue read.
+  assert.ok(
+    requests.some(({ url }) => url.searchParams.get("symbol") === "SOLUSDT"),
+  );
+  assert.ok(
+    !requests.some(({ url }) => url.pathname === "/api/v3/exchangeInfo"),
+  );
+  // Any other failure still fails the snapshot.
+  const failing = setup((url) =>
+    url.searchParams.get("symbol") === "SOLUSDT"
+      ? new Response("busy", { status: 503 })
+      : url.pathname === "/api/v3/account"
+        ? Response.json({ canTrade: true, balances: [] })
+        : Response.json([]),
+  );
+  await assert.rejects(failing.exchange.getSnapshot(["BTC-USDT", "SOL-USDT"]), {
+    kind: "unavailable",
+  });
+});
+
+test("looking a list up on a known instrument needs no market catalogue", async () => {
+  let catalogueReads = 0;
+  const { exchange } = setup(
+    (url) => {
+      if (url.pathname === "/api/v3/exchangeInfo") {
+        catalogueReads += 1;
+        return new Response("unavailable", { status: 503 });
+      }
+      return url.pathname === "/api/v3/openOrderList"
+        ? Response.json([
+            listResponse,
+            { ...listResponse, orderListId: 9, symbol: "ETHUSDT" },
+          ])
+        : Response.json(listResponse);
+    },
+    { markets: false },
+  );
+  const list = await exchange.getOrderList("ct_list_001", "BTC-USDT");
+  assert.equal(list.instrument, "BTC-USDT");
+  assert.deepEqual(
+    (await exchange.getOpenOrderLists("BTC-USDT")).map(
+      (open) => open.orderListId,
+    ),
+    ["7"],
+  );
+  assert.equal(catalogueReads, 0);
+  // Without an instrument, the catalogue names the market.
+  await assert.rejects(exchange.getOrderList("ct_list_001"), {
+    kind: "unavailable",
+  });
+  assert.equal(catalogueReads, 1);
+});

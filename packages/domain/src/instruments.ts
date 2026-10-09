@@ -8,7 +8,7 @@ const INSTRUMENT_PATTERN = new RegExp(`^(${ASSET})-(${ASSET})$`, "u");
 const ASSET_PATTERN = new RegExp(`^${ASSET}$`, "u");
 
 const INVALID =
-  "Name the market as BASE-QUOTE, such as BTC-USDT: two asset codes in capitals, joined by a hyphen.";
+  "Name the instrument as BASE-QUOTE, such as BTC-USDT: two asset codes in capitals, joined by a hyphen.";
 
 /**
  * An instrument, named by its market in BASE-QUOTE form, such as BTC-USDT or
@@ -60,11 +60,18 @@ export const DEFAULT_ALLOWED_INSTRUMENTS: readonly Instrument[] = [
   "ETH-USDT",
 ];
 
+/**
+ * The most instruments an exchange account may allow. The worker reads each
+ * one's open orders and fills for every snapshot, within the venue's request
+ * weight.
+ */
+export const MAX_ALLOWED_INSTRUMENTS = 10;
+
 /** A list of allowed instruments: at least one, each once. */
 export const allowedInstrumentsSchema = z
   .array(instrumentSchema)
   .min(1)
-  .max(100)
+  .max(MAX_ALLOWED_INSTRUMENTS)
   .refine((instruments) => new Set(instruments).size === instruments.length, {
     error: "List each instrument once.",
   });

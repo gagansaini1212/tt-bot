@@ -1,5 +1,5 @@
 import Decimal from "decimal.js";
-import { type Instrument } from "@crypto-trading/domain";
+import { instrumentLabel, type Instrument } from "@crypto-trading/domain";
 import {
   listCustomerIds,
   withCustomerScope,
@@ -441,7 +441,7 @@ export class ExecutionLoop {
     const order = intent.order;
     if (!order || order.kind === "protected_entry") {
       const list = await absentIfMissing(
-        exchange.getOrderList(intent.clientOrderId),
+        exchange.getOrderList(intent.clientOrderId, order?.entry.instrument),
       );
       return list && { orderListId: list.orderListId };
     }
@@ -1088,9 +1088,7 @@ function baseAsset(instrument: Instrument) {
   return instrument.split("-")[0];
 }
 
-function pair(instrument: Instrument) {
-  return instrument.replace("-", "/");
-}
+const pair = instrumentLabel;
 
 function entryData(
   tracked: TrackedEntry,

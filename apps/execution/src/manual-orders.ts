@@ -13,8 +13,11 @@ import {
   protectedEntrySchema,
   protectedLeg,
   protectedLegIds,
-  UnlistedMarketError,
+  canPlaceOrders,
+  findMarketRules,
+  venueFor,
   type ManualOrderOutcome,
+  type MarketRules,
   type ManualOrderTicket,
   type ManualTradingConfig,
   type ProtectedEntry,
@@ -24,6 +27,7 @@ import {
   type TradingAdapter,
 } from "@crypto-trading/exchanges";
 import {
+  DEFAULT_ALLOWED_INSTRUMENTS,
   instrumentLabel,
   instrumentSchema,
   utcDayStart,
@@ -45,6 +49,7 @@ import {
 
 export type ManualOrderExchange = Pick<
   TradingAdapter,
+  | "venue"
   | "getAccount"
   | "getOpenOrders"
   | "getOpenOrderLists"
@@ -90,7 +95,7 @@ export function loadManualTradingConfig(
     !instruments.every((value) => instrumentSchema.safeParse(value).success)
   )
     return off(
-      "Set TESTNET_MANUAL_INSTRUMENTS to BTC-USDT, ETH-USDT or both in the execution worker to place orders from the dashboard.",
+      "Set TESTNET_MANUAL_INSTRUMENTS to the markets the dashboard may buy, as BASE-QUOTE, such as BTC-USDT,ETH-USDT, in the execution worker to place orders from the dashboard.",
     );
   const allocation = env.TESTNET_MANUAL_ALLOCATION_USDT ?? "";
   if (!decimalPattern.test(allocation) || !new Decimal(allocation).gt(0))
@@ -212,6 +217,45 @@ export class ManualOrderDesk {
     });
   }
 
+  /** Throws ManualOrdersOff unless the desk's venue may place orders. */
+  #assertCanPlaceOrders() {
+    const venue = venueFor(this.#exchange.venue);
+    if (!canPlaceOrders(venue))
+      throw new ManualOrdersOff(
+        `${venue.name} is read only here, so it takes no orders (ADR 0009).`,
+      );
+  }
+
+  /**
+   * The markets whose open orders are the dashboard's to count and cancel:
+   * the default allowed instruments, which the dashboard always traded, the
+   * account's and the worker's. Dashboard orders on any of them use the
+   * allocation, even after the customer narrows the account's list.
+   */
+  #managed(accountInstruments: readonly Instrument[]): Instrument[] {
+    return [
+      ...new Set([
+        ...DEFAULT_ALLOWED_INSTRUMENTS,
+        ...accountInstruments,
+        ...this.#config.allowedInstruments,
+      ]),
+    ];
+  }
+
+  /** The managed markets the venue lists, with their rules. */
+  async #watched(
+    accountInstruments: readonly Instrument[],
+  ): Promise<Map<Instrument, MarketRules>> {
+    const found = await Promise.all(
+      this.#managed(accountInstruments).map((instrument) =>
+        findMarketRules(this.#exchange, instrument),
+      ),
+    );
+    return new Map(
+      found.flatMap((rules) => (rules ? [[rules.instrument, rules]] : [])),
+    );
+  }
+
   /**
    * Fresh account limits, risk limits, balances and market rules for an
    * order. Throws RiskLimitsNotSet if the customer has set no risk limits,
@@ -225,6 +269,7 @@ export class ManualOrderDesk {
     { sending }: { sending?: string } = {},
   ): Promise<ManualOrderTicket> {
     const now = this.#now();
+    this.#assertCanPlaceOrders();
     const [stored, dailyRiskUsed, accountInstruments] = await Promise.all([
       this.#risk.current(scope),
       this.#risk.dailyRiskUsed(scope, utcDayStart(now), sending),
@@ -245,38 +290,34 @@ export class ManualOrderDesk {
       allowedInstruments,
       maxOrderNotional: limits.maxOrderNotional,
     };
-    // Dashboard orders on any of the account's markets use the allocation.
-    const watched = [
-      ...new Set([...accountInstruments, ...this.#config.allowedInstruments]),
-    ];
-    const [account, orders, rules, asks] = await Promise.all([
+    const watched = await this.#watched(accountInstruments);
+    const [account, orders, asks] = await Promise.all([
       this.#exchange.getAccount(),
       Promise.all(
-        watched.map((instrument) => this.#exchange.getOpenOrders(instrument)),
+        [...watched.keys()].map((instrument) =>
+          this.#exchange.getOpenOrders(instrument),
+        ),
       ).then((lists) => lists.flat()),
-      // A market the venue no longer lists has no rules, so no order passes.
       Promise.all(
-        allowedInstruments.map((instrument) =>
-          this.#exchange.getMarketRules(instrument).catch((error: unknown) => {
-            if (error instanceof UnlistedMarketError) return undefined;
-            throw error;
-          }),
-        ),
-      ).then((found) => found.filter((rule) => rule !== undefined)),
-      Promise.all(
-        config.allowedInstruments.map(
-          async (instrument) =>
-            [
-              instrument,
-              // A reference price. Without one, only market entries stop.
-              await this.#exchange
-                .getDepth(instrument, 5)
-                .then((book) => book.asks[0]?.price ?? null)
-                .catch(() => null),
-            ] as const,
-        ),
+        allowedInstruments
+          .filter((instrument) => watched.has(instrument))
+          .map(
+            async (instrument) =>
+              [
+                instrument,
+                // A reference price. Without one, only market entries stop.
+                await this.#exchange
+                  .getDepth(instrument, 5)
+                  .then((book) => book.asks[0]?.price ?? null)
+                  .catch(() => null),
+              ] as const,
+          ),
       ).then((entries) => new Map(entries)),
     ]);
+    // A market the venue no longer lists has no rules, so no order passes.
+    const rules = allowedInstruments.flatMap(
+      (instrument) => watched.get(instrument) ?? [],
+    );
     const entryPrices = await this.#intents.entryPrices(scope, [
       ...new Set(
         orders.flatMap(
@@ -678,7 +719,10 @@ export class ManualOrderDesk {
       };
     let list: ExchangeOrderList | undefined;
     try {
-      list = await this.#sender.find(listClientOrderId);
+      list = await this.#sender.find(
+        listClientOrderId,
+        intent.order.entry.instrument,
+      );
     } catch {
       return {
         status: "unknown",
@@ -728,9 +772,23 @@ export class ManualOrderDesk {
       });
     const request = parsed.data;
     return this.#exclusive(async () => {
+      try {
+        this.#assertCanPlaceOrders();
+      } catch (error) {
+        if (error instanceof ManualOrdersOff)
+          return { status: "rejected", message: error.message };
+        throw error;
+      }
+      const managed = this.#managed(await this.#risk.allowedInstruments(scope));
+      if (!managed.includes(request.instrument))
+        return {
+          status: "not_open",
+          message:
+            "This order is not on a market the dashboard manages. Refresh to see the account's orders.",
+        };
       const [open, lists] = await Promise.all([
         this.#exchange.getOpenOrders(request.instrument),
-        this.#exchange.getOpenOrderLists(),
+        this.#exchange.getOpenOrderLists(request.instrument),
       ]);
       const target = resolveTarget(
         request.instrument,
@@ -867,7 +925,7 @@ export class ProtectedEntrySender {
         throw error;
       }
       // Never resubmit. Look the order up by its client ID instead.
-      list = await this.find(id).catch(() => undefined);
+      list = await this.find(id, entry.instrument).catch(() => undefined);
     }
     this.#onChange();
     if (!list) {
@@ -922,9 +980,9 @@ export class ProtectedEntrySender {
   }
 
   /** Looks an order list up by its client ID; undefined if Binance has none. */
-  async find(listClientOrderId: string) {
+  async find(listClientOrderId: string, instrument: Instrument) {
     try {
-      return await this.#exchange.getOrderList(listClientOrderId);
+      return await this.#exchange.getOrderList(listClientOrderId, instrument);
     } catch (error) {
       // Only "does not exist" proves Binance has no such list. Any other
       // rejection, such as a signature or clock error, leaves it unknown.

@@ -10,5 +10,5 @@ export const instrument = z
   .string()
   .regex(/^[A-Z0-9]{1,20}-[A-Z0-9]{1,20}$/)
   .describe(
-    "The market as BASE-QUOTE, such as BTC-USDT. The worker refuses a market the customer's exchange account does not allow.",
+    "The instrument as BASE-QUOTE, such as BTC-USDT. The worker refuses a market the customer's exchange account does not allow.",
   );

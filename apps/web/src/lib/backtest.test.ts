@@ -109,6 +109,27 @@ describe("running a backtest", () => {
     assert.equal(result?.equity.length, 73);
   });
 
+  test("covers the default allowed instruments only, downloading nothing for others", async () => {
+    const source = history();
+    const outcome = await runBacktestRequest(
+      { ...request, rules: { ...request.rules, instrument: "SOL-USDT" } },
+      { history: source, now: Date.UTC(2026, 9, 8) },
+    );
+    assert.deepEqual(outcome, {
+      status: "invalid",
+      message: "Backtests cover BTC/USDT and ETH/USDT for now, not SOL/USDT.",
+    });
+    const summary = await summarizePeriod(
+      {
+        instrument: "DOGE-USDT",
+        period: { start: "2026-09-01", end: "2026-09-01" },
+      },
+      { history: source, now: Date.UTC(2026, 9, 8) },
+    );
+    assert.equal(summary.status, "invalid");
+    assert.deepEqual(source.calls, []);
+  });
+
   test("stops at the last hour that has closed", async () => {
     const source = history();
     await runBacktestRequest(request, {

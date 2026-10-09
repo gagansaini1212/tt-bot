@@ -50,6 +50,22 @@ export class UnlistedMarketError extends Error {
   }
 }
 
+/**
+ * The instrument's market from `adapter`, or undefined if its venue does not
+ * list it. Other failures, such as the venue being unreachable, throw.
+ */
+export async function findMarketRules(
+  adapter: { getMarketRules(instrument: Instrument): Promise<MarketRules> },
+  instrument: Instrument,
+): Promise<MarketRules | undefined> {
+  try {
+    return await adapter.getMarketRules(instrument);
+  } catch (error) {
+    if (error instanceof UnlistedMarketError) return undefined;
+    throw error;
+  }
+}
+
 // Market rules change rarely, and orders that miss a change are refused by
 // the venue, so a few minutes' staleness costs nothing. The worker read
 // Binance's rules this often before the catalogue existed.
@@ -98,7 +114,7 @@ export class MarketCatalogue {
             byVenueSymbol.has(market.venueSymbol)
           )
             throw new Error(
-              `${venueFor(this.venue).name} lists ${market.instrument} more than once.`,
+              `${venueFor(this.venue).name} lists ${byInstrument.has(market.instrument) ? market.instrument : market.venueSymbol} more than once.`,
             );
           byInstrument.set(market.instrument, market);
           byVenueSymbol.set(market.venueSymbol, market.instrument);

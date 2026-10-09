@@ -172,8 +172,8 @@ export function venueFor(id: VenueId): Venue {
  * Whether the application may place orders on the venue: it trades,
  * holds only virtual funds, and can attach exits to every entry. Anything
  * else is read only, however its adapter is built, so live trading stays
- * impossible. An order path must refuse an exchange account on any other
- * venue (ADR 0009).
+ * impossible. The dashboard's order desk and the strategy runner check it
+ * before every order and cancel they send (ADR 0009).
  */
 export function canPlaceOrders(venue: Venue) {
   const { access, funds, attachedExits } = venue.capabilities;

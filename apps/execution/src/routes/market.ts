@@ -4,7 +4,9 @@ import {
   MAX_KLINE_LIMIT,
   MAX_TICKER_FILTER,
   tickerSymbolSchema,
+  findMarketRules,
   UnlistedMarketError,
+  type MarketDataAdapter,
   type Depth,
   type Kline,
   type Ticker,
@@ -21,19 +23,14 @@ export const DEFAULT_KLINE_LIMIT = 500;
  * the venue for its market data.
  */
 async function listed(
-  exchange: { getMarketRules(instrument: Instrument): Promise<unknown> },
+  exchange: Pick<MarketDataAdapter, "venue" | "getMarketRules">,
   instrument: Instrument,
 ) {
-  try {
-    await exchange.getMarketRules(instrument);
-  } catch (error) {
-    if (error instanceof UnlistedMarketError)
-      throw new RequestError(404, {
-        status: "unknown_market",
-        message: error.message,
-      });
-    throw error;
-  }
+  if (!(await findMarketRules(exchange, instrument)))
+    throw new RequestError(404, {
+      status: "unknown_market",
+      message: new UnlistedMarketError(exchange.venue, instrument).message,
+    });
 }
 
 function limit(max: number) {

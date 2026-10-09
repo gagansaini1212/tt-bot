@@ -89,7 +89,7 @@ The web app decides which customer a request acts for, and the worker acts only 
 
 ## Allowed instruments
 
-`exchange_accounts.allowed_instruments` lists the instruments, named `BASE-QUOTE`, that the account's customer allows. It defaults to `BTC-USDT` and `ETH-USDT`, and must hold at least one. Its venue's market catalogue decides what exists, and the account's accounting currency what a strategy may trade there ([ADR 0008](adr/0008-normalize-venues-markets-and-order-ids.md)). `apps/execution/src/instrument-access.ts` reads it in the customer's scope: strategy creation and every entry's reservation read it in their own transaction, and dashboard orders, the assistant's decisions and the snapshot read it through `RiskLimitStore.allowedInstruments`. There is no screen to change it yet; to widen it, update the column.
+`exchange_accounts.allowed_instruments` lists the instruments, named `BASE-QUOTE`, that the account's customer allows. It defaults to `BTC-USDT` and `ETH-USDT`, and holds from one to ten. Its venue's market catalogue decides what exists, and the account's accounting currency what a strategy may trade there ([ADR 0008](adr/0008-normalize-venues-markets-and-order-ids.md)). `apps/execution/src/instrument-access.ts` reads it in the customer's scope: strategy creation and every entry's reservation read it in their own transaction, and dashboard orders, the assistant's decisions and the snapshot read it through `RiskLimitStore.allowedInstruments`. There is no screen to change it yet; to widen it, update the column.
 
 ## Notifications and webhooks
 

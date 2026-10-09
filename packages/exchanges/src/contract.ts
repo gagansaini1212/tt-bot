@@ -323,9 +323,16 @@ export interface TradingAdapter extends AccountReader {
     instrument: Instrument,
     clientOrderId: string,
   ): Promise<ExchangeOrder>;
-  /** Looks an order list up by the application's list ID. */
-  getOrderList(listClientOrderId: string): Promise<ExchangeOrderList>;
-  getOpenOrderLists(): Promise<ExchangeOrderList[]>;
+  /**
+   * Looks an order list up by the application's list ID. Pass the instrument
+   * it was placed on when known.
+   */
+  getOrderList(
+    listClientOrderId: string,
+    instrument?: Instrument,
+  ): Promise<ExchangeOrderList>;
+  /** Open order lists on `instrument`, or on every listed market. */
+  getOpenOrderLists(instrument?: Instrument): Promise<ExchangeOrderList[]>;
   testLimitOrder(order: LimitOrderRequest): Promise<void>;
   placeLimitOrder(order: LimitOrderRequest): Promise<ExchangeOrder>;
   cancelOrder(

@@ -17,6 +17,8 @@ import {
   type StrategiesState,
   type StrategyChange,
   type StrategyDraft,
+  VENUES,
+  type VenueCapabilities,
 } from "@crypto-trading/exchanges";
 import type { AccountResolver, AccountScope } from "./accounts";
 import {
@@ -1396,6 +1398,35 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
       (await w.strategy(saved.strategy!.id)).runnerNote,
       /not among this exchange account's allowed instruments/,
     );
+  });
+
+  test("a read-only venue starts no strategy and a running one opens no entries", async () => {
+    const w = await world();
+    const id = await w.create(grid(w.now()));
+    const venue = VENUES["binance-spot-testnet"] as {
+      capabilities: VenueCapabilities;
+    };
+    const original = venue.capabilities;
+    venue.capabilities = { ...original, access: "read_only", funds: "real" };
+    try {
+      const created = (
+        (await strategyRoutes(w.runner).create.handle({
+          exchange: w.fake,
+          account: w.scope,
+          query: {},
+          body: grid(w.now()),
+        } as never)) as { change: StrategyChange }
+      ).change;
+      assert.equal(created.result, "refused");
+      assert.match(created.message, /read only/);
+      await w.pass();
+      assert.equal((await entries(id)).length, 0);
+      assert.equal(w.fake.count("placeProtectedEntry"), 0);
+    } finally {
+      venue.capabilities = original;
+    }
+    await w.pass();
+    assert.ok((await entries(id)).length > 0);
   });
 
   test("a strategy cannot start without the portfolio's drawdown limit", async () => {

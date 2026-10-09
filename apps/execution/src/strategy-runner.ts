@@ -12,10 +12,13 @@ import {
   type EntryPlan,
   type LossLimitStatus,
   type Instrument,
+  instrumentLabel,
   instrumentSchema,
 } from "@crypto-trading/domain";
 import {
   ExchangeError,
+  canPlaceOrders,
+  findMarketRules,
   UnlistedMarketError,
   venueFor,
   protectedEntryFilterIssues,
@@ -402,9 +405,9 @@ export class StrategyRunner {
     if (rules.kind === "ai_managed")
       return this.#analyse(scope, context, strategy, rules, unclosed, measured);
     const instrument = rules.instrument as Instrument;
-    const symbol = await context.reads.exchange.getMarketRules(instrument);
-    const steps = { tickSize: symbol.tickSize, quantityStep: symbol.stepSize };
-    const free = await this.#freeStopOrders(scope, context, instrument, symbol);
+    const market = await context.reads.exchange.getMarketRules(instrument);
+    const steps = { tickSize: market.tickSize, quantityStep: market.stepSize };
+    const free = await this.#freeStopOrders(scope, context, instrument, market);
     const limit = (rulesLimit: number) =>
       Math.min(rulesLimit, unclosed.length + Math.max(free, 0));
     let plan: EntryPlan;
@@ -472,7 +475,7 @@ export class StrategyRunner {
         this.#onChange();
         return `Closing: ${ENDED_LABELS[plan.reason]}. Pending entries are cancelled and open entries sold.`;
       case "wait":
-        return waitNote(plan, instrument, free, symbol);
+        return waitNote(plan, instrument, free, market);
       case "enter": {
         const sent: string[] = [];
         const skipped: string[] = [];
@@ -534,20 +537,15 @@ export class StrategyRunner {
     for (const instrument of rules.allowedInstruments) {
       const parsed = instrumentSchema.safeParse(instrument);
       if (!parsed.success || !allowed.includes(parsed.data)) continue;
-      const symbol = await context.reads.exchange
-        .getMarketRules(parsed.data)
-        .catch((error: unknown) => {
-          if (error instanceof UnlistedMarketError) return undefined;
-          throw error;
-        });
-      if (!symbol) continue;
+      const market = await findMarketRules(context.reads.exchange, parsed.data);
+      if (!market) continue;
       markets.push({
         instrument: parsed.data,
         lastPrice: await context.reads.lastPrice(parsed.data),
         bestAsk: (await context.reads.bestAsk(parsed.data)) ?? null,
-        tickSize: symbol.tickSize,
-        stepSize: symbol.stepSize,
-        minNotional: symbol.minNotional,
+        tickSize: market.tickSize,
+        stepSize: market.stepSize,
+        minNotional: market.minNotional,
       });
     }
     if (!markets.length)
@@ -682,9 +680,15 @@ export class StrategyRunner {
     candidate: Omit<EntryCandidate, "freeStopOrders">,
   ): Promise<Submission> {
     const { reads } = context;
+    const venue = venueFor(reads.exchange.venue);
+    if (!canPlaceOrders(venue))
+      return {
+        status: "skipped",
+        reason: `${venue.name} is read only here, so a strategy opens no entries on it (ADR 0009).`,
+      };
     const { intent } = candidate;
     const instrument = intent.instrument as Instrument;
-    const symbol = await reads.exchange.getMarketRules(instrument);
+    const market = await reads.exchange.getMarketRules(instrument);
     const order = {
       instrument,
       quantity: intent.quantity,
@@ -693,7 +697,7 @@ export class StrategyRunner {
       takeProfitPrice: intent.takeProfitPrice,
       stopLossPrice: intent.stopLossPrice,
     };
-    const issues = protectedEntryFilterIssues(order, symbol);
+    const issues = protectedEntryFilterIssues(order, market);
     if (issues.length)
       return {
         status: "skipped",
@@ -721,12 +725,12 @@ export class StrategyRunner {
         scope,
         context,
         instrument,
-        symbol,
+        market,
       );
       if (free <= 0)
         return {
           status: "skipped",
-          reason: `Binance allows ${maxStopOrders(symbol)} open stop orders on ${pair(instrument)} and all are in use, so it waits.`,
+          reason: `Binance allows ${maxStopOrders(market)} open stop orders on ${pair(instrument)} and all are in use, so it waits.`,
         };
       const notional = new Decimal(intent.quantity).times(intent.entryPrice);
       const usdt = await reads.balance("USDT");
@@ -778,7 +782,7 @@ export class StrategyRunner {
     scope: AccountScope,
     context: PassContext,
     instrument: Instrument,
-    symbol: MarketRules,
+    market: MarketRules,
   ) {
     const open = [...(await context.reads.openOrders(instrument)).values()];
     const used = new Set<string>();
@@ -796,7 +800,7 @@ export class StrategyRunner {
     const inFlight = (
       await this.store.inFlightEntries(scope, instrument)
     ).filter((id) => !visible.has(id));
-    return maxStopOrders(symbol) - used.size - inFlight.length;
+    return maxStopOrders(market) - used.size - inFlight.length;
   }
 
   /** One strategy's results and loss limits, read afresh. */
@@ -985,11 +989,11 @@ export class StrategyRunner {
     // instruments that the venue lists.
     for (const instrument of await this.store.allowedInstruments(scope)) {
       try {
-        const symbol = await exchange.getMarketRules(instrument);
+        const market = await exchange.getMarketRules(instrument);
         const [lastPrice, bestAsk, free] = await Promise.all([
           context.reads.lastPrice(instrument).catch(() => null),
           context.reads.bestAsk(instrument).catch(() => undefined),
-          this.#freeStopOrders(scope, context, instrument, symbol).catch(
+          this.#freeStopOrders(scope, context, instrument, market).catch(
             () => null,
           ),
         ]);
@@ -997,12 +1001,12 @@ export class StrategyRunner {
           instrument,
           lastPrice,
           bestAsk: bestAsk ?? null,
-          tickSize: plainText(symbol.tickSize),
-          stepSize: plainText(symbol.stepSize),
-          minNotional: plainText(symbol.minNotional),
-          maxStopOrders: maxStopOrders(symbol),
+          tickSize: plainText(market.tickSize),
+          stepSize: plainText(market.stepSize),
+          minNotional: plainText(market.minNotional),
+          maxStopOrders: maxStopOrders(market),
           stopOrdersInUse:
-            free === null ? null : Math.max(maxStopOrders(symbol) - free, 0),
+            free === null ? null : Math.max(maxStopOrders(market) - free, 0),
         });
       } catch {
         // Left out: the page says the market's rules are unavailable.
@@ -1264,15 +1268,15 @@ function strategyView(
   };
 }
 
-function maxStopOrders(symbol: MarketRules) {
-  return symbol.maxStopOrders ?? DEFAULT_MAX_STOP_ORDERS;
+function maxStopOrders(market: MarketRules) {
+  return market.maxStopOrders ?? DEFAULT_MAX_STOP_ORDERS;
 }
 
 function waitNote(
   plan: Extract<EntryPlan, { action: "wait" }>,
   instrument: Instrument,
   freeStops: number,
-  symbol: MarketRules,
+  market: MarketRules,
 ) {
   const until = plan.until ? ` until ${utc(plan.until)}` : "";
   switch (plan.reason) {
@@ -1282,7 +1286,7 @@ function waitNote(
       return `This interval's buy is made; the next is due at ${utc(plan.until!)}.`;
     case "entry_limit":
       return freeStops <= 0
-        ? `Waiting: Binance allows ${maxStopOrders(symbol)} open stop orders on ${pair(instrument)} and all are in use, so no further entry could be protected${plan.until ? `; a buy due now is skipped` : ""}.`
+        ? `Waiting: Binance allows ${maxStopOrders(market)} open stop orders on ${pair(instrument)} and all are in use, so no further entry could be protected${plan.until ? `; a buy due now is skipped` : ""}.`
         : `At its entry limit${until}.`;
     case "entries_pending":
       return "Every entry is placed.";
@@ -1322,9 +1326,7 @@ function plural(count: number, one: string, many: string) {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-function pair(instrument: Instrument) {
-  return instrument.replace("-", "/");
-}
+const pair = instrumentLabel;
 
 function plainText(value: string) {
   return new Decimal(value).toFixed();

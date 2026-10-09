@@ -1,5 +1,10 @@
 import "server-only";
-import { type Instrument, instrumentSchema } from "@crypto-trading/domain";
+import {
+  DEFAULT_ALLOWED_INSTRUMENTS,
+  instrumentLabel,
+  instrumentSchema,
+  type Instrument,
+} from "@crypto-trading/domain";
 import {
   backtestPeriodSchema,
   backtestRequestSchema,
@@ -90,6 +95,20 @@ async function closedCandles(
   };
 }
 
+/**
+ * Backtests download and cache a market's history on this machine, so they
+ * cover the default allowed instruments only, as before instruments came
+ * from the venue.
+ */
+function outsideBacktests(instrument: Instrument) {
+  return DEFAULT_ALLOWED_INSTRUMENTS.includes(instrument)
+    ? undefined
+    : {
+        status: "invalid" as const,
+        message: `Backtests cover ${DEFAULT_ALLOWED_INSTRUMENTS.map(instrumentLabel).join(" and ")} for now, not ${instrumentLabel(instrument)}.`,
+      };
+}
+
 function failure(error: unknown) {
   return {
     status: "unavailable" as const,
@@ -113,6 +132,8 @@ export async function runBacktestRequest(
   if (!parsed.success)
     return { status: "invalid", message: parsed.error.issues[0].message };
   const backtest = resolveBacktest(parsed.data);
+  const outside = outsideBacktests(backtest.instrument);
+  if (outside) return outside;
   try {
     const [period, market] = await Promise.all([
       closedCandles(
@@ -161,6 +182,8 @@ export async function summarizePeriod(
   if (!parsed.success)
     return { status: "invalid", message: parsed.error.issues[0].message };
   const { instrument, period } = parsed.data;
+  const outside = outsideBacktests(instrument);
+  if (outside) return outside;
   const { start, end } = periodBounds(period);
   try {
     const [result, market] = await Promise.all([

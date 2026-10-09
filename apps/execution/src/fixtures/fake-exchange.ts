@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { instrumentAssets, type Instrument } from "@crypto-trading/domain";
 import {
   BinanceTestnetError,
+  UnlistedMarketError,
   protectedLegIds,
   type ManualOrderRequest,
   type ProtectedEntry,
@@ -65,6 +66,7 @@ export function fakeExchange(
       ["NEW", "PARTIALLY_FILLED"].includes(order.status),
     );
   const exchange: ManualOrderExchange = {
+    venue: "binance-spot-testnet",
     getAccount: async () => ({
       canTrade: true,
       balances: [{ asset: "USDT", free: "1000", locked: "0" }],
@@ -89,7 +91,12 @@ export function fakeExchange(
         );
       return list;
     },
-    getMarketRules: async (instrument) => rules(instrument),
+    // Lists BTC-USDT and ETH-USDT only.
+    getMarketRules: async (instrument) => {
+      if (instrument !== "BTC-USDT" && instrument !== "ETH-USDT")
+        throw new UnlistedMarketError("binance-spot-testnet", instrument);
+      return rules(instrument);
+    },
     getDepth: async () => ({
       lastUpdateId: 1,
       bids: [{ price: "59999.00", quantity: "1" }],

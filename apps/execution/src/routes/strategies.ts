@@ -8,7 +8,10 @@ import {
   type PortfolioLimitsChange,
   type StrategyChange,
   type StrategyDraft,
+  canPlaceOrders,
+  findMarketRules,
   UnlistedMarketError,
+  venueFor,
 } from "@crypto-trading/exchanges";
 import { ruleLimits } from "@crypto-trading/domain";
 import { z } from "zod";
@@ -45,21 +48,24 @@ export function strategies(
       change: { result: result.result, message: result.message, strategy },
     };
   };
-  // A draft may trade only markets its venue's catalogue lists. The store
-  // then checks the account allows them.
+  // A draft may trade only on a venue that places orders, and only markets
+  // its catalogue lists. The store then checks the account allows them.
   const unlisted = async (
     exchange: BinanceSpotTestnet,
     draft: StrategyDraft,
   ): Promise<ControlResult | undefined> => {
-    for (const instrument of ruleLimits(draft.rules).allowedInstruments) {
-      try {
-        await exchange.getMarketRules(instrument);
-      } catch (error) {
-        if (error instanceof UnlistedMarketError)
-          return { result: "refused", message: error.message };
-        throw error;
-      }
-    }
+    const venue = venueFor(exchange.venue);
+    if (!canPlaceOrders(venue))
+      return {
+        result: "refused",
+        message: `${venue.name} is read only here, so it runs no strategies (ADR 0009).`,
+      };
+    for (const instrument of ruleLimits(draft.rules).allowedInstruments)
+      if (!(await findMarketRules(exchange, instrument)))
+        return {
+          result: "refused",
+          message: new UnlistedMarketError(venue.id, instrument).message,
+        };
     return undefined;
   };
   const invalid = (error: z.ZodError) => {

@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { protectedLegIds } from "@crypto-trading/exchanges";
+import {
+  protectedLegIds,
+  VENUES,
+  type VenueCapabilities,
+} from "@crypto-trading/exchanges";
 import {
   deskFixture,
   limit,
@@ -550,4 +554,53 @@ test("a market outside the account's allowed instruments is refused, whatever th
   assert.equal(refused.status, "rejected");
   assert.match(refused.message, /allows none of the markets/);
   assert.equal(closed.calls.place, 0);
+});
+
+test("a market the venue does not list is left out of the ticket, and a cancel only reaches the dashboard's markets", async () => {
+  const f = deskFixture({
+    intents: new MemoryOrderIntents(),
+    scope,
+    env: { TESTNET_MANUAL_INSTRUMENTS: "BTC-USDT,XRP-USDT" },
+    // XRP-USDT is allowed, but the fake venue does not list it.
+    risk: new MemoryRiskLimits({
+      limits: TEST_RISK_LIMITS,
+      instruments: ["BTC-USDT", "XRP-USDT"],
+    }),
+  });
+  const ticket = await f.desk.ticket();
+  assert.deepEqual(
+    ticket.markets.map((entry) => entry.rules.instrument),
+    ["BTC-USDT"],
+  );
+  assert.equal((await f.desk.place(limit("ct_listed"))).status, "working");
+  const cancel = await f.desk.cancel({
+    instrument: "SOL-USDT",
+    orderId: "100",
+    acceptUnprotected: false,
+  });
+  assert.equal(cancel.status, "not_open");
+  assert.equal(f.calls.cancelList + f.calls.cancelOrder, 0);
+});
+
+test("a desk on a read-only venue takes no orders and cancels nothing", async () => {
+  const venue = VENUES["binance-spot-testnet"] as {
+    capabilities: VenueCapabilities;
+  };
+  const original = venue.capabilities;
+  venue.capabilities = { ...original, access: "read_only", funds: "real" };
+  try {
+    const f = desk();
+    const placed = await f.desk.place(limit("ct_read_only"));
+    assert.equal(placed.status, "rejected");
+    assert.match(placed.message, /read only/);
+    const cancelled = await f.desk.cancel({
+      instrument: "BTC-USDT",
+      orderId: "100",
+      acceptUnprotected: false,
+    });
+    assert.equal(cancelled.status, "rejected");
+    assert.equal(f.calls.place + f.calls.cancelList + f.calls.cancelOrder, 0);
+  } finally {
+    venue.capabilities = original;
+  }
 });

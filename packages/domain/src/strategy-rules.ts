@@ -22,7 +22,7 @@ export const RULE_BOUNDS = {
   maxStandingEntries: 10,
   maxPerpetualLeverage: 10,
   maxAiProtectedEntries: 10,
-  maxAiInstruments: 20,
+  maxAiInstruments: 10,
   minGridLevels: 2,
   maxGridLevels: 100,
   maxDcaBuys: 1_000,
