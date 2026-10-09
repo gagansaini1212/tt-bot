@@ -21,10 +21,12 @@ import {
   instrumentSchema,
 } from "@crypto-trading/domain";
 import { accountResolver } from "./accounts";
+import { ExchangeAccountStore } from "./exchange-accounts";
 import {
   ExchangeCredentialStore,
   privateKeyType,
   savedOrEnvironmentExchanges,
+  type VenueConnector,
 } from "./exchange-credentials";
 import {
   EveDecisionSource,
@@ -149,6 +151,13 @@ async function main() {
         (provider === "binance-spot-testnet" ? publicClient : undefined),
       create: (keys) => new BinanceSpotTestnet({ ...keys, markets }),
     });
+  // Builds an adapter for new keys, so they can be checked before they are
+  // saved. Binance Spot Testnet is the only venue with an adapter so far.
+  const connect: VenueConnector = (venue, keys) => {
+    if (venue !== "binance-spot-testnet")
+      throw new Error(`No adapter for ${venue}.`);
+    return new BinanceSpotTestnet({ ...keys, markets });
+  };
   if (process.env.TESTNET_MAX_ORDER_NOTIONAL_USDT)
     console.warn(
       "TESTNET_MAX_ORDER_NOTIONAL_USDT is no longer read. Set the per-order cap in Settings → Risk limits, then remove it from apps/execution/.env.",
@@ -199,9 +208,11 @@ async function main() {
       exclusive,
       risk,
       reader: { state: (scope) => loop!.state(scope) },
-      settings: {
+      exchangeAccounts: {
+        accounts: new ExchangeAccountStore(db),
         keys: new ExchangeCredentialStore(db, box),
         exchanges,
+        connect,
         environmentKeys:
           environment && process.env.BINANCE_TESTNET_API_KEY
             ? {
@@ -209,6 +220,8 @@ async function main() {
                 apiKeyLast4: process.env.BINANCE_TESTNET_API_KEY.slice(-4),
               }
             : undefined,
+      },
+      settings: {
         risk,
         webhooks,
         notifications: {

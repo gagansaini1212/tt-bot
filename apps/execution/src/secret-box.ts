@@ -1,4 +1,10 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHmac,
+  hkdfSync,
+  randomBytes,
+} from "node:crypto";
 
 const FORMAT = 1;
 const KEY_BYTES = 32;
@@ -21,11 +27,15 @@ export const MASTER_KEY_VARIABLE = "CREDENTIALS_MASTER_KEY";
  */
 export class SecretBox {
   readonly #key: Buffer;
+  readonly #fingerprintKey: Buffer;
 
   constructor(key: Buffer) {
     if (key.length !== KEY_BYTES)
       throw new Error(`The master key must be ${KEY_BYTES} bytes.`);
     this.#key = Buffer.from(key);
+    this.#fingerprintKey = Buffer.from(
+      hkdfSync("sha256", this.#key, Buffer.alloc(0), "fingerprint", KEY_BYTES),
+    );
   }
 
   /**
@@ -57,6 +67,19 @@ export class SecretBox {
       ciphertext,
       cipher.getAuthTag(),
     ]);
+  }
+
+  /**
+   * A keyed hash of `value` in `context`, to find a value saved twice
+   * without storing it, such as one API key on two exchange accounts. It is
+   * HMAC-SHA256 under a key derived from the master key for this use only,
+   * so equal values in the same context give equal fingerprints, and nothing
+   * else can be learned from one without the master key.
+   */
+  fingerprint(value: string, context: readonly string[]): Buffer {
+    return createHmac("sha256", this.#fingerprintKey)
+      .update(associatedData([...context, value]))
+      .digest();
   }
 
   /** Throws if the value was changed, sealed with another key or context. */

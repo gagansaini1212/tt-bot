@@ -7,6 +7,7 @@
     ".": "./src/index.ts",
     "./ai-decisions": "./src/ai-decisions.ts",
     "./contract": "./src/contract.ts",
+    "./exchange-accounts": "./src/exchange-accounts.ts",
     "./execution": "./src/execution-state.ts",
     "./manual-order": "./src/manual-order.ts",
     "./market-catalogue": "./src/market-catalogue.ts",

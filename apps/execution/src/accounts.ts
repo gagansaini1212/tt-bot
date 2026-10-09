@@ -25,8 +25,8 @@ export const TESTNET_EXCHANGE_ACCOUNT_ID = DEV_EXCHANGE_ACCOUNT_ID;
 
 /**
  * Looks the testnet account up in the requesting customer's scope, so
- * row-level security hides it from every other customer. Live accounts are
- * refused. Before the first lookup it checks that row-level security applies
+ * row-level security hides it from every other customer. Live accounts, and
+ * accounts the customer removed, are refused. Before the first lookup it checks that row-level security applies
  * to the worker's database role at all.
  */
 export function accountResolver(database: Database): AccountResolver {
@@ -48,6 +48,7 @@ export function accountResolver(database: Database): AccountResolver {
           where id = ${exchangeAccountId}
             and exchange = 'binance-spot-testnet'
             and mode = 'simulation'
+            and status not in ('disconnected', 'handed_over')
         `,
       );
       lastLogged = undefined;

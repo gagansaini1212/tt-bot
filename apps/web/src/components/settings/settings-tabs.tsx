@@ -7,7 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SETTINGS_TABS, type SettingsTab } from "@/lib/settings-tabs";
 
 const LABELS: Record<SettingsTab, { label: string; icon: typeof KeyRound }> = {
-  keys: { label: "Exchange keys", icon: KeyRound },
+  accounts: { label: "Exchange accounts", icon: KeyRound },
   risk: { label: "Risk limits", icon: ShieldAlert },
   notifications: { label: "Notifications", icon: Bell },
 };

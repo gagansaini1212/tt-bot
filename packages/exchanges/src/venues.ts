@@ -13,6 +13,26 @@ export const VENUE_IDS = ["binance-spot-testnet"] as const;
 export const venueIdSchema = z.enum(VENUE_IDS);
 export type VenueId = z.infer<typeof venueIdSchema>;
 
+/**
+ * How an API key signs requests: an HMAC secret, or a private key (Ed25519,
+ * RSA, or ES256 signing a JWT, as Coinbase's keys do). See ADR 0009 §6.
+ */
+export const exchangeKeyTypeSchema = z.enum([
+  "hmac",
+  "ed25519",
+  "rsa",
+  "es256",
+]);
+export type ExchangeKeyType = z.infer<typeof exchangeKeyTypeSchema>;
+
+/** What an exchange account's credential set holds on the venue. */
+export type VenueCredentials = {
+  /** The key types the venue accepts. */
+  readonly keyTypes: readonly ExchangeKeyType[];
+  /** Whether each key comes with a passphrase, as OKX's and KuCoin's do. */
+  readonly passphrase: boolean;
+};
+
 export type OrderTypeCapability =
   "limit" | "limit_maker" | "market" | "stop_loss" | "stop_loss_limit";
 export type TimeInForce = "GTC" | "IOC" | "FOK";
@@ -105,6 +125,7 @@ export type Venue = {
   /** As the dashboard names it. */
   readonly name: string;
   readonly capabilities: VenueCapabilities;
+  readonly credentials: VenueCredentials;
   readonly symbols: VenueSymbolCodec;
   readonly clientOrderIds: ClientOrderIdCodec;
 };
@@ -159,6 +180,7 @@ export const VENUES: { readonly [Id in VenueId]: Venue & { id: Id } } = {
       testOrders: true,
       lookupByClientOrderId: true,
     },
+    credentials: { keyTypes: ["hmac", "ed25519", "rsa"], passphrase: false },
     symbols: binanceVenueSymbols,
     clientOrderIds: binanceClientOrderIds,
   },
@@ -178,4 +200,16 @@ export function venueFor(id: VenueId): Venue {
 export function canPlaceOrders(venue: Venue) {
   const { access, funds, attachedExits } = venue.capabilities;
   return access === "trade" && funds === "virtual" && attachedExits !== null;
+}
+
+/**
+ * The modes an exchange account on the venue may have in this build:
+ * `simulation` on a venue with virtual funds, such as a testnet, and `live`
+ * only on a read-only venue, which never trades. A venue that would trade
+ * real funds has none, since live trading stays disabled.
+ */
+export function accountModes(venue: Venue): ("simulation" | "live")[] {
+  const { access, funds } = venue.capabilities;
+  if (funds === "virtual") return ["simulation"];
+  return access === "read_only" ? ["live"] : [];
 }

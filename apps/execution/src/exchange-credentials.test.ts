@@ -7,10 +7,20 @@ import {
   databaseTestsSkipped,
   type MigratedTestDatabase,
 } from "@crypto-trading/database/testing";
-import { BinanceSpotTestnet } from "@crypto-trading/exchanges";
+import {
+  BinanceSpotTestnet,
+  ExchangeError,
+  VENUES,
+  type AccountReader,
+  type KeyPermissions,
+  type Venue,
+} from "@crypto-trading/exchanges";
 import { TESTNET_EXCHANGE_ACCOUNT_ID, type AccountScope } from "./accounts";
 import {
+  checkKeyPermissions,
   ExchangeCredentialStore,
+  KeysInUseError,
+  prepareCredentials,
   prepareKeys,
   savedOrEnvironmentExchanges,
   type ExchangeKeys,
@@ -48,6 +58,157 @@ test("new keys are checked and typed without contacting Binance", () => {
   assert.equal(refused.ok, false);
   assert.ok(!refused.ok);
   assert.doesNotMatch(refused.message, /BEGIN|PRIVATE/);
+});
+
+const binance = VENUES["binance-spot-testnet"];
+// A venue whose keys come with a passphrase and may sign JWTs, and one the
+// product only reads, made from Binance's descriptor for these tests.
+const passphraseVenue: Venue = {
+  ...binance,
+  name: "Passphrase venue",
+  credentials: { keyTypes: ["hmac", "es256"], passphrase: true },
+};
+const readOnlyVenue: Venue = {
+  ...binance,
+  name: "Read-only venue",
+  capabilities: {
+    ...binance.capabilities,
+    access: "read_only",
+    funds: "real",
+    orderTypes: [],
+    orderLists: [],
+    attachedExits: null,
+    stopOrders: "none",
+  },
+};
+const es256 = () =>
+  generateKeyPairSync("ec", { namedCurve: "prime256v1" })
+    .privateKey.export({ type: "pkcs8", format: "pem" })
+    .toString();
+
+test("new keys must suit their venue: its key types, and a passphrase only where it needs one", () => {
+  const connected: ExchangeKeys[] = [];
+  const connect = (_: string, keys: ExchangeKeys) => {
+    connected.push(keys);
+    return {} as AccountReader;
+  };
+  const refused = prepareCredentials(
+    binance,
+    { kind: "private_key", apiKey, privateKey: es256() },
+    connect,
+  );
+  assert.ok(!refused.ok);
+  assert.match(refused.message, /does not accept ES256 \(P-256\) keys/);
+  const noPassphrase = prepareCredentials(
+    passphraseVenue,
+    { kind: "hmac", apiKey, secretKey },
+    connect,
+  );
+  assert.ok(!noPassphrase.ok);
+  assert.match(noPassphrase.message, /come with a passphrase/);
+  const unwanted = prepareCredentials(
+    binance,
+    { kind: "hmac", apiKey, secretKey, passphrase: "secret phrase" },
+    connect,
+  );
+  assert.ok(!unwanted.ok);
+  assert.match(unwanted.message, /have no passphrase/);
+  assert.equal(connected.length, 0);
+
+  const jwt = prepareCredentials(
+    passphraseVenue,
+    {
+      kind: "private_key",
+      apiKey,
+      privateKey: es256(),
+      passphrase: " spaces kept ",
+    },
+    connect,
+  );
+  assert.ok(jwt.ok);
+  assert.equal(jwt.keyType, "es256");
+  assert.equal(jwt.keys.passphrase, " spaces kept ");
+  assert.equal(connected.length, 1);
+  // An adapter that cannot sign with the keys refuses them.
+  const unsignable = prepareCredentials(
+    binance,
+    { kind: "hmac", apiKey, secretKey },
+    () => {
+      throw new Error("bad keys");
+    },
+  );
+  assert.ok(!unsignable.ok);
+  assert.doesNotMatch(unsignable.message, new RegExp(secretKey));
+});
+
+test("keys that can do more than their account allows are refused", async () => {
+  const reader = (report: () => Promise<KeyPermissions | null>) =>
+    ({ getKeyPermissions: report }) as unknown as AccountReader;
+  const answer = (permissions: KeyPermissions | null) =>
+    reader(async () => permissions);
+
+  // A read-only account's keys may neither trade nor withdraw.
+  const trading = await checkKeyPermissions(
+    readOnlyVenue,
+    answer({ trade: true, withdraw: false }),
+  );
+  assert.equal(trading.result, "refused");
+  assert.ok(trading.result === "refused");
+  assert.match(
+    trading.message,
+    /can trade\. Read-only venue accounts are read only/,
+  );
+  assert.deepEqual(
+    await checkKeyPermissions(
+      readOnlyVenue,
+      answer({ trade: false, withdraw: false }),
+    ),
+    { result: "allowed", verified: true },
+  );
+  // A venue that cannot report a key's permissions leaves them unverified.
+  assert.deepEqual(await checkKeyPermissions(readOnlyVenue, answer(null)), {
+    result: "allowed",
+    verified: false,
+  });
+  assert.deepEqual(
+    await checkKeyPermissions(readOnlyVenue, {} as AccountReader),
+    { result: "allowed", verified: false },
+  );
+
+  // A trading account's keys may trade, but never withdraw.
+  assert.deepEqual(
+    await checkKeyPermissions(
+      binance,
+      answer({ trade: true, withdraw: false }),
+    ),
+    { result: "allowed", verified: true },
+  );
+  const withdrawing = await checkKeyPermissions(
+    binance,
+    answer({ trade: true, withdraw: true }),
+  );
+  assert.ok(withdrawing.result === "refused");
+  assert.match(withdrawing.message, /can withdraw funds/);
+
+  // Keys whose permissions cannot be read are not used.
+  const rejected = await checkKeyPermissions(
+    readOnlyVenue,
+    reader(async () => {
+      throw new ExchangeError("rejected", {
+        venue: "binance-spot-testnet",
+        code: 2002,
+      });
+    }),
+  );
+  assert.ok(rejected.result === "failed");
+  assert.match(rejected.message, /refused these keys \(code 2002\)/);
+  const unreachable = await checkKeyPermissions(
+    readOnlyVenue,
+    reader(async () => {
+      throw new ExchangeError("unavailable", { venue: "binance-spot-testnet" });
+    }),
+  );
+  assert.equal(unreachable.result, "failed");
 });
 
 describe(
@@ -145,6 +306,59 @@ describe(
       );
     });
 
+    test("a passphrase and an ES256 key are sealed like the rest, and one API key belongs to one account", async () => {
+      const store = new ExchangeCredentialStore(database.app, box);
+      const mine = await customer();
+      const pem = es256();
+      const keys = {
+        apiKey: `${apiKey}JWT`,
+        privateKey: pem,
+        passphrase: "correct horse battery",
+      };
+      const info = await store.save(mine, "es256", keys);
+      assert.equal(info.hasPassphrase, true);
+      const saved = await store.load(mine);
+      assert.equal(saved?.keyType, "es256");
+      assert.equal(saved?.hasPassphrase, true);
+      assert.deepEqual(saved?.open(), keys);
+      const [row] = await database.admin<
+        {
+          encrypted_passphrase: Buffer;
+          encrypted_api_secret: Buffer;
+          api_key_fingerprint: Buffer;
+        }[]
+      >`select * from exchange_credentials where exchange_account_id = ${mine.exchangeAccountId}`;
+      assert.doesNotMatch(
+        row.encrypted_passphrase.toString("latin1") +
+          row.encrypted_api_secret.toString("latin1"),
+        /correct horse|PRIVATE KEY/,
+      );
+      assert.equal(row.api_key_fingerprint.length, 32);
+
+      // The same API key cannot be saved for another account, any customer's.
+      const theirs = await customer();
+      await assert.rejects(store.save(theirs, "es256", keys), KeysInUseError);
+      assert.equal(await store.load(theirs), undefined);
+      // Replacing an account's keys with the same key is no conflict.
+      await store.save(mine, "es256", { ...keys, passphrase: "another one" });
+      assert.equal((await store.load(mine))?.open().passphrase, "another one");
+
+      // A passphrase copied onto another account does not open there.
+      await store.save(theirs, "hmac", {
+        apiKey: `${apiKey}OTHER`,
+        apiSecret: secretKey,
+        passphrase: "theirs",
+      });
+      await database.admin`
+        update exchange_credentials set encrypted_passphrase = ${row.encrypted_passphrase}
+        where exchange_account_id = ${theirs.exchangeAccountId}
+      `;
+      await assert.rejects(
+        store.load(theirs).then((moved) => moved?.open()),
+        /could not be opened/,
+      );
+    });
+
     test("without a master key, keys cannot be saved or opened", async () => {
       const mine = await customer();
       await new ExchangeCredentialStore(database.app, box).save(mine, "hmac", {
@@ -189,7 +403,9 @@ describe(
         problem: "exchange",
       });
 
-      await store.save(mine, "hmac", { apiKey, apiSecret: secretKey });
+      // Each API key belongs to one account, so this test has its own.
+      const ownKey = `${apiKey}A`;
+      await store.save(mine, "hmac", { apiKey: ownKey, apiSecret: secretKey });
       const first = await exchanges.forAccount(mine);
       const second = await exchanges.forAccount(mine);
       assert.ok("exchange" in first && "exchange" in second);
@@ -198,13 +414,13 @@ describe(
       assert.equal(first.exchange, second.exchange);
       assert.equal(created.length, 1);
       await store.save(mine, "hmac", {
-        apiKey: `${apiKey}2`,
+        apiKey: `${ownKey}2`,
         apiSecret: secretKey,
       });
       const replaced = await exchanges.forAccount(mine);
       assert.ok("exchange" in replaced);
       assert.notEqual(replaced.exchange, first.exchange);
-      assert.equal(created.at(-1)?.apiKey, `${apiKey}2`);
+      assert.equal(created.at(-1)?.apiKey, `${ownKey}2`);
 
       // Saved keys that cannot be opened never fall back to other keys.
       const error = mock.method(console, "error", () => {});

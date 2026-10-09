@@ -2,6 +2,7 @@ export * from "./ai-decisions";
 export * from "./binance-spot-history";
 export * from "./binance-spot-testnet";
 export * from "./contract";
+export * from "./exchange-accounts";
 export * from "./execution-state";
 export * from "./manual-order";
 export * from "./market-catalogue";

@@ -1,16 +1,20 @@
 import "server-only";
 import {
+  exchangeAccountChangeSchema,
+  exchangeAccountsStateSchema,
+  type AddExchangeAccountRequest,
+  type ExchangeAccountsState,
+  type RelabelExchangeAccountRequest,
+  type ReplaceExchangeKeysRequest,
+} from "@crypto-trading/exchanges/exchange-accounts";
+import {
   MAX_NOTIFICATIONS,
   connectionTestSchema,
-  exchangeKeysChangeSchema,
-  exchangeKeysStatusSchema,
   riskLimitsChangeSchema,
   riskLimitsStateSchema,
   webhookChangeSchema,
   webhookStatusSchema,
   webhookTestSchema,
-  type ExchangeKeysRequest,
-  type ExchangeKeysStatus,
   type RiskLimitsChangeRequest,
   type RiskLimitsState,
   type WebhookStatus,
@@ -96,43 +100,58 @@ const changeResult = ({ change }: { change: SettingsActionResult }) => ({
   message: change.message,
 });
 
-export function getExchangeKeys(): Promise<
-  WorkerState<{ keys: ExchangeKeysStatus }>
+export function getExchangeAccounts(): Promise<
+  WorkerState<{ exchangeAccounts: ExchangeAccountsState }>
 > {
   return read({
-    path: "/settings/exchange-keys",
-    schema: z.object({ keys: exchangeKeysStatusSchema }),
+    path: "/exchange-accounts",
+    schema: z.object({ exchangeAccounts: exchangeAccountsStateSchema }),
   });
 }
 
-export function saveExchangeKeys(request: ExchangeKeysRequest) {
+const accountChange = {
+  method: "POST",
+  schema: z.object({ change: exchangeAccountChangeSchema }),
+} as const;
+
+export function addExchangeAccount(request: AddExchangeAccountRequest) {
+  return write(
+    { ...accountChange, path: "/exchange-accounts", body: request },
+    changeResult,
+  );
+}
+
+export function relabelExchangeAccount(request: RelabelExchangeAccountRequest) {
+  return write(
+    { ...accountChange, path: "/exchange-accounts/label", body: request },
+    changeResult,
+  );
+}
+
+export function replaceExchangeKeys(request: ReplaceExchangeKeysRequest) {
+  return write(
+    { ...accountChange, path: "/exchange-accounts/keys", body: request },
+    changeResult,
+  );
+}
+
+export function removeExchangeAccount(exchangeAccountId: string) {
   return write(
     {
-      method: "POST",
-      path: "/settings/exchange-keys",
-      body: request,
-      schema: z.object({ change: exchangeKeysChangeSchema }),
+      ...accountChange,
+      path: "/exchange-accounts/remove",
+      body: { exchangeAccountId },
     },
     changeResult,
   );
 }
 
-export function removeExchangeKeys() {
-  return write(
-    {
-      method: "DELETE",
-      path: "/settings/exchange-keys",
-      schema: z.object({ change: exchangeKeysChangeSchema }),
-    },
-    changeResult,
-  );
-}
-
-export function testExchangeConnection() {
+export function testExchangeAccount(exchangeAccountId: string) {
   return write(
     {
       method: "POST",
-      path: "/settings/exchange-keys/test",
+      path: "/exchange-accounts/test",
+      body: { exchangeAccountId },
       schema: z.object({ test: connectionTestSchema }),
     },
     ({ test }) => ({ result: test.result, message: test.message }),

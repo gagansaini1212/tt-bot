@@ -2,13 +2,13 @@ import type { Metadata } from "next";
 
 import { AccountRefresh } from "@/components/account-refresh";
 import { PageHeader } from "@/components/page-header";
-import { ExchangeKeysPanel } from "@/components/settings/exchange-keys-panel";
+import { ExchangeAccountsPanel } from "@/components/settings/exchange-accounts-panel";
 import { NotificationsPanel } from "@/components/settings/notifications-panel";
 import { PortfolioLimitsPanel } from "@/components/settings/portfolio-limits-panel";
 import { RiskLimitsPanel } from "@/components/settings/risk-limits-panel";
 import { SettingsTabs } from "@/components/settings/settings-tabs";
 import {
-  getExchangeKeys,
+  getExchangeAccounts,
   getNotifications,
   getRiskLimits,
   getWebhook,
@@ -23,13 +23,14 @@ export default async function SettingsPage({
   searchParams,
 }: PageProps<"/settings">) {
   const initial = settingsTab((await searchParams).tab);
-  const [keys, limits, portfolio, webhook, notifications] = await Promise.all([
-    getExchangeKeys(),
-    getRiskLimits(),
-    getPortfolioLimits(),
-    getWebhook(),
-    getNotifications(),
-  ]);
+  const [accounts, limits, portfolio, webhook, notifications] =
+    await Promise.all([
+      getExchangeAccounts(),
+      getRiskLimits(),
+      getPortfolioLimits(),
+      getWebhook(),
+      getNotifications(),
+    ]);
   const unread =
     notifications.status === "connected"
       ? notifications.notifications.filter((entry) => !entry.readAt).length
@@ -38,13 +39,13 @@ export default async function SettingsPage({
     <>
       <PageHeader
         action={<AccountRefresh />}
-        description="Your Binance Spot Testnet keys, the limits on orders you place by hand and on your strategies together, and where alerts go. Testnet only: live trading is turned off."
+        description="Your exchange accounts and their keys, the limits on orders you place by hand and on your strategies together, and where alerts go. Testnet only: live trading is turned off."
         title="Settings"
       />
       <SettingsTabs
         initial={initial}
         panels={{
-          keys: <ExchangeKeysPanel state={keys} />,
+          accounts: <ExchangeAccountsPanel state={accounts} />,
           risk: (
             <>
               <RiskLimitsPanel state={limits} />

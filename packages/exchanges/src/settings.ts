@@ -3,6 +3,7 @@
 // them, and the worker checks them again.
 import { z } from "zod";
 import { manualRiskLimitsSchema } from "./manual-order";
+import { exchangeKeyTypeSchema } from "./venues";
 
 const decimal = z
   .string()
@@ -12,48 +13,56 @@ const timestamp = z.iso.datetime({ offset: true });
 
 // ---- Exchange keys ---------------------------------------------------------
 
-/** How an API key signs: an HMAC secret, or an Ed25519 or RSA private key. */
-export const exchangeKeyTypeSchema = z.enum(["hmac", "ed25519", "rsa"]);
-export type ExchangeKeyType = z.infer<typeof exchangeKeyTypeSchema>;
+// Defined with the venues, which declare the key types they accept.
+export { exchangeKeyTypeSchema, type ExchangeKeyType } from "./venues";
 
 const apiKey = z.string().regex(/^[\x21-\x7e]{16,256}$/);
+// Printable ASCII, spaces included, kept exactly as typed.
+const passphrase = z
+  .string()
+  .regex(/^[\x20-\x7e]{1,128}$/)
+  .optional();
 
-/** New Binance Spot Testnet keys for the customer's exchange account. */
+/**
+ * New keys for an exchange account. The worker checks them against the
+ * account's venue: its key types, and whether it needs a passphrase.
+ */
 export const exchangeKeysRequestSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("hmac"),
     apiKey,
     secretKey: z.string().regex(/^[\x21-\x7e]{16,256}$/),
+    passphrase,
   }),
   z.strictObject({
     kind: z.literal("private_key"),
     apiKey,
     // An unencrypted PEM private key whose public key is registered with
-    // Binance. The worker checks it is Ed25519 or RSA.
+    // the venue. The worker checks it is Ed25519, RSA or P-256 (ES256).
     privateKey: z
       .string()
       .min(64)
       .max(8192)
       .refine((value) => value.trim().startsWith("-----BEGIN")),
+    passphrase,
   }),
 ]);
 export type ExchangeKeysRequest = z.infer<typeof exchangeKeysRequestSchema>;
 
 /**
- * Which keys the worker trades with for this account. Never the keys
+ * Which keys the worker uses for an exchange account. Never the keys
  * themselves: only the last four characters of the API key.
  * - saved: keys saved on the Settings page.
- * - environment: the worker's own keys from its .env file, used until keys
- *   are saved.
+ * - environment: the worker's own keys from its .env file, used for the dev
+ *   account until keys are saved.
  * - none: no keys, so the worker cannot reach the account.
  */
 export const exchangeKeysStatusSchema = z.object({
   source: z.enum(["saved", "environment", "none"]),
   keyType: exchangeKeyTypeSchema.nullable(),
   apiKeyLast4: z.string().max(4).nullable(),
+  hasPassphrase: z.boolean().default(false),
   updatedAt: timestamp.nullable(),
-  // Saving keys needs the worker's master key.
-  canSave: z.boolean(),
   // Why saved keys cannot be used, such as a missing or different master key.
   problem: z.string().max(500).nullable(),
 });
@@ -66,14 +75,6 @@ export const connectionTestSchema = z.object({
   message: z.string().max(500),
 });
 export type ConnectionTest = z.infer<typeof connectionTestSchema>;
-
-/** The outcome of saving or removing keys. */
-export const exchangeKeysChangeSchema = z.object({
-  result: z.enum(["saved", "removed", "invalid", "unavailable"]),
-  message: z.string().max(500),
-  keys: exchangeKeysStatusSchema,
-});
-export type ExchangeKeysChange = z.infer<typeof exchangeKeysChangeSchema>;
 
 // ---- Risk limits -----------------------------------------------------------
 

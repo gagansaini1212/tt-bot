@@ -310,7 +310,19 @@ export interface AccountReader extends MarketDataAdapter {
    * without order lists reports none.
    */
   getSnapshot(instruments: readonly Instrument[]): Promise<AccountSnapshot>;
+  /**
+   * What the connected API key may do, as the venue reports it, or null when
+   * the venue cannot report it for this key, such as a sub-user's key on
+   * HTX. An adapter whose venue has no such report leaves it out. The worker
+   * asks before it saves new keys and when it tests a connection, and
+   * refuses keys with more permission than the account allows
+   * (`excessKeyPermissions`). Throws ExchangeError when the request fails.
+   */
+  getKeyPermissions?(): Promise<KeyPermissions | null>;
 }
+
+/** What an API key may do beyond reading the account. */
+export type KeyPermissions = { trade: boolean; withdraw: boolean };
 
 /**
  * Places and cancels orders, and looks up the ones the application placed

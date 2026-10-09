@@ -1,8 +1,14 @@
 "use server";
 
 import { refresh } from "next/cache";
+import type { z } from "zod";
 import {
-  exchangeKeysRequestSchema,
+  addExchangeAccountRequestSchema,
+  exchangeAccountRequestSchema,
+  relabelExchangeAccountRequestSchema,
+  replaceExchangeKeysRequestSchema,
+} from "@crypto-trading/exchanges/exchange-accounts";
+import {
   parseWebhookUrl,
   riskLimitsChangeRequestSchema,
   webhookRequestSchema,
@@ -16,66 +22,117 @@ import {
 import { requireFreshSession } from "@/lib/fresh-session";
 import { isLocalRequest } from "@/lib/local-request";
 import {
+  addExchangeAccount,
   markNotificationsRead,
-  removeExchangeKeys,
+  relabelExchangeAccount,
+  removeExchangeAccount,
   removeWebhook,
-  saveExchangeKeys,
+  replaceExchangeKeys,
   saveRiskLimits,
   saveWebhook,
   sendTestWebhook,
-  testExchangeConnection,
+  testExchangeAccount,
   type SettingsActionResult,
 } from "@/lib/settings";
 import { savePortfolioLimits } from "@/lib/strategies";
 
 // These actions change what the worker trades with, so like the order
 // actions they refuse any request that is not from this machine. Keys and
-// URLs pass through to the worker and are never logged or returned. Changing
-// exchange keys also needs a fresh session.
-const KEYS_PAGE = "/settings?tab=keys";
+// URLs pass through to the worker and are never logged or returned. Adding,
+// removing or giving new keys to an exchange account also needs a fresh
+// session.
+const ACCOUNTS_PAGE = "/settings?tab=accounts";
 const REFUSED: SettingsActionResult = {
   result: "refused",
   message: "Settings can only be changed from the dashboard on this machine.",
 };
 
-export async function changeExchangeKeys(
+// What to fix, by the field the request failed on. Never repeats a value.
+const ACCOUNT_FIELDS: Record<string, string> = {
+  venue: "Choose a venue.",
+  label:
+    "Enter a label of 1 to 64 characters, such as Binance testnet, to tell the account apart.",
+  mode: "Choose the account's mode.",
+  accountingCurrency: "Choose the accounting currency.",
+  apiKey:
+    "Check the API key: paste it as the exchange shows it, 16 to 256 characters without spaces.",
+  secretKey:
+    "Check the secret key: paste it as the exchange shows it, 16 to 256 characters without spaces.",
+  privateKey:
+    "Paste the whole private key, from -----BEGIN PRIVATE KEY----- to -----END PRIVATE KEY-----.",
+  passphrase:
+    "Check the passphrase: up to 128 printable characters, as you set it at the exchange.",
+};
+
+function invalid(error: z.ZodError): SettingsActionResult {
+  const path = error.issues[0]?.path ?? [];
+  const field = String(path.at(-1));
+  return {
+    result: "invalid",
+    message:
+      ACCOUNT_FIELDS[field] ??
+      (path[0] === "credentials"
+        ? "Enter the API key and its secret key or private key."
+        : "Check the account's details and try again."),
+  };
+}
+
+export async function addAccount(
   input: unknown,
 ): Promise<SettingsActionResult> {
   if (!(await isLocalRequest())) return REFUSED;
   // Sends a customer whose session is not fresh to confirm their password,
-  // then back to the keys.
-  await requireFreshSession(KEYS_PAGE);
-  const request = exchangeKeysRequestSchema.safeParse(input);
-  if (!request.success) {
-    const field = request.error.issues[0]?.path[0];
-    return {
-      result: "invalid",
-      message:
-        field === "apiKey"
-          ? "Check the API key: paste it as Binance shows it, 16 to 256 characters without spaces."
-          : field === "secretKey"
-            ? "Check the secret key: paste it as Binance shows it, 16 to 256 characters without spaces."
-            : field === "privateKey"
-              ? "Paste the whole private key, from -----BEGIN PRIVATE KEY----- to -----END PRIVATE KEY-----."
-              : "Enter the API key and its secret key or private key.",
-    };
-  }
-  const result = await saveExchangeKeys(request.data);
+  // then back to the accounts.
+  await requireFreshSession(ACCOUNTS_PAGE);
+  const request = addExchangeAccountRequestSchema.safeParse(input);
+  if (!request.success) return invalid(request.error);
+  const result = await addExchangeAccount(request.data);
   refresh();
   return result;
 }
 
-export async function deleteExchangeKeys(): Promise<SettingsActionResult> {
+export async function replaceAccountKeys(
+  input: unknown,
+): Promise<SettingsActionResult> {
   if (!(await isLocalRequest())) return REFUSED;
-  await requireFreshSession(KEYS_PAGE);
-  const result = await removeExchangeKeys();
+  await requireFreshSession(ACCOUNTS_PAGE);
+  const request = replaceExchangeKeysRequestSchema.safeParse(input);
+  if (!request.success) return invalid(request.error);
+  const result = await replaceExchangeKeys(request.data);
   refresh();
   return result;
 }
 
-export async function checkExchangeConnection(): Promise<SettingsActionResult> {
+export async function removeAccount(
+  input: unknown,
+): Promise<SettingsActionResult> {
   if (!(await isLocalRequest())) return REFUSED;
-  return testExchangeConnection();
+  await requireFreshSession(ACCOUNTS_PAGE);
+  const request = exchangeAccountRequestSchema.safeParse(input);
+  if (!request.success) return invalid(request.error);
+  const result = await removeExchangeAccount(request.data.exchangeAccountId);
+  refresh();
+  return result;
+}
+
+export async function renameAccount(
+  input: unknown,
+): Promise<SettingsActionResult> {
+  if (!(await isLocalRequest())) return REFUSED;
+  const request = relabelExchangeAccountRequestSchema.safeParse(input);
+  if (!request.success) return invalid(request.error);
+  const result = await relabelExchangeAccount(request.data);
+  refresh();
+  return result;
+}
+
+export async function testAccount(
+  input: unknown,
+): Promise<SettingsActionResult> {
+  if (!(await isLocalRequest())) return REFUSED;
+  const request = exchangeAccountRequestSchema.safeParse(input);
+  if (!request.success) return invalid(request.error);
+  return testExchangeAccount(request.data.exchangeAccountId);
 }
 
 const LIMIT_FIELDS: Record<string, string> = {

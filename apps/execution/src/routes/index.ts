@@ -3,6 +3,10 @@ import type { OrderIntentStore } from "../order-intents";
 import type { RiskLimitStore } from "../risk-limits";
 import type { TradeProposalStore } from "../trade-proposals";
 import { decisions } from "./decisions";
+import {
+  exchangeAccounts as exchangeAccountRoutes,
+  type ExchangeAccountDependencies,
+} from "./exchange-accounts";
 import { execution, type ExecutionReader } from "./execution";
 import { depth, klines, tickers } from "./market";
 import { deskProvider, orders } from "./orders";
@@ -18,8 +22,9 @@ import type { Serializer } from "../manual-orders";
  * here: `handler` for a customer's exchange account, `accountHandler` or
  * `customerHandler` for their data without Binance, and `publicHandler` for
  * market data. Each call creates fresh caches; `now` is their clock. Without
- * `settings`, the Settings routes are left out, without `proposals`, the
- * AI decision routes, and without `strategies`, the strategy routes.
+ * `settings`, the Settings routes are left out, without `exchangeAccounts`,
+ * the exchange account routes, without `proposals`, the AI decision routes,
+ * and without `strategies`, the strategy routes.
  * Dashboard placements and a strategy runner made with `exclusive` run one
  * at a time.
  */
@@ -29,6 +34,7 @@ export function createWorker({
   risk,
   reader,
   settings: settingsDependencies,
+  exchangeAccounts,
   strategies,
   exclusive,
   now = Date.now,
@@ -42,6 +48,7 @@ export function createWorker({
   >;
   reader?: ExecutionReader;
   settings?: SettingsDependencies;
+  exchangeAccounts?: ExchangeAccountDependencies;
   strategies?: Pick<
     StrategyRunner,
     "state" | "resumeProblem" | "store" | "approve"
@@ -111,14 +118,21 @@ export function createWorker({
       ),
     );
   }
-  if (settingsDependencies) {
+  if (exchangeAccounts) {
     // The snapshot was read with the old keys.
-    const settingsRoutes = settings(settingsDependencies, account.clear);
+    const accounts = exchangeAccountRoutes(exchangeAccounts, account.clear);
     routes.push(
-      route("GET", "/settings/exchange-keys", settingsRoutes.keys),
-      route("POST", "/settings/exchange-keys", settingsRoutes.saveKeys),
-      route("DELETE", "/settings/exchange-keys", settingsRoutes.removeKeys),
-      route("POST", "/settings/exchange-keys/test", settingsRoutes.testKeys),
+      route("GET", "/exchange-accounts", accounts.list),
+      route("POST", "/exchange-accounts", accounts.add),
+      route("POST", "/exchange-accounts/label", accounts.relabel),
+      route("POST", "/exchange-accounts/keys", accounts.replaceKeys),
+      route("POST", "/exchange-accounts/test", accounts.test),
+      route("POST", "/exchange-accounts/remove", accounts.remove),
+    );
+  }
+  if (settingsDependencies) {
+    const settingsRoutes = settings(settingsDependencies);
+    routes.push(
       route("GET", "/settings/risk-limits", settingsRoutes.riskLimits),
       route("POST", "/settings/risk-limits", settingsRoutes.changeRiskLimits),
       route("GET", "/settings/webhook", settingsRoutes.webhook),
