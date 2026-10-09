@@ -16,9 +16,11 @@ import {
 } from "@crypto-trading/database/testing";
 import {
   BinanceSpotTestnet,
+  binanceSpotTestnetVenue,
+  VenueRegistry,
   type KeyPermissions,
 } from "@crypto-trading/exchanges";
-import { accountResolver } from "./accounts";
+import { accountResolver, accountVenue } from "./accounts";
 import { ExchangeAccountStore } from "./exchange-accounts";
 import {
   ExchangeCredentialStore,
@@ -93,17 +95,13 @@ describe("Settings routes", { skip: databaseTestsSkipped }, () => {
     const fake = binance();
     const db = database.app;
     const keys = new ExchangeCredentialStore(db, box);
-    const environment = new BinanceSpotTestnet({
-      apiKey: envKey,
-      apiSecret: "env-secret",
-      fetch: fake.fetch,
-    });
     const exchanges = savedOrEnvironmentExchanges({
       store: keys,
-      environment,
-      market: environment,
-      create: (saved) =>
-        new BinanceSpotTestnet({ ...saved, fetch: fake.fetch }),
+      registry: new VenueRegistry([
+        binanceSpotTestnetVenue({ fetch: fake.fetch }),
+      ]),
+      venueOf: accountVenue(db),
+      environment: { kind: "hmac", apiKey: envKey, secret: "env-secret" },
     });
     const risk = new PostgresRiskLimits(db);
     const webhookCalls: string[] = [];
@@ -167,6 +165,7 @@ describe("Settings routes", { skip: databaseTestsSkipped }, () => {
         headers: {
           Authorization: `Bearer ${token}`,
           "X-Customer-Id": customerId,
+          "X-Exchange-Account-Id": DEV_EXCHANGE_ACCOUNT_ID,
           ...(body === undefined ? {} : { "Content-Type": "application/json" }),
         },
         body: body === undefined ? undefined : JSON.stringify(body),

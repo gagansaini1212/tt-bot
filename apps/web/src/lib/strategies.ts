@@ -16,7 +16,7 @@ import {
 import { z } from "zod";
 import type { SettingsActionResult } from "./settings";
 import {
-  callWorkerForCustomer,
+  callWorkerForAccount,
   type WorkerFailureReason,
   type WorkerState,
 } from "./worker-client";
@@ -49,7 +49,7 @@ export type StrategyActionResult =
 export async function getStrategies(): Promise<
   WorkerState<{ state: StrategiesState; readAt: number }>
 > {
-  const result = await callWorkerForCustomer({
+  const result = await callWorkerForAccount({
     path: "/strategies",
     schema: z.object({ state: strategiesStateSchema }),
   });
@@ -66,7 +66,7 @@ async function change(
   path: `/${string}`,
   body: unknown,
 ): Promise<StrategyActionResult> {
-  const result = await callWorkerForCustomer({
+  const result = await callWorkerForAccount({
     method: "POST",
     path,
     body,
@@ -102,7 +102,7 @@ export async function activateKillSwitch(): Promise<
   | ({ result: "done" } & KillSwitchResult)
   | { result: "unavailable" | "unconfirmed"; message: string }
 > {
-  const result = await callWorkerForCustomer({
+  const result = await callWorkerForAccount({
     method: "POST",
     path: "/strategies/kill-switch",
     body: {},
@@ -121,7 +121,7 @@ export async function activateKillSwitch(): Promise<
 export async function getPortfolioLimits(): Promise<
   WorkerState<{ limits: PortfolioLimitsState }>
 > {
-  const result = await callWorkerForCustomer({
+  const result = await callWorkerForAccount({
     path: "/settings/portfolio-limits",
     schema: z.object({ limits: portfolioLimitsStateSchema }),
   });
@@ -133,7 +133,7 @@ export async function getPortfolioLimits(): Promise<
 export async function savePortfolioLimits(
   request: PortfolioLimitsChangeRequest,
 ): Promise<SettingsActionResult> {
-  const result = await callWorkerForCustomer({
+  const result = await callWorkerForAccount({
     method: "POST",
     path: "/settings/portfolio-limits",
     body: request,

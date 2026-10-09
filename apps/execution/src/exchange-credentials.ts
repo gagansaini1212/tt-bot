@@ -6,14 +6,19 @@ import {
 } from "@crypto-trading/database";
 import {
   BinanceSpotTestnet,
+  credentialsFromKeys,
   ExchangeError,
   excessKeyPermissions,
   VENUES,
+  type AccountAdapter,
   type AccountReader,
   type ExchangeKeyType,
   type ExchangeKeysRequest,
+  type MarketDataAdapter,
+  type SigningCredentials,
   type Venue,
   type VenueId,
+  type VenueRegistry,
 } from "@crypto-trading/exchanges";
 import { TESTNET_EXCHANGE_ACCOUNT_ID, type AccountScope } from "./accounts";
 import { MASTER_KEY_VARIABLE, type SecretBox } from "./secret-box";
@@ -497,78 +502,153 @@ function audit(
 
 /**
  * The exchange client for an account, or why there is none:
- * - exchange: the account has no keys, saved or in the worker's .env.
- * - credentials: it has saved keys the worker cannot open.
+ * - exchange: the account has no keys, saved or in the worker's .env, or
+ *   is on a venue the worker does not connect to.
+ * - credentials: it has saved keys the worker cannot open or use.
  */
 export type ExchangeLookup =
-  | { exchange: BinanceSpotTestnet; source: "saved" | "environment" }
+  | { exchange: AccountAdapter; source: "saved" | "environment" }
   | { problem: "exchange" | "credentials" };
 
-/** Which Binance client serves each request. */
+/** Which venue client serves each request. */
 export interface ExchangeSource {
-  /** For public market data, which needs no customer or keys. */
-  market(): BinanceSpotTestnet | undefined;
-  /** Throws if the database cannot answer. */
+  /**
+   * Public market data on `venue`, which needs no customer or keys, or
+   * undefined if the worker does not connect to it.
+   */
+  market(venue: VenueId): MarketDataAdapter | undefined;
+  /**
+   * The client for the account's keys on its own venue. Throws if the
+   * database cannot answer.
+   */
   forAccount(account: AccountScope): Promise<ExchangeLookup>;
   /** Drops what is cached for `account`, after its keys change. */
   forget(account: AccountScope): void;
 }
 
 /**
- * Serves each account with its saved keys. An account without saved keys
- * falls back to the worker's .env keys, which belong to the dev customer's
- * testnet account only. Saved keys that cannot be opened never fall back:
- * the worker would trade with keys the customer did not choose.
+ * Serves each account with its saved keys, through its venue's connector
+ * in `registry`. An account without saved keys falls back to the worker's
+ * .env keys, which belong to the dev customer's Binance Spot Testnet account
+ * only. Saved keys that cannot be opened never fall back: the worker would
+ * trade with keys the customer did not choose.
+ *
+ * Each account keeps one client while its keys stay the same, so the
+ * account's own limits last; the venue's limits and clock are its
+ * connector's, shared by every account on the venue and no other.
  */
 export function savedOrEnvironmentExchanges({
   store,
+  registry,
+  venueOf,
   environment,
-  market,
-  create = (keys) => new BinanceSpotTestnet(keys),
+  connected,
 }: {
   store: Pick<ExchangeCredentialStore, "load">;
-  environment: BinanceSpotTestnet | undefined;
-  market: BinanceSpotTestnet | undefined;
-  create?: (keys: ExchangeKeys) => BinanceSpotTestnet;
+  registry: Pick<VenueRegistry, "get">;
+  /** The account's venue, or undefined if it has none the worker knows. */
+  venueOf: (account: AccountScope) => Promise<VenueId | undefined>;
+  /** The worker's .env keys, for the dev account only. */
+  environment?: SigningCredentials;
+  /**
+   * Runs after a client is built for an account, such as to record what
+   * its venue's adapter supports. A failure is logged, not thrown.
+   */
+  connected?: (account: AccountScope, venue: Venue) => Promise<unknown>;
 }): ExchangeSource {
-  // One client per set of keys, so its clock sync and rate-limit state last.
   const clients = new Map<
     string,
-    { version: string; exchange: BinanceSpotTestnet }
+    { version: string; exchange: AccountAdapter }
   >();
+  // An account's venue never changes.
+  const venues = new Map<string, VenueId>();
   let lastLogged: string | undefined;
+  const log = (message: string) => {
+    if (message !== lastLogged) console.error(message);
+    lastLogged = message;
+  };
+  // A client for `credentials`, or the one made for the same version.
+  const client = (
+    account: AccountScope,
+    venue: VenueId,
+    version: string,
+    credentials: () => SigningCredentials,
+  ): AccountAdapter | undefined => {
+    const cached = clients.get(account.exchangeAccountId);
+    if (cached?.version === version) return cached.exchange;
+    const registered = registry.get(venue);
+    if (!registered) return undefined;
+    const exchange = registered.connect(credentials());
+    clients.set(account.exchangeAccountId, { version, exchange });
+    connected?.(account, registered.venue).catch(() =>
+      log(
+        `Could not record what account ${account.exchangeAccountId}'s venue supports.`,
+      ),
+    );
+    return exchange;
+  };
   return {
-    market: () => market,
+    market: (venue) => registry.get(venue)?.market,
     async forAccount(account) {
+      let venue = venues.get(account.exchangeAccountId);
+      if (!venue) {
+        venue = await venueOf(account);
+        if (!venue) return { problem: "exchange" };
+        venues.set(account.exchangeAccountId, venue);
+      }
+      if (!registry.get(venue)) return { problem: "exchange" };
       const saved = await store.load(account);
       if (!saved) {
-        clients.delete(account.exchangeAccountId);
-        return environment &&
-          account.exchangeAccountId === TESTNET_EXCHANGE_ACCOUNT_ID
-          ? { exchange: environment, source: "environment" }
+        if (
+          !environment ||
+          account.exchangeAccountId !== TESTNET_EXCHANGE_ACCOUNT_ID ||
+          venue !== "binance-spot-testnet"
+        ) {
+          clients.delete(account.exchangeAccountId);
+          return { problem: "exchange" };
+        }
+        const exchange = client(
+          account,
+          venue,
+          "environment",
+          () => environment,
+        );
+        return exchange
+          ? { exchange, source: "environment" }
           : { problem: "exchange" };
       }
-      const cached = clients.get(account.exchangeAccountId);
-      if (cached?.version === saved.version)
-        return { exchange: cached.exchange, source: "saved" };
       try {
-        const exchange = create(saved.open());
-        clients.set(account.exchangeAccountId, {
-          version: saved.version,
-          exchange,
-        });
+        const exchange = client(account, venue, saved.version, () =>
+          credentialsFromKeys(saved.open()),
+        );
+        if (!exchange) return { problem: "exchange" };
         lastLogged = undefined;
         return { exchange, source: "saved" };
       } catch {
         // Says which account, never anything about the keys.
-        const message = `The saved exchange keys of account ${account.exchangeAccountId} cannot be opened. Check ${MASTER_KEY_VARIABLE}.`;
-        if (message !== lastLogged) console.error(message);
-        lastLogged = message;
+        log(
+          `The saved exchange keys of account ${account.exchangeAccountId} cannot be opened or used. Check ${MASTER_KEY_VARIABLE}, or save the keys again.`,
+        );
         return { problem: "credentials" };
       }
     },
     forget(account) {
       clients.delete(account.exchangeAccountId);
     },
+  };
+}
+
+/**
+ * Builds clients for new keys from the venue registry, to check them before
+ * they are saved. Throws NoAdapterError for a venue the worker does not
+ * connect to, and CredentialsError for keys its adapter cannot sign with.
+ */
+export function connector(
+  registry: Pick<VenueRegistry, "get">,
+): VenueConnector {
+  return (venue, keys) => {
+    const registered = registry.get(venue);
+    if (!registered) throw new NoAdapterError(venue);
+    return registered.connect(credentialsFromKeys(keys));
   };
 }

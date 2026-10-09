@@ -1,5 +1,7 @@
 import "server-only";
-import type { z } from "zod";
+import { servedAccountSchema } from "@crypto-trading/exchanges/served-accounts";
+import { z } from "zod";
+import { getCurrentExchangeAccount } from "./current-account";
 import { getCurrentCustomer } from "./current-customer";
 
 // The web app sends the worker's bearer token to this URL, so it must stay on this machine.
@@ -75,6 +77,11 @@ export type WorkerRequest<T> = {
   body?: unknown;
   /** The customer the worker acts for. Set by `callWorkerForCustomer`. */
   customerId?: string;
+  /**
+   * The customer's exchange account the request acts on. Set by
+   * `callWorkerForAccount`; the worker checks that the customer owns it.
+   */
+  exchangeAccountId?: string;
   /** Validates a connected response, such as `{ status: "connected", snapshot }`. */
   schema: z.ZodType<T>;
 };
@@ -107,7 +114,7 @@ const FAILURES: Record<WorkerFailureReason, Omit<WorkerFailure, "reason">> = {
   no_exchange_account: {
     status: "not_configured",
     message:
-      "No Binance Spot Testnet exchange account is connected for you. Run pnpm db:seed to create the development account, then refresh.",
+      "No exchange account is connected for you on the execution worker. Run pnpm db:seed to create the development account, then refresh.",
   },
   database_unavailable: {
     status: "unavailable",
@@ -142,9 +149,11 @@ const FAILURES: Record<WorkerFailureReason, Omit<WorkerFailure, "reason">> = {
   },
 };
 
-function failure(reason: WorkerFailureReason): WorkerFailure {
+/** A failure as `callWorker` reports it, for callers that stop before it. */
+export function workerFailure(reason: WorkerFailureReason): WorkerFailure {
   return { ...FAILURES[reason], reason };
 }
+const failure = workerFailure;
 
 function isTimeout(error: unknown) {
   return error instanceof Error && error.name === "TimeoutError";
@@ -160,6 +169,7 @@ export async function callWorker<T>({
   query = {},
   body,
   customerId,
+  exchangeAccountId,
   schema,
 }: WorkerRequest<T>): Promise<WorkerResult<T>> {
   const token = process.env.EXECUTION_API_TOKEN;
@@ -179,6 +189,9 @@ export async function callWorker<T>({
       headers: {
         Authorization: `Bearer ${token}`,
         ...(customerId === undefined ? {} : { "X-Customer-Id": customerId }),
+        ...(exchangeAccountId === undefined
+          ? {}
+          : { "X-Exchange-Account-Id": exchangeAccountId }),
         ...(body === undefined ? {} : { "Content-Type": "application/json" }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -224,8 +237,8 @@ export async function callWorker<T>({
 /**
  * Calls a worker route that serves or changes a customer's data, for the
  * current customer. The worker trusts the customer it is told, because only
- * this server holds its token, and acts only if that customer owns the
- * exchange account.
+ * this server holds its token. For an exchange account's data, use
+ * `callWorkerForAccount`, which also names the account.
  */
 export async function callWorkerForCustomer<T>(
   request: Omit<WorkerRequest<T>, "customerId">,
@@ -233,4 +246,25 @@ export async function callWorkerForCustomer<T>(
   const customer = await getCurrentCustomer();
   if (!customer) return failure("signed_out");
   return callWorker({ ...request, customerId: customer.id });
+}
+
+// The customer's exchange accounts that the worker serves.
+const listAccounts = () =>
+  callWorkerForCustomer({
+    path: "/accounts",
+    schema: z.object({ accounts: z.array(servedAccountSchema) }),
+  });
+
+/**
+ * Calls a worker route that serves or changes an exchange account's data,
+ * for the current customer on their current exchange account
+ * (current-account.ts). The worker acts only if that customer owns it.
+ */
+export async function callWorkerForAccount<T>(
+  request: Omit<WorkerRequest<T>, "customerId" | "exchangeAccountId">,
+): Promise<WorkerResult<T>> {
+  const account = await getCurrentExchangeAccount(listAccounts);
+  if (!account) return failure("no_exchange_account");
+  if ("reason" in account) return account;
+  return callWorkerForCustomer({ ...request, exchangeAccountId: account.id });
 }

@@ -7,31 +7,36 @@ import {
   type Database,
 } from "@crypto-trading/database";
 import {
-  BinanceSpotTestnet,
+  binanceSpotTestnetVenue,
+  canTrade,
+  credentialsFromKeys,
   ExchangeError,
   limitOrderSchema,
-  MarketCatalogue,
-  VENUE_IDS,
-  venueIdSchema,
+  VenueRegistry,
   type ExchangeOrder,
+  type SigningCredentials,
 } from "@crypto-trading/exchanges";
 import {
   authorizeTradeProposal,
   utcDayStart,
   instrumentSchema,
 } from "@crypto-trading/domain";
-import { accountResolver } from "./accounts";
+import {
+  accountLister,
+  accountResolver,
+  accountVenue,
+  TESTNET_EXCHANGE_ACCOUNT_ID,
+} from "./accounts";
 import { ExchangeAccountStore } from "./exchange-accounts";
 import {
   catalogueMarkets,
   PostgresReportingDirectory,
 } from "./reporting-directory";
 import {
+  connector,
   ExchangeCredentialStore,
-  NoAdapterError,
   privateKeyType,
   savedOrEnvironmentExchanges,
-  type VenueConnector,
 } from "./exchange-credentials";
 import {
   EveDecisionSource,
@@ -54,7 +59,7 @@ import {
   withinPlatformMaximums,
 } from "./risk-limits";
 import { createWorker } from "./routes";
-import { serializer } from "./manual-orders";
+import { accountQueues } from "./manual-orders";
 import { SecretBox } from "./secret-box";
 import { StrategyRunner } from "./strategy-runner";
 import { PostgresTradeProposals } from "./trade-proposals";
@@ -74,7 +79,10 @@ function openDatabase() {
 
 /** CLI commands act for the dev customer, who owns the testnet account. */
 async function cliScope() {
-  const scope = await accountResolver(openDatabase())(DEV_CUSTOMER_ID);
+  const scope = await accountResolver(openDatabase())(
+    DEV_CUSTOMER_ID,
+    TESTNET_EXCHANGE_ACCOUNT_ID,
+  );
   if (!scope)
     throw new Error(
       "The dev customer's testnet exchange account is missing. Run pnpm db:seed.",
@@ -91,13 +99,10 @@ async function main() {
       "Live trading cannot start until deployment prerequisites and account eligibility checks are implemented.",
     );
   }
-  // The venue the worker trades on, by its venue ID.
-  const provider = process.env.EXCHANGE_PROVIDER ?? "fixture";
-  if (provider !== "fixture" && !venueIdSchema.safeParse(provider).success) {
-    throw new Error(
-      `EXCHANGE_PROVIDER must be fixture or a venue ID: ${VENUE_IDS.join(", ")}.`,
+  if (process.env.EXCHANGE_PROVIDER)
+    console.warn(
+      "EXCHANGE_PROVIDER is no longer read: the worker serves every exchange account on the venues it connects to. Remove it from apps/execution/.env.",
     );
-  }
   const [command = "serve", ...args] = process.argv.slice(2);
   if (command === "help") {
     console.info(
@@ -106,10 +111,7 @@ async function main() {
     return;
   }
   let privateKey: string | undefined;
-  if (
-    provider === "binance-spot-testnet" &&
-    process.env.BINANCE_TESTNET_PRIVATE_KEY_PATH
-  ) {
+  if (process.env.BINANCE_TESTNET_PRIVATE_KEY_PATH) {
     try {
       privateKey = await readFile(
         process.env.BINANCE_TESTNET_PRIVATE_KEY_PATH,
@@ -121,47 +123,44 @@ async function main() {
       );
     }
   }
-  // One catalogue of the venue's markets, shared by every client, read
-  // through a client that holds no keys.
-  const markets: MarketCatalogue = new MarketCatalogue({
-    venue: "binance-spot-testnet",
-    load: () => publicClient.loadMarkets(),
-  });
-  const publicClient: BinanceSpotTestnet = new BinanceSpotTestnet({
-    publicData: true,
-    markets,
-  });
+  // The venues the worker connects to, each with its own market catalogue,
+  // limits and clock, shared by every account on it and by no other venue.
+  const registry = new VenueRegistry([binanceSpotTestnetVenue()]);
   // The worker's own keys, from its .env file. They serve the dev customer's
-  // testnet account until keys are saved for it in Settings.
-  const environment =
-    provider === "binance-spot-testnet" &&
+  // testnet account until keys are saved for it in Settings. Checked now, so
+  // keys the venue cannot use stop the worker before it starts.
+  let environment: SigningCredentials | undefined;
+  if (
     process.env.BINANCE_TESTNET_API_KEY &&
     (privateKey || process.env.BINANCE_TESTNET_API_SECRET)
-      ? new BinanceSpotTestnet({
-          apiKey: process.env.BINANCE_TESTNET_API_KEY,
-          apiSecret: process.env.BINANCE_TESTNET_API_SECRET,
-          privateKey,
-          markets,
-        })
-      : undefined;
+  ) {
+    environment = credentialsFromKeys({
+      apiKey: process.env.BINANCE_TESTNET_API_KEY,
+      apiSecret: privateKey
+        ? undefined
+        : process.env.BINANCE_TESTNET_API_SECRET,
+      privateKey,
+    });
+    registry.connect("binance-spot-testnet", environment);
+  }
   // Throws now if the master key is set but malformed.
   const box = SecretBox.fromEnvironment(process.env);
-  const exchangeSource = (database: Database) =>
-    savedOrEnvironmentExchanges({
+  const exchangeSource = (database: Database) => {
+    const accounts = new ExchangeAccountStore(database);
+    return savedOrEnvironmentExchanges({
       store: new ExchangeCredentialStore(database, box),
+      registry,
+      venueOf: accountVenue(database),
       environment,
-      // Market data is public, so it needs no keys.
-      market:
-        environment ??
-        (provider === "binance-spot-testnet" ? publicClient : undefined),
-      create: (keys) => new BinanceSpotTestnet({ ...keys, markets }),
+      // Each account records what its venue's adapter supports whenever the
+      // worker builds its client.
+      connected: (account, venue) =>
+        accounts.refreshFeatures(account, venue.capabilities),
     });
-  // Builds an adapter for new keys, so they can be checked before they are
-  // saved. Binance Spot Testnet is the only venue with an adapter so far.
-  const connect: VenueConnector = (venue, keys) => {
-    if (venue !== "binance-spot-testnet") throw new NoAdapterError(venue);
-    return new BinanceSpotTestnet({ ...keys, markets });
   };
+  // Builds an adapter for new keys, so they can be checked before they are
+  // saved: the venue's own, from the registry.
+  const connect = connector(registry);
   if (process.env.TESTNET_MAX_ORDER_NOTIONAL_USDT)
     console.warn(
       "TESTNET_MAX_ORDER_NOTIONAL_USDT is no longer read. Set the per-order cap in Settings → Risk limits, then remove it from apps/execution/.env.",
@@ -189,12 +188,14 @@ async function main() {
     await assertNoJournal(process.env);
     const intents = new PostgresOrderIntents(db);
     const accounts = accountResolver(db);
+    const listAccounts = accountLister(db);
     const exchanges = exchangeSource(db);
     const risk = new PostgresRiskLimits(db);
     const webhooks = new NotificationWebhooks({ database: db, box });
     const proposals = new PostgresTradeProposals(db);
-    // Dashboard placements and strategies' entries go out one at a time.
-    const exclusive = serializer();
+    // Each account's dashboard placements and strategies' entries go out
+    // one at a time.
+    const exclusive = accountQueues();
     let accountChanged: (() => void) | undefined;
     const strategies = new StrategyRunner({
       database: db,
@@ -219,6 +220,7 @@ async function main() {
         served: accounts,
       },
       exclusive,
+      listAccounts,
       risk,
       reader: { state: (scope) => loop!.state(scope) },
       exchangeAccounts: {
@@ -230,7 +232,7 @@ async function main() {
           environment && process.env.BINANCE_TESTNET_API_KEY
             ? {
                 keyType: privateKey ? privateKeyType(privateKey) : "hmac",
-                apiKeyLast4: process.env.BINANCE_TESTNET_API_KEY.slice(-4),
+                apiKeyLast4: environment.apiKey.slice(-4),
               }
             : undefined,
       },
@@ -244,22 +246,22 @@ async function main() {
       },
     });
     accountChanged = worker.accountChanged;
-    // Watches every customer's orders, independently of any request or AI
-    // call (ADR 0002), with each account's own keys: an account without keys
-    // the worker can use is skipped. It runs their strategies, and delivers
+    // Watches every exchange account's orders, independently of any
+    // request or AI call (ADR 0002), each with its own venue's client for
+    // its own keys: an account without keys the worker can use is skipped.
+    // It runs their strategies, monitors read-only accounts, and delivers
     // alerts to webhooks.
     loop = new ExecutionLoop({
       database: db,
       clients: async (scope) => {
         const lookup = await exchanges.forAccount(scope);
-        return "problem" in lookup
-          ? undefined
-          : {
-              exchange: lookup.exchange,
-              desk: worker.deskFor(lookup.exchange),
-            };
+        if ("problem" in lookup) return undefined;
+        const { exchange } = lookup;
+        return canTrade(exchange)
+          ? { exchange, desk: worker.deskFor(exchange, scope) }
+          : { exchange, readOnly: true };
       },
-      accounts,
+      accounts: listAccounts,
       intents,
       webhooks,
       strategies,
@@ -270,6 +272,7 @@ async function main() {
       assistantToken,
       exchanges,
       accounts,
+      listAccounts,
       routes: worker.routes,
     });
     const servers = [await listen(handle, port, "127.0.0.1")];
@@ -286,7 +289,7 @@ async function main() {
     if (ipv6) servers.push(ipv6);
     loop.start();
     console.info(
-      `Execution service on http://127.0.0.1:${port}${ipv6 ? ` and http://[::1]:${port}` : ""}. Provider: ${provider}. Execution loop running.`,
+      `Execution service on http://127.0.0.1:${port}${ipv6 ? ` and http://[::1]:${port}` : ""}. Venues: ${registry.venues.join(", ")}. Execution loop running.`,
     );
     console.info(strategies.aiSource.description);
     if (!box)
@@ -322,9 +325,9 @@ async function main() {
     return;
   }
   const setup =
-    "Set EXCHANGE_PROVIDER=binance-spot-testnet, and save keys in Settings or set BINANCE_TESTNET_API_KEY and either BINANCE_TESTNET_PRIVATE_KEY_PATH or BINANCE_TESTNET_API_SECRET in apps/execution/.env.";
-  if (provider !== "binance-spot-testnet") throw new Error(setup);
-  // Commands act for the dev customer, with the keys the dashboard uses.
+    "Save keys in Settings, or set BINANCE_TESTNET_API_KEY and either BINANCE_TESTNET_PRIVATE_KEY_PATH or BINANCE_TESTNET_API_SECRET in apps/execution/.env.";
+  // Commands act for the dev customer's testnet account, with the keys the
+  // dashboard uses.
   const scope = await cliScope();
   const lookup = await exchangeSource(openDatabase()).forAccount(scope);
   if ("problem" in lookup)
@@ -334,13 +337,15 @@ async function main() {
         : setup,
     );
   const { exchange } = lookup;
+  if (!canTrade(exchange))
+    throw new Error("The dev account's venue is read only here.");
   let result: unknown;
   switch (command) {
     case "check": {
       if (args.length) throw new Error("Usage: check");
       const account = await exchange.getAccount();
       result = {
-        provider,
+        venue: exchange.venue,
         keys: lookup.source,
         connected: true,
         canTrade: account.canTrade,
@@ -445,8 +450,7 @@ async function main() {
         placed = await exchange.placeLimitOrder(order);
       } catch (error) {
         const refused =
-          error instanceof ExchangeError &&
-          (error.kind === "rejected" || error.kind === "rate_limited");
+          error instanceof ExchangeError && error.kind !== "unknown_outcome";
         await settle(
           refused
             ? { status: "rejected", reason: error.message }

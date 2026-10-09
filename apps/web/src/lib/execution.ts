@@ -4,7 +4,7 @@ import {
   type ExecutionState,
 } from "@crypto-trading/exchanges/execution";
 import { z } from "zod";
-import { callWorkerForCustomer, type WorkerState } from "./worker-client";
+import { callWorkerForAccount, type WorkerState } from "./worker-client";
 
 export type ExecutionView = WorkerState<{ execution: ExecutionState }>;
 
@@ -14,7 +14,7 @@ export type ExecutionView = WorkerState<{ execution: ExecutionState }>;
  * notifications.
  */
 export async function getExecutionState(): Promise<ExecutionView> {
-  const result = await callWorkerForCustomer({
+  const result = await callWorkerForAccount({
     path: "/execution",
     schema: z.object({ execution: executionStateSchema }),
   });

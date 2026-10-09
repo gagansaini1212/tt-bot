@@ -32,7 +32,6 @@ async function fixture(databaseUrl = UNREACHABLE_DATABASE) {
   const log = join(directory, "requests.jsonl");
   const env = {
     ...process.env,
-    EXCHANGE_PROVIDER: "binance-spot-testnet",
     LIVE_TRADING_ENABLED: "false",
     BINANCE_TESTNET_API_KEY: "test-key",
     BINANCE_TESTNET_API_SECRET: "test-secret",
@@ -113,11 +112,10 @@ async function startWorker(env: NodeJS.ProcessEnv) {
   return { port, ipv6, worker, stop };
 }
 
-test("production mode and unsupported providers cannot start", async () => {
+test("production mode and unusable keys cannot start", async () => {
   const f = await fixture();
   try {
     assert.equal(f.run(["check"], { LIVE_TRADING_ENABLED: "true" }).status, 1);
-    assert.equal(f.run(["check"], { EXCHANGE_PROVIDER: "binance" }).status, 1);
     assert.equal(
       f.run(["check"], { BINANCE_TESTNET_API_SECRET: "" }).status,
       1,
@@ -383,7 +381,23 @@ describe("with PostgreSQL", { skip: databaseTestsSkipped }, () => {
       const headers = {
         Authorization: `Bearer ${token}`,
         "X-Customer-Id": DEV_CUSTOMER_ID,
+        "X-Exchange-Account-Id": DEV_EXCHANGE_ACCOUNT_ID,
       };
+      // The dashboard learns the customer's accounts first.
+      const listed = await (
+        await fetch(`http://127.0.0.1:${port}/accounts`, { headers })
+      ).json();
+      assert.deepEqual(listed.accounts, [
+        {
+          id: DEV_EXCHANGE_ACCOUNT_ID,
+          venue: "binance-spot-testnet",
+          venueName: "Binance Spot Testnet",
+          label: listed.accounts[0].label,
+          accountingCurrency: "USDT",
+          readOnly: false,
+          status: "connected",
+        },
+      ]);
       assert.equal((await fetch(url)).status, 401);
       assert.equal(
         (
@@ -399,6 +413,14 @@ describe("with PostgreSQL", { skip: databaseTestsSkipped }, () => {
       const data = await first.json();
       assert.equal(data.status, "connected");
       assert.equal(data.snapshot.balances[0].free, "10000.12345678");
+      // Building the account's client recorded what its venue supports.
+      const [account] = await database.admin<
+        { supported_features: { access: string } | null }[]
+      >`
+        select supported_features from exchange_accounts
+        where id = ${DEV_EXCHANGE_ACCOUNT_ID}
+      `;
+      assert.equal(account.supported_features?.access, "trade");
       assert.doesNotMatch(JSON.stringify(data), /test-key|test-secret/);
       await fetch(url, { headers });
       if (ipv6)
@@ -420,7 +442,7 @@ describe("with PostgreSQL", { skip: databaseTestsSkipped }, () => {
         "a snapshot dated in the future is refetched, not served from cache",
       );
       const market = await fetch(
-        `http://127.0.0.1:${port}/market/tickers?symbols=BTCUSDT`,
+        `http://127.0.0.1:${port}/market/tickers?symbols=BTCUSDT&venue=binance-spot-testnet`,
         { headers },
       );
       assert.equal((await market.json()).tickers[0].lastPrice, "60000.01");
@@ -443,6 +465,7 @@ test("without its database the worker still serves market data, and says why acc
     const headers = {
       Authorization: `Bearer ${token}`,
       "X-Customer-Id": DEV_CUSTOMER_ID,
+      "X-Exchange-Account-Id": DEV_EXCHANGE_ACCOUNT_ID,
     };
     const snapshot = await fetch(`http://127.0.0.1:${port}/snapshot`, {
       headers,
@@ -450,7 +473,7 @@ test("without its database the worker still serves market data, and says why acc
     assert.equal(snapshot.status, 200);
     assert.equal((await snapshot.json()).reason, "database");
     const market = await fetch(
-      `http://127.0.0.1:${port}/market/tickers?symbols=BTCUSDT`,
+      `http://127.0.0.1:${port}/market/tickers?symbols=BTCUSDT&venue=binance-spot-testnet`,
       { headers },
     );
     assert.equal((await market.json()).status, "connected");

@@ -4,9 +4,16 @@ import { z } from "zod";
 import {
   ExchangeError,
   UnlistedMarketError,
-  type BinanceSpotTestnet,
+  venueIdSchema,
+  type AccountAdapter,
+  type MarketDataAdapter,
 } from "@crypto-trading/exchanges";
-import type { AccountResolver, AccountScope } from "./accounts";
+import type {
+  AccountLister,
+  AccountResolver,
+  AccountScope,
+  ExchangeAccount,
+} from "./accounts";
 import type { ExchangeSource } from "./exchange-credentials";
 
 type Method = "GET" | "POST" | "DELETE";
@@ -24,18 +31,19 @@ export type Caller = "web" | "assistant";
  * `handle` returns the 200 response body, such as `{ status: "connected", ... }`.
  *
  * The request acts for the customer the caller names in the X-Customer-Id
- * header, and runs only if that customer owns the exchange account the
- * worker trades on. `account` is that account, and `exchange` the Binance
- * client for its keys: the ones saved in Settings, or else the worker's.
- * Only the web server may call it, unless `caller` says the assistant does
- * instead.
+ * header, on the exchange account it names in X-Exchange-Account-Id, and
+ * runs only if that customer owns that account. `account` is that account,
+ * and `exchange` the client for its keys on its own venue: the ones saved in
+ * Settings, or else the worker's. On a read-only venue the client only
+ * reads (`canTrade` says which). Only the web server may call it, unless
+ * `caller` says the assistant does instead.
  */
 export interface Handler<Query, Body> {
   caller?: Caller;
   query: z.ZodType<Query>;
   body?: z.ZodType<Body>;
   handle(context: {
-    exchange: BinanceSpotTestnet;
+    exchange: AccountAdapter;
     query: Query;
     body: Body;
     account: AccountScope;
@@ -43,8 +51,8 @@ export interface Handler<Query, Body> {
 }
 
 /**
- * A customer's endpoint for their exchange account that does not call
- * Binance, such as their keys or risk limits. It runs like a `Handler`, but
+ * A customer's endpoint for their exchange account that does not call the
+ * venue, such as their keys or risk limits. It runs like a `Handler`, but
  * also without exchange keys.
  */
 export interface AccountHandler<Query, Body> {
@@ -74,12 +82,16 @@ export interface CustomerHandler<Query, Body> {
   }): Promise<object>;
 }
 
-/** An endpoint serving public market data to the web server. */
+/**
+ * An endpoint serving public market data to the web server. The request
+ * names its venue in the `venue` query parameter, and `exchange` is that
+ * venue's public client; `query` holds the other parameters.
+ */
 export interface PublicHandler<Query> {
   public: true;
   query: z.ZodType<Query>;
   handle(context: {
-    exchange: BinanceSpotTestnet;
+    exchange: MarketDataAdapter;
     query: Query;
   }): Promise<object>;
 }
@@ -119,6 +131,7 @@ export interface Route {
   handle(input: {
     exchanges: ExchangeSource;
     accounts: AccountResolver;
+    listAccounts?: AccountLister;
     search: string;
     request: IncomingMessage;
   }): Promise<object>;
@@ -136,27 +149,28 @@ export class RequestError extends Error {
 
 const MAX_BODY_BYTES = 16 * 1024;
 const customerIdSchema = z.uuid();
+const exchangeAccountIdSchema = z.uuid();
 
 /**
  * Why the worker did nothing. The web app treats each as "not sent".
- * - exchange: no Binance credentials.
+ * - exchange: no credentials for the account, or no connection to its venue.
  * - credentials: saved credentials the worker cannot open.
  * - database: PostgreSQL is unreachable or misconfigured.
- * - exchange_account: the customer does not own the account the worker
- *   trades on, or it has not been seeded.
+ * - exchange_account: the customer does not own the exchange account the
+ *   request names, or the worker does not serve it.
  */
 function notConfigured(
   reason: "exchange" | "credentials" | "database" | "exchange_account",
 ) {
   const messages = {
     exchange:
-      "Configure Binance Spot Testnet in the execution service to connect your virtual account.",
+      "Add API keys for this exchange account in Settings, or configure its venue in the execution service.",
     credentials:
       "The saved exchange keys cannot be opened. Check the execution worker's CREDENTIALS_MASTER_KEY, or save the keys again in Settings.",
     database:
       "The execution service cannot use its database. Check its output, then retry.",
     exchange_account:
-      "This customer has no Binance Spot Testnet exchange account on the execution service.",
+      "This exchange account is not one of yours on the execution service.",
   };
   return { status: "not_configured", reason, message: messages[reason] };
 }
@@ -170,21 +184,22 @@ export function route<Query, Body>(
     | CustomerHandler<Query, Body>
     | PublicHandler<Query>,
 ): Route {
+  const caller = ("caller" in definition && definition.caller) || "web";
   return {
     method,
     path,
-    caller: ("caller" in definition && definition.caller) || "web",
-    async handle({ exchanges, accounts, search, request }) {
-      const query = parse(
-        definition.query,
-        searchParameters(search),
-        "query parameters",
-      );
+    caller,
+    async handle({ exchanges, accounts, listAccounts, search, request }) {
+      const parameters = searchParameters(search);
       if ("public" in definition) {
-        const exchange = exchanges.market();
+        const { venue, ...rest } = parameters;
+        const venueId = parse(venueIdSchema, venue, "query parameters");
+        const query = parse(definition.query, rest, "query parameters");
+        const exchange = exchanges.market(venueId);
         if (!exchange) return notConfigured("exchange");
         return definition.handle({ exchange, query });
       }
+      const query = parse(definition.query, parameters, "query parameters");
       const body = definition.body
         ? parse(definition.body, await readJson(request), "request body")
         : (undefined as Body);
@@ -195,10 +210,18 @@ export function route<Query, Body>(
       );
       if ("needs" in definition && definition.needs === "customer")
         return definition.handle({ query, body, customerId });
+      const named = request.headers["x-exchange-account-id"];
       let account: AccountScope | undefined;
       try {
-        account = await accounts(customerId);
-      } catch {
+        account =
+          named === undefined && caller === "assistant" && listAccounts
+            ? onlyTradingAccount(await listAccounts(customerId))
+            : await accounts(
+                customerId,
+                parse(exchangeAccountIdSchema, named, "exchange account"),
+              );
+      } catch (error) {
+        if (error instanceof RequestError) throw error;
         return notConfigured("database");
       }
       if (!account) return notConfigured("exchange_account");
@@ -233,12 +256,15 @@ export function createRequestListener({
   assistantToken,
   exchanges,
   accounts,
+  listAccounts,
   routes,
 }: {
   token: string;
   assistantToken?: string;
   exchanges: ExchangeSource;
   accounts: AccountResolver;
+  // The assistant's decisions may leave the account out; see onlyTradingAccount.
+  listAccounts?: AccountLister;
   routes: readonly Route[];
 }): RequestListener {
   const tokens = new Map<Caller, Buffer>([["web", bearer(token)]]);
@@ -278,6 +304,7 @@ export function createRequestListener({
         await route.handle({
           exchanges,
           accounts,
+          listAccounts,
           search: queryStart === -1 ? "" : target.slice(queryStart + 1),
           request,
         }),
@@ -287,6 +314,19 @@ export function createRequestListener({
       send(503, { status: "unavailable", message: safeError(error) });
     }
   };
+}
+
+/**
+ * The account an assistant's decision is for when it names none: the
+ * customer's one account that trades, if they have exactly one. Until the
+ * assistant names the account of every decision (#26), a customer with
+ * several trading accounts gets none, and the decision is not recorded.
+ */
+function onlyTradingAccount(accounts: AccountScope[]) {
+  const trading = accounts.filter(
+    (account) => !(account as Partial<ExchangeAccount>).readOnly,
+  );
+  return trading.length === 1 ? trading[0] : undefined;
 }
 
 function bearer(token: string) {

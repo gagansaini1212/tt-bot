@@ -40,8 +40,8 @@ import {
 } from "./ai-decisions";
 import {
   ProtectedEntrySender,
-  serializer,
-  type Serializer,
+  accountQueues,
+  type AccountQueues,
 } from "./manual-orders";
 import type { OrderIntentStore } from "./order-intents";
 import { PassReads, type ExecutionExchange } from "./pass-reads";
@@ -149,7 +149,7 @@ export class StrategyRunner {
   readonly #now: () => Date;
   readonly #onChange: () => void;
   readonly #log: (message: string) => void;
-  readonly #exclusive: Serializer;
+  readonly #exclusive: AccountQueues;
   readonly #dayStartPrices = new Map<string, Promise<string>>();
   #lastLogged?: string;
 
@@ -166,7 +166,7 @@ export class StrategyRunner {
     log?: (message: string) => void;
     // Shared with the dashboard's order desks, so placements on an account
     // run one at a time.
-    exclusive?: Serializer;
+    exclusive?: AccountQueues;
   }) {
     this.store = new StrategyStore(options.database);
     this.#proposals = options.proposals;
@@ -175,7 +175,7 @@ export class StrategyRunner {
     this.#now = options.now ?? (() => new Date());
     this.#onChange = options.onChange ?? (() => {});
     this.#log = options.log ?? ((message) => console.error(message));
-    this.#exclusive = options.exclusive ?? serializer();
+    this.#exclusive = options.exclusive ?? accountQueues();
   }
 
   get aiSource(): AiSource {
@@ -194,8 +194,17 @@ export class StrategyRunner {
     );
   }
 
-  /** One pass over the account's strategies. The execution loop calls it. */
-  async run(scope: AccountScope, reads: PassReads) {
+  /**
+   * One pass over the account's strategies. The execution loop calls it.
+   * With `entries: false`, while the account's venue cannot serve it, each
+   * strategy only gets its upkeep: exits and cancels keep going, nothing is
+   * measured or opened, and strategies keep their status (ADR 0009 §5).
+   */
+  async run(
+    scope: AccountScope,
+    reads: PassReads,
+    { entries: opening = true }: { entries?: boolean } = {},
+  ) {
     const context = this.#context(reads.exchange, reads);
     const today = todays(await this.store.list(scope), context.now);
     if (!today.length) return;
@@ -218,6 +227,15 @@ export class StrategyRunner {
         entries.get(strategy.id) ?? [],
       );
       if (note) notes.set(strategy.id, note);
+    }
+    if (!opening) {
+      for (const strategy of strategies)
+        if (isRunning(strategy.status) && !notes.has(strategy.id))
+          notes.set(
+            strategy.id,
+            "Waiting: the exchange cannot serve this account now, so no entries are sent. Exits and cancels keep trying.",
+          );
+      return this.#saveNotes(scope, strategies, notes);
     }
     const measured = await this.#measureAll(scope, context, today, entries);
     let stopped = false;
@@ -291,6 +309,15 @@ export class StrategyRunner {
           }
         }
     }
+    await this.#saveNotes(scope, strategies, notes);
+  }
+
+  /** Saves each strategy's note for its card: `notes`, or why it is paused. */
+  async #saveNotes(
+    scope: AccountScope,
+    strategies: StrategyRecord[],
+    notes: Map<string, string>,
+  ) {
     for (const strategy of strategies) {
       const note =
         notes.get(strategy.id) ??
@@ -704,7 +731,7 @@ export class StrategyRunner {
         reason: issues.join(" "),
         checksRefused: true,
       };
-    return this.#exclusive(async () => {
+    return this.#exclusive(scope)(async () => {
       // Measured again right before the entry, as before every entry.
       const losses = await this.#measureNow(
         scope,
@@ -1031,6 +1058,20 @@ export class StrategyRunner {
         ? { ...today, reached: limits.current ? today.reached : false }
         : null,
       markets,
+      aiSource: this.aiSource,
+    };
+  }
+
+  /**
+   * What the Strategies page shows for a read-only exchange account: no
+   * strategy runs there (ADR 0009), so it has no markets to start one in.
+   */
+  async readOnlyState(scope: AccountScope): Promise<StrategiesState> {
+    return {
+      strategies: [],
+      limits: await this.store.portfolioLimits(scope),
+      today: null,
+      markets: [],
       aiSource: this.aiSource,
     };
   }

@@ -3,7 +3,8 @@ import {
   strategyActionRequestSchema,
   strategyDraftSchema,
   strategyVersionRequestSchema,
-  type BinanceSpotTestnet,
+  canTrade,
+  type AccountAdapter,
   type KillSwitchResult,
   type PortfolioLimitsChange,
   type StrategyChange,
@@ -28,19 +29,27 @@ const empty = z.strictObject({});
  * against the shared schemas here, whatever the web server checked.
  */
 export function strategies(
-  runner: Pick<StrategyRunner, "state" | "resumeProblem" | "store">,
+  runner: Pick<
+    StrategyRunner,
+    "state" | "readOnlyState" | "resumeProblem" | "store"
+  >,
 ) {
   const { store } = runner;
+  // A read-only account runs no strategies (ADR 0009).
+  const state = (account: AccountScope, exchange: AccountAdapter) =>
+    canTrade(exchange)
+      ? runner.state(account, exchange)
+      : runner.readOnlyState(account);
   // The strategy as the page shows it after a change.
   const answer = async (
     account: AccountScope,
-    exchange: BinanceSpotTestnet,
+    exchange: AccountAdapter,
     result: ControlResult,
   ): Promise<{ status: "connected"; change: StrategyChange }> => {
     let strategy: StrategyChange["strategy"] = null;
     if (result.result === "saved")
       strategy =
-        (await runner.state(account, exchange)).strategies.find(
+        (await state(account, exchange)).strategies.find(
           (entry) => entry.id === result.strategy.id,
         ) ?? null;
     return {
@@ -51,11 +60,11 @@ export function strategies(
   // A draft may trade only on a venue that places orders, and only markets
   // its catalogue lists. The store then checks the account allows them.
   const unlisted = async (
-    exchange: BinanceSpotTestnet,
+    exchange: AccountAdapter,
     draft: StrategyDraft,
   ): Promise<ControlResult | undefined> => {
     const venue = venueFor(exchange.venue);
-    if (!canPlaceOrders(venue))
+    if (!canPlaceOrders(venue) || !canTrade(exchange))
       return {
         result: "refused",
         message: `${venue.name} is read only here, so it runs no strategies (ADR 0009).`,
@@ -88,7 +97,7 @@ export function strategies(
       query: empty,
       handle: async ({ exchange, account }) => ({
         status: "connected",
-        state: await runner.state(account, exchange),
+        state: await state(account, exchange),
       }),
     }),
     create: handler({
@@ -131,11 +140,9 @@ export function strategies(
       query: empty,
       body: strategyActionRequestSchema,
       async handle({ exchange, account, body }) {
-        const problem = await runner.resumeProblem(
-          account,
-          exchange,
-          body.strategyId,
-        );
+        const problem = canTrade(exchange)
+          ? await runner.resumeProblem(account, exchange, body.strategyId)
+          : "This exchange account is read only here, so it runs no strategies (ADR 0009).";
         return answer(
           account,
           exchange,

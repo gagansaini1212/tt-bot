@@ -9,6 +9,7 @@ import {
   type Depth,
   type Kline,
   type Ticker,
+  type VenueId,
 } from "@crypto-trading/exchanges";
 import { z } from "zod";
 import {
@@ -16,6 +17,13 @@ import {
   type WorkerRequest,
   type WorkerState,
 } from "./worker-client";
+
+/**
+ * The venue the Markets page and holdings valuation read: every exchange
+ * account trades on Binance Spot Testnet until the dashboard shows another
+ * venue's markets.
+ */
+export const MARKET_DATA_VENUE: VenueId = "binance-spot-testnet";
 
 async function read<T extends object>(
   request: WorkerRequest<T>,
@@ -27,7 +35,7 @@ async function read<T extends object>(
 }
 
 /**
- * 24h statistics from Binance Spot Testnet, cached for up to 5 seconds.
+ * 24h statistics from `venue`, cached for up to 5 seconds.
  * Without `symbols`, returns every symbol. With symbols such as "BTCUSDT",
  * returns those that have a market and leaves the rest out.
  *
@@ -37,13 +45,14 @@ async function read<T extends object>(
  */
 export async function getMarketTickers(
   symbols?: readonly string[],
+  venue: VenueId = MARKET_DATA_VENUE,
 ): Promise<WorkerState<{ tickers: Ticker[] }>> {
   if (symbols?.length === 0) return { status: "connected", tickers: [] };
   // Longer lists exceed the worker's filter, so filter every ticker here.
   const filtered = symbols && symbols.length <= MAX_TICKER_FILTER;
   const state = await read({
     path: "/market/tickers",
-    query: { symbols: filtered ? symbols.join(",") : undefined },
+    query: { venue, symbols: filtered ? symbols.join(",") : undefined },
     schema: z.object({ tickers: z.array(tickerSchema) }),
   });
   if (!symbols || filtered || state.status !== "connected") return state;
@@ -62,10 +71,11 @@ export async function getMarketKlines(
   instrument: Instrument,
   interval: KlineInterval,
   limit?: number,
+  venue: VenueId = MARKET_DATA_VENUE,
 ): Promise<WorkerState<{ klines: Kline[] }>> {
   return read({
     path: "/market/klines",
-    query: { instrument, interval, limit },
+    query: { venue, instrument, interval, limit },
     schema: z.object({ klines: z.array(klineSchema) }),
   });
 }
@@ -74,10 +84,11 @@ export async function getMarketKlines(
 export async function getMarketDepth(
   instrument: Instrument,
   limit?: number,
+  venue: VenueId = MARKET_DATA_VENUE,
 ): Promise<WorkerState<{ depth: Depth }>> {
   return read({
     path: "/market/depth",
-    query: { instrument, limit },
+    query: { venue, instrument, limit },
     schema: z.object({ depth: depthSchema }),
   });
 }

@@ -8,7 +8,7 @@ import {
   type ManualOrderTicket,
 } from "@crypto-trading/exchanges/manual-order";
 import { z } from "zod";
-import { callWorkerForCustomer, type WorkerFailure } from "./worker-client";
+import { callWorkerForAccount, type WorkerFailure } from "./worker-client";
 
 export type OrderTicketState =
   | { status: "ready"; ticket: ManualOrderTicket }
@@ -17,7 +17,7 @@ export type OrderTicketState =
 const outcomeResponse = z.object({ outcome: manualOrderOutcomeSchema });
 
 export async function getOrderTicket(): Promise<OrderTicketState> {
-  const result = await callWorkerForCustomer({
+  const result = await callWorkerForAccount({
     path: "/orders/ticket",
     schema: z.union([
       z.object({ ticket: manualOrderTicketSchema }),
@@ -66,7 +66,7 @@ function writeFailure(
 export async function submitOrder(
   request: ManualOrderRequest,
 ): Promise<ManualOrderOutcome> {
-  const result = await callWorkerForCustomer({
+  const result = await callWorkerForAccount({
     method: "POST",
     path: "/orders",
     body: request,
@@ -80,7 +80,7 @@ export async function submitOrder(
 export async function getOrderStatus(
   listClientOrderId: string,
 ): Promise<ManualOrderOutcome> {
-  const result = await callWorkerForCustomer({
+  const result = await callWorkerForAccount({
     path: "/orders/status",
     query: { listClientOrderId },
     schema: outcomeResponse,
@@ -98,7 +98,7 @@ export async function getOrderStatus(
 export async function cancelTrigger(
   listClientOrderId: string,
 ): Promise<ManualOrderOutcome> {
-  const result = await callWorkerForCustomer({
+  const result = await callWorkerForAccount({
     method: "POST",
     path: "/orders/triggers/cancel",
     body: { listClientOrderId },
@@ -112,7 +112,7 @@ export async function cancelTrigger(
 export async function cancelOrder(
   request: ManualCancelRequest,
 ): Promise<ManualOrderOutcome> {
-  const result = await callWorkerForCustomer({
+  const result = await callWorkerForAccount({
     method: "POST",
     path: "/orders/cancel",
     body: request,

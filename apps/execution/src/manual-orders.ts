@@ -154,6 +154,24 @@ export function serializer() {
 }
 export type Serializer = ReturnType<typeof serializer>;
 
+/**
+ * One queue per exchange account. Placements on an account go out one at a
+ * time, so two cannot both claim its allocation, and never wait for
+ * another account's.
+ */
+export function accountQueues() {
+  const queues = new Map<string, Serializer>();
+  return (scope: Pick<AccountScope, "exchangeAccountId">): Serializer => {
+    let queue = queues.get(scope.exchangeAccountId);
+    if (!queue) {
+      queue = serializer();
+      queues.set(scope.exchangeAccountId, queue);
+    }
+    return queue;
+  };
+}
+export type AccountQueues = ReturnType<typeof accountQueues>;
+
 // Why a proposal that is no longer a draft cannot be approved.
 const DECIDED: Record<Exclude<SavedProposalStatus, "draft">, string> = {
   approved:
@@ -910,10 +928,13 @@ export class ProtectedEntrySender {
     try {
       list = await this.#exchange.placeProtectedEntry(entry);
     } catch (error) {
-      // Binance refused the request outright, so nothing was placed.
+      // The venue refused the request outright, or could not serve it, so
+      // nothing was placed.
       if (
         error instanceof ExchangeError &&
-        (error.kind === "rejected" || error.kind === "rate_limited")
+        (error.kind === "rejected" ||
+          error.kind === "rate_limited" ||
+          error.kind === "unavailable")
       ) {
         await this.settle(scope, id, {
           status: "rejected",

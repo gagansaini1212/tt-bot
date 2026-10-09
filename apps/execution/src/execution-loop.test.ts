@@ -13,7 +13,7 @@ import {
   protectedLegIds,
   type ManualOrderRequest,
 } from "@crypto-trading/exchanges";
-import type { AccountResolver, AccountScope } from "./accounts";
+import type { AccountLister, AccountScope } from "./accounts";
 import { ExecutionLoop } from "./execution-loop";
 import { requestEntryExit, stopStrategyEntries } from "./execution-store";
 import { FakeBinance } from "./fixtures/fake-binance";
@@ -81,9 +81,9 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
    * as a restarted worker would.
    */
   async function world({
-    lockCustomers = true,
+    lockAccounts = true,
     webhooks,
-  }: { lockCustomers?: boolean; webhooks?: NotificationWebhooks } = {}) {
+  }: { lockAccounts?: boolean; webhooks?: NotificationWebhooks } = {}) {
     const scope = await addCustomer();
     let offset = 0;
     const now = () => new Date(Date.now() + offset);
@@ -100,8 +100,8 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
       },
       0,
     );
-    const accounts: AccountResolver = async (customerId) =>
-      customerId === scope.customerId ? scope : undefined;
+    const accounts: AccountLister = async (customerId) =>
+      customerId === scope.customerId ? [scope] : [];
     const logs: string[] = [];
     const build = () => {
       const desk = new ManualOrderDesk({
@@ -120,7 +120,7 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
         desk,
         now,
         log: (message) => logs.push(message),
-        lockCustomers,
+        lockAccounts,
         webhooks,
       });
       return { desk, loop };
@@ -242,8 +242,10 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
         )
       `;
       await tx`
-        insert into order_intents (customer_id, proposal_id, idempotency_key, status)
-        values (${scope.customerId}, ${proposalId}, ${listClientOrderId}, 'acknowledged')
+        insert into order_intents
+          (customer_id, exchange_account_id, proposal_id, idempotency_key, status)
+        values (${scope.customerId}, ${scope.exchangeAccountId}, ${proposalId},
+          ${listClientOrderId}, 'acknowledged')
       `;
     });
     await w.fake.placeProtectedEntry({
@@ -302,7 +304,7 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
     assert.equal((await reconciliation("ct_loop_rest"))?.state, "closed");
     assert.equal(w.fake.count("placeMarketSell"), 0);
     assert.deepEqual(await notifications(w.scope), []);
-    assert.ok(w.loop.lastPassAt(w.scope.customerId));
+    assert.ok(w.loop.lastPassAt(w.scope));
   });
 
   test("every alert the loop raises is posted to the customer's webhook exactly once", async () => {
@@ -647,10 +649,10 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
     assert.equal((await reconciliation("ct_loop_crash"))?.state, "closed");
   });
 
-  for (const lockCustomers of [true, false])
-    test(`two workers at once sell, send and alert once (${lockCustomers ? "with" : "without"} the customer lock)`, async () => {
-      const w = await world({ lockCustomers });
-      const id = lockCustomers ? "ct_loop_twice" : "ct_loop_twice_nolock";
+  for (const lockAccounts of [true, false])
+    test(`two workers at once sell, send and alert once (${lockAccounts ? "with" : "without"} the account lock)`, async () => {
+      const w = await world({ lockAccounts });
+      const id = lockAccounts ? "ct_loop_twice" : "ct_loop_twice_nolock";
       await w.place(limit(id));
       await w.place(stopLimit(`${id}_stop`));
       w.fake.fillEntry(id, "0.001", { exits: "drop" });
@@ -1058,9 +1060,13 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
     w.fake.sellBehaviour = "fill";
     await w.pass();
     assert.equal((await reconciliation("ct_loop_limited"))?.state, "closed");
+    // The rate limit made the account unavailable, once, while the sells kept
+    // trying; the pass that sold it found the venue serving it again.
     assert.deepEqual(await notifications(w.scope), [
       "critical:protection_failed",
+      "warning:account_unavailable",
       "info:position_closed",
+      "info:account_recovered",
     ]);
   });
 
@@ -1084,8 +1090,10 @@ describe("execution loop", { skip: databaseTestsSkipped }, () => {
         returning id
       `;
       await tx`
-        insert into order_intents (customer_id, proposal_id, idempotency_key, status)
-        values (${w.scope.customerId}, ${proposal.id}, 'ct_loop_pause_open', 'acknowledged')
+        insert into order_intents
+          (customer_id, exchange_account_id, proposal_id, idempotency_key, status)
+        values (${w.scope.customerId}, ${w.scope.exchangeAccountId},
+          ${proposal.id}, 'ct_loop_pause_open', 'acknowledged')
       `;
     });
     await w.fake.placeProtectedEntry({

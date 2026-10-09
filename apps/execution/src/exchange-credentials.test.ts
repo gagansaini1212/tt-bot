@@ -9,13 +9,20 @@ import {
 } from "@crypto-trading/database/testing";
 import {
   BinanceSpotTestnet,
+  binanceSpotTestnetVenue,
   ExchangeError,
   VENUES,
+  VenueRegistry,
   type AccountReader,
   type KeyPermissions,
+  type SigningCredentials,
   type Venue,
 } from "@crypto-trading/exchanges";
-import { TESTNET_EXCHANGE_ACCOUNT_ID, type AccountScope } from "./accounts";
+import {
+  accountVenue,
+  TESTNET_EXCHANGE_ACCOUNT_ID,
+  type AccountScope,
+} from "./accounts";
 import {
   checkKeyPermissions,
   ExchangeCredentialStore,
@@ -391,18 +398,32 @@ describe(
 
     test("an account uses its saved keys, else the worker's .env keys for the dev account only", async () => {
       const store = new ExchangeCredentialStore(database.app, box);
-      const environment = new BinanceSpotTestnet({
+      const environment: SigningCredentials = {
+        kind: "hmac",
         apiKey: "env-key",
-        apiSecret: "env-secret",
-      });
-      const created: ExchangeKeys[] = [];
+        secret: "env-secret",
+      };
+      const binance = binanceSpotTestnetVenue();
+      const created: SigningCredentials[] = [];
+      // Each client built records what its venue supports.
+      const refreshed: string[] = [];
+      const registry = new VenueRegistry([
+        {
+          ...binance,
+          connect: (credentials) => {
+            created.push(credentials);
+            return binance.connect(credentials);
+          },
+        },
+      ]);
       const exchanges = savedOrEnvironmentExchanges({
         store,
+        registry,
+        // The dev account is on Binance Spot Testnet, like every account here.
+        venueOf: async () => "binance-spot-testnet",
         environment,
-        market: undefined,
-        create: (keys) => {
-          created.push(keys);
-          return new BinanceSpotTestnet(keys);
+        connected: async (account, venue) => {
+          refreshed.push(`${account.exchangeAccountId}:${venue.id}`);
         },
       });
       const mine = await customer();
@@ -410,8 +431,11 @@ describe(
       // The dev account has no saved keys, so it falls back to the .env keys.
       const fallback = await exchanges.forAccount(dev);
       assert.ok("exchange" in fallback);
-      assert.equal(fallback.exchange, environment);
       assert.equal(fallback.source, "environment");
+      assert.deepEqual(created, [environment]);
+      const again = await exchanges.forAccount(dev);
+      assert.ok("exchange" in again);
+      assert.equal(again.exchange, fallback.exchange);
       assert.deepEqual(await exchanges.forAccount(mine), {
         problem: "exchange",
       });
@@ -425,7 +449,7 @@ describe(
       assert.equal(first.source, "saved");
       // One client per set of keys.
       assert.equal(first.exchange, second.exchange);
-      assert.equal(created.length, 1);
+      assert.equal(created.length, 2);
       await store.save(mine, "hmac", {
         apiKey: `${ownKey}2`,
         apiSecret: secretKey,
@@ -434,6 +458,12 @@ describe(
       assert.ok("exchange" in replaced);
       assert.notEqual(replaced.exchange, first.exchange);
       assert.equal(created.at(-1)?.apiKey, `${ownKey}2`);
+      assert.equal(first.exchange.venue, "binance-spot-testnet");
+      assert.equal(refreshed.length, created.length);
+      assert.equal(
+        refreshed.at(-1),
+        `${mine.exchangeAccountId}:binance-spot-testnet`,
+      );
 
       // Saved keys that cannot be opened never fall back to other keys.
       const error = mock.method(console, "error", () => {});
@@ -443,8 +473,9 @@ describe(
             database.app,
             new SecretBox(randomBytes(32)),
           ),
+          registry,
+          venueOf: accountVenue(database.app),
           environment,
-          market: undefined,
         });
         assert.deepEqual(await locked.forAccount(mine), {
           problem: "credentials",

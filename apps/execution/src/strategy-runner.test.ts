@@ -20,7 +20,7 @@ import {
   VENUES,
   type VenueCapabilities,
 } from "@crypto-trading/exchanges";
-import type { AccountResolver, AccountScope } from "./accounts";
+import type { AccountLister, AccountScope } from "./accounts";
 import {
   RecordedDecisionSource,
   RECORDED_FIXTURE_MODEL,
@@ -32,7 +32,7 @@ import { limit } from "./fixtures/fake-exchange";
 import {
   loadManualTradingConfig,
   ManualOrderDesk,
-  serializer,
+  accountQueues,
 } from "./manual-orders";
 import { PostgresOrderIntents } from "./order-intents";
 import { PostgresRiskLimits } from "./risk-limits";
@@ -123,12 +123,12 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
    * sets the clock; PostgreSQL keeps its own.
    */
   async function world({
-    lockCustomers = true,
+    lockAccounts = true,
     decisions = new RecordedDecisionSource(),
     start,
     drawdownPercent = "50",
   }: {
-    lockCustomers?: boolean;
+    lockAccounts?: boolean;
     decisions?: DecisionSource;
     start?: Date;
     drawdownPercent?: string;
@@ -151,11 +151,11 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
       },
       0,
     );
-    const accounts: AccountResolver = async (customerId) =>
-      customerId === scope.customerId ? scope : undefined;
+    const accounts: AccountLister = async (customerId) =>
+      customerId === scope.customerId ? [scope] : [];
     const logs: string[] = [];
     const build = () => {
-      const exclusive = serializer();
+      const exclusive = accountQueues();
       const runner = new StrategyRunner({
         database: database.app,
         proposals,
@@ -172,7 +172,7 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
         proposals,
         risk,
         now,
-        exclusive,
+        exclusive: exclusive(scope),
       });
       const loop = new ExecutionLoop({
         database: database.app,
@@ -182,7 +182,7 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
         desk,
         now,
         log: (message) => logs.push(message),
-        lockCustomers,
+        lockAccounts,
         strategies: runner,
       });
       return { runner, desk, loop };
@@ -788,7 +788,7 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
   });
 
   test("two workers running at once make each entry once", async () => {
-    const w = await world({ lockCustomers: false });
+    const w = await world({ lockAccounts: false });
     const id = await w.create(grid(w.now()));
     const other = w.build();
     await Promise.all([w.pass(), other.loop.runPass(), w.pass()]);
@@ -1314,7 +1314,7 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
       proposals: w.proposals,
       now: () => w.now().getTime(),
       deskFor: () => w.desk,
-      disabledMessage: "",
+      disabledMessage: () => "",
       strategies: w.runner,
       instruments: async () => ["BTC-USDT", "ETH-USDT"],
     });

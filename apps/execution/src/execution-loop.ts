@@ -12,14 +12,20 @@ import {
   closeOrderId,
   floorToStep,
   protectedLegIds,
-  type BinanceSpotTestnet,
+  venueFor,
+  type AccountReader,
   type ExecutionState,
   type ManualOrderOutcome,
   type ExchangeFill,
   type MarketSellRequest,
   type ExchangeOrder,
 } from "@crypto-trading/exchanges";
-import type { AccountResolver, AccountScope } from "./accounts";
+import {
+  setAccountStatus,
+  type AccountLister,
+  type AccountScope,
+  type ExchangeAccount,
+} from "./accounts";
 import { PassReads, type ExecutionExchange } from "./pass-reads";
 import type { StrategyRunner } from "./strategy-runner";
 import {
@@ -73,17 +79,31 @@ export type { ExecutionExchange } from "./pass-reads";
 export type TriggerDesk = Pick<ManualOrderDesk, "submitTrigger">;
 
 /**
- * The Binance client a pass uses for an account, and the desk that sends
- * its stop-limit entries: the ones for the keys the account trades with.
- * Without a desk, stop-limit entries wait; dashboard orders are off.
+ * The venue client a pass uses for an account, and the desk that sends its
+ * stop-limit entries: the ones for the keys the account trades with.
+ * Without a desk, stop-limit entries wait; dashboard orders are off. A
+ * read-only account's client only reads (ADR 0009): the pass monitors the
+ * account and never sends anything.
  */
-export type PassClients = { exchange: ExecutionExchange; desk?: TriggerDesk };
+export type PassClients =
+  | { exchange: ExecutionExchange; desk?: TriggerDesk; readOnly?: false }
+  | { exchange: AccountReader; readOnly: true };
 
 /** Delivers a customer's notification.webhook jobs; see NotificationWebhooks. */
 export type WebhookDelivery = Pick<NotificationWebhooks, "deliver">;
 
 /** How often the worker checks every customer's orders. */
 export const PASS_INTERVAL_MS = 5_000;
+/**
+ * Exchange accounts checked at once. A slow or failing account holds one
+ * slot, and the others carry on in the rest.
+ */
+export const MAX_CONCURRENT_ACCOUNTS = 4;
+/**
+ * How often a pass reads a read-only account's balances, to know whether
+ * its venue still serves it. A trading account's own work reads its venue.
+ */
+export const READ_ONLY_PROBE_MS = 60_000;
 /** Market sells the worker tries for one entry before asking the customer. */
 export const MAX_CLOSE_ATTEMPTS = 3;
 // closeOrderId numbers an entry's sells 1 to 9.
@@ -92,8 +112,12 @@ const MAX_SELL_IDS = 9;
 const NOTIFICATIONS_SHOWN_MS = 7 * 24 * 60 * 60_000;
 
 /**
- * The worker's execution loop (ADR 0002). Each pass visits every customer
- * whose exchange account the worker trades on, and for each one:
+ * The worker's execution loop (ADR 0002). Each pass visits every exchange
+ * account the worker serves, each customer's in turn, with that account's
+ * own venue client. Accounts are checked side by side and apart (ADR 0009
+ * §5): one whose venue is slow, rate limited or down never holds up
+ * another's pass, and a pass still running when the next one starts is left
+ * to finish rather than started twice. For each trading account it:
  *
  * 1. settles submissions whose outcome was unknown, from due
  *    `order_intent.reconcile` jobs, by looking each order up by client ID;
@@ -102,12 +126,22 @@ const NOTIFICATIONS_SHOWN_MS = 7 * 24 * 60 * 60_000;
  * 4. reconciles every open protected entry with Binance, keeping its orders
  *    and fills, and sells quantity no stop loss protects;
  * 5. marks exits still held after their deadline overdue;
- * 6. runs the customer's strategies, if it has a StrategyRunner: measures
+ * 6. runs the account's strategies, if it has a StrategyRunner: measures
  *    their loss limits and plans, checks and sends their next entries.
+ *
+ * While the account's venue cannot serve it (an outage, a rate limit to
+ * wait out, a clock it cannot agree with), entries wait: no stop-limit
+ * entry or strategy entry is sent, and strategies keep their status. Exits,
+ * cancels and sales keep trying, within the venue's Retry-After. The
+ * account is marked `unavailable`, with one notification, and once a pass
+ * has reconciled it again without a venue failure, `connected`, with one
+ * more; entries resume after that pass's strategies have been measured.
+ * A read-only account is only monitored: its balances are read now and then
+ * to keep its availability, and nothing is ever sent to it.
  *
  * Everything it acts on is in PostgreSQL, so a restarted worker carries on
  * where it stopped. Two workers can run at once: an advisory lock gives each
- * customer's pass to one of them, and every action is guarded on its own as
+ * account's pass to one of them, and every action is guarded on its own as
  * well. Each order is saved as an intent before it is sent, and state
  * changes lock their row. Alerts about an entry's state are raised in the
  * same transaction as the change; notices of a stop-limit entry being sent
@@ -117,7 +151,7 @@ export class ExecutionLoop {
   readonly #database: Database;
   readonly #clients: (scope: AccountScope) => Promise<PassClients | undefined>;
   readonly #webhooks?: WebhookDelivery;
-  readonly #accounts: AccountResolver;
+  readonly #accounts: AccountLister;
   readonly #intents: OrderIntentStore &
     Pick<PostgresOrderIntents, "resolveMissing">;
   readonly #store: ExecutionStore;
@@ -125,10 +159,17 @@ export class ExecutionLoop {
   readonly #onChange: () => void;
   readonly #pause: StrategyPauser;
   readonly #log: (message: string) => void;
-  readonly #lockCustomers: boolean;
+  readonly #lockAccounts: boolean;
   readonly #strategies?: Pick<StrategyRunner, "run">;
+  readonly #slot: <T>(task: () => Promise<T>) => Promise<T>;
+  // When each account's last pass finished, and its read-only probe ran.
   readonly #lastPass = new Map<string, Date>();
-  #running?: Promise<void>;
+  readonly #lastProbe = new Map<string, number>();
+  // Each account's pass in progress or waiting for a slot.
+  readonly #visits = new Map<string, Promise<void>>();
+  #lockConnection?: Promise<ReservedConnection>;
+  // Passes using the lock connection; it goes back to the pool at none.
+  #lockUsers = 0;
   #delivering?: Promise<void>;
   #timer?: NodeJS.Timeout;
   #stopped = false;
@@ -143,7 +184,8 @@ export class ExecutionLoop {
       | { clients: (scope: AccountScope) => Promise<PassClients | undefined> }
     ) & {
       database: Database;
-      accounts: AccountResolver;
+      // The customer's exchange accounts the worker serves.
+      accounts: AccountLister;
       intents: OrderIntentStore & Pick<PostgresOrderIntents, "resolveMissing">;
       // Delivers alerts to customers' webhooks, beside the passes.
       webhooks?: WebhookDelivery;
@@ -153,9 +195,10 @@ export class ExecutionLoop {
       pauseStrategy?: StrategyPauser;
       log?: (message: string) => void;
       // Tests turn this off to prove each action is guarded on its own.
-      lockCustomers?: boolean;
-      // Runs each customer's strategies after their entries are reconciled.
+      lockAccounts?: boolean;
+      // Runs each account's strategies after its entries are reconciled.
       strategies?: Pick<StrategyRunner, "run">;
+      maxConcurrentAccounts?: number;
     },
   ) {
     this.#database = options.database;
@@ -172,17 +215,20 @@ export class ExecutionLoop {
     this.#onChange = options.onChange ?? (() => {});
     this.#pause = options.pauseStrategy ?? pauseStrategyInDatabase;
     this.#log = options.log ?? ((message) => console.error(message));
-    this.#lockCustomers = options.lockCustomers ?? true;
+    this.#lockAccounts = options.lockAccounts ?? true;
     this.#strategies = options.strategies;
+    this.#slot = limiter(
+      options.maxConcurrentAccounts ?? MAX_CONCURRENT_ACCOUNTS,
+    );
   }
 
   get store() {
     return this.#store;
   }
 
-  /** When this worker last finished a pass over the customer's orders. */
-  lastPassAt(customerId: string) {
-    return this.#lastPass.get(customerId);
+  /** When this worker last finished a pass over the account's orders. */
+  lastPassAt(scope: AccountScope) {
+    return this.#lastPass.get(scope.exchangeAccountId);
   }
 
   /**
@@ -200,7 +246,8 @@ export class ExecutionLoop {
       ),
     ]);
     return {
-      checkedAt: this.#lastPass.get(scope.customerId)?.toISOString() ?? null,
+      checkedAt:
+        this.#lastPass.get(scope.exchangeAccountId)?.toISOString() ?? null,
       alerts,
       triggers: triggers.flatMap(({ order, createdAt }) =>
         order.kind === "protected_entry" && order.trigger
@@ -222,19 +269,24 @@ export class ExecutionLoop {
     };
   }
 
-  /** Runs one pass. A call during a pass waits for that pass instead. */
+  /**
+   * Runs one pass over every account and waits for it. An account whose
+   * pass is already running is not checked twice: the call waits for that
+   * pass instead.
+   */
   runPass(): Promise<void> {
-    this.#running ??= this.#pass().finally(() => {
-      this.#running = undefined;
-    });
-    return this.#running;
+    return this.#pass();
   }
 
-  /** Runs a pass now and then every `intervalMs` until `stop`. */
+  /**
+   * Starts a pass now and then every `intervalMs` until `stop`. Each tick
+   * starts the accounts that are not still being checked, without waiting
+   * for slow ones.
+   */
   start(intervalMs = PASS_INTERVAL_MS) {
     this.#stopped = false;
     const tick = async () => {
-      await this.runPass().catch((error: unknown) =>
+      await this.#pass({ wait: false }).catch((error: unknown) =>
         this.#warn(`The execution loop failed: ${describe(error)}`),
       );
       if (!this.#stopped) this.#timer = setTimeout(tick, intervalMs);
@@ -245,35 +297,63 @@ export class ExecutionLoop {
   async stop() {
     this.#stopped = true;
     clearTimeout(this.#timer);
-    await this.#running;
+    await Promise.allSettled([...this.#visits.values()]);
     await this.#delivering;
   }
 
-  async #pass() {
+  /**
+   * Starts every account's pass, each customer's accounts in turn. Resolves
+   * once they have finished, or with `wait: false` once they have started;
+   * alerts are delivered after they finish either way.
+   */
+  async #pass({ wait = true } = {}) {
     const customerIds = await listCustomerIds(this.#database);
+    const visits: Promise<void>[] = [];
     for (const customerId of customerIds) {
-      if (this.#stopped) return;
+      if (this.#stopped) break;
+      let accounts: AccountScope[];
       try {
-        const scope = await this.#accounts(customerId);
-        if (!scope) continue;
-        const clients = await this.#clients(scope);
-        if (!clients) continue;
-        if (
-          await this.#exclusively(customerId, () =>
-            this.#customer(scope, clients),
-          )
-        )
-          this.#lastPass.set(customerId, this.#now());
+        accounts = await this.#accounts(customerId);
       } catch (error) {
         this.#warn(
-          `The execution loop could not check a customer's orders: ${describe(error)}`,
+          `The execution loop could not list a customer's exchange accounts: ${describe(error)}`,
         );
+        continue;
       }
+      for (const scope of accounts) visits.push(this.#visit(scope));
     }
     // Not awaited: a slow webhook must never delay protective work.
-    this.deliverAlerts(customerIds).catch((error: unknown) =>
-      this.#warn(`Webhook deliveries failed: ${describe(error)}`),
+    void Promise.allSettled(visits).then(() =>
+      this.deliverAlerts(customerIds).catch((error: unknown) =>
+        this.#warn(`Webhook deliveries failed: ${describe(error)}`),
+      ),
     );
+    if (wait) await Promise.all(visits);
+  }
+
+  /** The account's pass, or the one already running or waiting for it. */
+  #visit(scope: AccountScope): Promise<void> {
+    const key = scope.exchangeAccountId;
+    let visit = this.#visits.get(key);
+    if (!visit) {
+      visit = this.#slot(async () => {
+        if (this.#stopped) return;
+        try {
+          const clients = await this.#clients(scope);
+          if (!clients) return;
+          if (
+            await this.#exclusively(scope, () => this.#account(scope, clients))
+          )
+            this.#lastPass.set(key, this.#now());
+        } catch (error) {
+          this.#warn(
+            `The execution loop could not check exchange account ${key}: ${describe(error)}`,
+          );
+        }
+      }).finally(() => this.#visits.delete(key));
+      this.#visits.set(key, visit);
+    }
+    return visit;
   }
 
   /**
@@ -321,37 +401,91 @@ export class ExecutionLoop {
   }
 
   /**
-   * Runs `work` unless another worker is checking this customer. The lock is
+   * Runs `work` unless another worker is checking this account. The lock is
    * held by a session, not a transaction, so no row stays locked while the
-   * pass waits on Binance.
+   * pass waits on the venue. Every account's lock is taken on one reserved
+   * connection, so passes running side by side never hold more than it, and
+   * it goes back to the pool once no pass holds a lock.
    */
-  async #exclusively(customerId: string, work: () => Promise<void>) {
-    if (!this.#lockCustomers) {
+  async #exclusively(scope: AccountScope, work: () => Promise<void>) {
+    if (!this.#lockAccounts) {
       await work();
       return true;
     }
-    const key = `execution-loop:${customerId}`;
-    const connection = await this.#database.reserve();
+    const key = `execution-loop:${scope.exchangeAccountId}`;
+    this.#lockUsers++;
     try {
-      const [{ locked }] = await connection<{ locked: boolean }[]>`
-        select pg_try_advisory_lock(hashtextextended(${key}, 0)) as locked
-      `;
+      this.#lockConnection ??= this.#database.reserve();
+      const reserving = this.#lockConnection;
+      let connection: ReservedConnection;
+      try {
+        connection = await reserving;
+      } catch (error) {
+        if (this.#lockConnection === reserving)
+          this.#lockConnection = undefined;
+        throw error;
+      }
+      let locked: boolean;
+      try {
+        [{ locked }] = await connection<{ locked: boolean }[]>`
+          select pg_try_advisory_lock(hashtextextended(${key}, 0)) as locked
+        `;
+      } catch (error) {
+        this.#dropLockConnection(reserving);
+        throw error;
+      }
       if (!locked) return false;
       try {
         await work();
         return true;
       } finally {
-        await connection`select pg_advisory_unlock(hashtextextended(${key}, 0))`;
+        await connection`select pg_advisory_unlock(hashtextextended(${key}, 0))`.catch(
+          // A broken session has released its locks already.
+          () => this.#dropLockConnection(reserving),
+        );
       }
     } finally {
-      connection.release();
+      if (--this.#lockUsers === 0 && this.#lockConnection)
+        this.#dropLockConnection(this.#lockConnection);
     }
   }
 
-  async #customer(scope: AccountScope, clients: PassClients) {
-    const reads = new PassReads(clients.exchange);
+  /** Releases the lock connection; the next pass reserves another. */
+  #dropLockConnection(reserving: Promise<ReservedConnection>) {
+    if (this.#lockConnection === reserving) this.#lockConnection = undefined;
+    reserving.then(
+      (connection) => connection.release(),
+      () => {},
+    );
+  }
+
+  /**
+   * One pass over one account. A venue failure seen anywhere in it, on any
+   * request, makes the account unavailable for the rest of the pass.
+   */
+  async #account(scope: AccountScope, clients: PassClients) {
+    const health = new PassHealth();
+    const status = await this.#status(scope);
+    // The account was unavailable: entries wait until a pass reconciles it.
+    const recovering = status !== "connected";
+    if (clients.readOnly) {
+      const due =
+        recovering ||
+        this.#now().getTime() -
+          (this.#lastProbe.get(scope.exchangeAccountId) ?? -Infinity) >=
+          READ_ONLY_PROBE_MS;
+      if (!due) return;
+      this.#lastProbe.set(scope.exchangeAccountId, this.#now().getTime());
+      await observed(clients.exchange, health)
+        .getAccount()
+        .catch(() => undefined);
+      await this.#settleAvailability(scope, clients.exchange, health, status);
+      return;
+    }
+    const reads = new PassReads(observed(clients.exchange, health));
     await this.#settleUnknownOutcomes(scope, reads);
-    await this.#sendTriggeredEntries(scope, reads, clients.desk);
+    if (!recovering && !health.failed)
+      await this.#sendTriggeredEntries(scope, reads, clients.desk);
     await this.#store.startDueExits(scope, this.#now(), deadlineReached);
     for (const entry of await this.#store.trackedEntries(scope)) {
       try {
@@ -363,14 +497,85 @@ export class ExecutionLoop {
       }
     }
     await this.#store.markOverdueExits(scope, this.#now(), exitOverdue);
+    // Balances too, before the account counts as served again.
+    if (recovering && !health.failed)
+      await reads.balance("USDT").catch(() => undefined);
+    const available = await this.#settleAvailability(
+      scope,
+      clients.exchange,
+      health,
+      status,
+    );
     if (this.#strategies)
       try {
-        await this.#strategies.run(scope, reads);
+        await this.#strategies.run(scope, reads, { entries: available });
       } catch (error) {
         this.#warn(
-          `Could not run the customer's strategies: ${describe(error)}`,
+          `Could not run the account's strategies: ${describe(error)}`,
         );
       }
+  }
+
+  /** The account's status as the worker last recorded it. */
+  async #status(scope: AccountScope) {
+    const [row] = await withCustomerScope(
+      this.#database,
+      scope.customerId,
+      (tx) => tx<{ status: string }[]>`
+        select status from exchange_accounts
+        where id = ${scope.exchangeAccountId}
+      `,
+    );
+    return row?.status ?? "connected";
+  }
+
+  /**
+   * Records whether the venue served the account in this pass, notifying
+   * once when it stops and once when it serves it again. Resolves whether
+   * entries may go.
+   */
+  async #settleAvailability(
+    scope: AccountScope,
+    exchange: Pick<AccountReader, "venue">,
+    health: PassHealth,
+    status: string,
+  ) {
+    const venue = venueFor(exchange.venue).name;
+    const label = (scope as Partial<ExchangeAccount>).label;
+    const account = label ? `${label} on ${venue}` : `Your ${venue} account`;
+    if (health.failed) {
+      const changed = await withCustomerScope(
+        this.#database,
+        scope.customerId,
+        async (tx) => {
+          if (!(await setAccountStatus(tx, scope, "unavailable"))) return false;
+          await raiseNotification(tx, scope.customerId, {
+            kind: "account_unavailable",
+            severity: "warning",
+            title: `${venue} cannot serve an exchange account`,
+            body: `${account} cannot be reached now: ${health.reason} No entries are sent on it until it answers again. Exits, cancels and sales keep trying, and stop losses already on ${venue} keep protecting. Its strategies keep their status.`,
+            data: { exchangeAccountId: scope.exchangeAccountId },
+          });
+          return true;
+        },
+      );
+      if (changed) this.#onChange();
+      return false;
+    }
+    if (status === "connected") return true;
+    await withCustomerScope(this.#database, scope.customerId, async (tx) => {
+      if (!(await setAccountStatus(tx, scope, "connected"))) return;
+      if (status === "unavailable")
+        await raiseNotification(tx, scope.customerId, {
+          kind: "account_recovered",
+          severity: "info",
+          title: `${venue} serves an exchange account again`,
+          body: `${account} answers again. The worker reconciled its orders, fills and balances, and its strategies measure their loss limits before any new entry.`,
+          data: { exchangeAccountId: scope.exchangeAccountId },
+        });
+    });
+    this.#onChange();
+    return true;
   }
 
   /**
@@ -385,6 +590,7 @@ export class ExecutionLoop {
       scope.customerId,
       RECONCILE_TOPIC,
       now,
+      { exchangeAccountId: scope.exchangeAccountId },
     );
     for (const job of jobs) {
       const intent = await this.#store.intent(
@@ -829,9 +1035,14 @@ export class ExecutionLoop {
     try {
       placed = await reads.exchange.placeMarketSell(order);
     } catch (error) {
+      // Refused, or not served: nothing was sold either way.
       const refused =
+        error instanceof ExchangeError && error.kind !== "unknown_outcome";
+      // A venue that could not serve the sale did not refuse it, so it does
+      // not count as one of the attempts.
+      const notServed =
         error instanceof ExchangeError &&
-        (error.kind === "rejected" || error.kind === "rate_limited");
+        (error.kind === "rate_limited" || error.kind === "unavailable");
       await this.#intents
         .settle(
           scope,
@@ -848,11 +1059,7 @@ export class ExecutionLoop {
       this.#warn(
         `Could not sell for ${tracked.listClientOrderId}: ${describe(error)}`,
       );
-      return close(
-        refused ? "rejected" : "unknown",
-        undefined,
-        error instanceof ExchangeError && error.kind === "rate_limited",
-      );
+      return close(refused ? "rejected" : "unknown", undefined, notServed);
     }
     this.#onChange();
     await this.#intents
@@ -1030,6 +1237,79 @@ export class ExecutionLoop {
     this.#lastLogged = message;
     this.#log(message);
   }
+}
+
+type ReservedConnection = Awaited<ReturnType<Database["reserve"]>>;
+
+/** Whether the account's venue failed to serve any request in a pass. */
+class PassHealth {
+  reason?: string;
+
+  get failed() {
+    return this.reason !== undefined;
+  }
+
+  /**
+   * Notes a venue that could not serve a request: it was down, limiting
+   * requests, could not agree on the time, or left an order's outcome
+   * unknown. A rejection is the venue answering, so it is not one.
+   */
+  saw(error: unknown) {
+    if (
+      error instanceof ExchangeError &&
+      error.kind !== "rejected" &&
+      this.reason === undefined
+    )
+      this.reason =
+        error.kind === "rate_limited"
+          ? `it is limiting requests${error.retryAfterSeconds ? ` for ${error.retryAfterSeconds} seconds` : ""}.`
+          : error.kind === "unknown_outcome"
+            ? "it did not confirm a request."
+            : "it did not answer, or could not agree with the worker on the time.";
+  }
+}
+
+/** `client`, with every failed call noted in `health`. */
+function observed<T extends object>(client: T, health: PassHealth): T {
+  return new Proxy(client, {
+    get(target, property) {
+      const value: unknown = Reflect.get(target, property, target);
+      if (typeof value !== "function") return value;
+      return (...args: unknown[]) => {
+        let result: unknown;
+        try {
+          result = value.apply(target, args);
+        } catch (error) {
+          health.saw(error);
+          throw error;
+        }
+        return result instanceof Promise
+          ? result.catch((error: unknown) => {
+              health.saw(error);
+              throw error;
+            })
+          : result;
+      };
+    },
+  });
+}
+
+/** Runs at most `max` tasks at once, the others in the order they came. */
+function limiter(max: number) {
+  let active = 0;
+  const waiting: (() => void)[] = [];
+  return async <T>(task: () => Promise<T>): Promise<T> => {
+    if (active < max) active++;
+    // A finished task hands its slot straight to the next.
+    else await new Promise<void>((resolve) => waiting.push(resolve));
+    try {
+      return await task();
+    } finally {
+      const next = waiting.shift();
+      if (next) next();
+      else active--;
+    }
+  };
 }
 
 type Sale =

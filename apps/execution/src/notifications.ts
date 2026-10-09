@@ -22,6 +22,9 @@ import type {
  * - strategy_waiting (warning): a strategy cannot be measured, so it opens
  *   no entries.
  * - strategy_completed, proposal_awaiting_approval (info).
+ * - account_unavailable (warning), account_recovered (info): an exchange
+ *   account's venue stopped serving it, so its entries wait, and served it
+ *   again. Each is raised once per change.
  */
 export type NotificationKind =
   | "protection_failed"
@@ -41,7 +44,9 @@ export type NotificationKind =
   | "kill_switch"
   | "strategy_waiting"
   | "strategy_completed"
-  | "proposal_awaiting_approval";
+  | "proposal_awaiting_approval"
+  | "account_unavailable"
+  | "account_recovered";
 
 export type NewNotification = {
   kind: NotificationKind;

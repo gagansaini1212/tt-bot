@@ -230,14 +230,20 @@ describe("exchange accounts", { skip: databaseTestsSkipped }, () => {
     const scope = { customerId, exchangeAccountId: DEV_EXCHANGE_ACCOUNT_ID };
     await add(scope, "Testnet");
     const resolve = accountResolver(database.app);
-    assert.deepEqual(await resolve(customerId), scope);
+    assert.deepEqual(
+      (({ customerId, exchangeAccountId }) => ({
+        customerId,
+        exchangeAccountId,
+      }))((await resolve(customerId, scope.exchangeAccountId))!),
+      scope,
+    );
     assert.deepEqual(
       await new ExchangeAccountStore(database.app).remove(scope),
       {
         result: "removed",
       },
     );
-    assert.equal(await resolve(customerId), undefined);
+    assert.equal(await resolve(customerId, scope.exchangeAccountId), undefined);
   });
 
   test("an account is not removed while the product still manages something on it", async () => {

@@ -43,8 +43,10 @@ function limit(max: number) {
 }
 
 /**
- * 24h statistics, cached for up to 5 seconds, for every symbol or the
- * comma-separated `symbols`. Symbols without a market are left out.
+ * 24h statistics, cached for up to 5 seconds, for every symbol of the venue
+ * or the comma-separated `symbols`. Symbols without a market are left out.
+ * Every market data route serves the venue its `venue` parameter names,
+ * each from its own cache.
  */
 export function tickers(now: () => number) {
   const cache = createCache<Ticker[]>(5_000, now);
@@ -59,7 +61,9 @@ export function tickers(now: () => number) {
     async handle({ exchange, query }) {
       // One request for every symbol serves any list, and an unknown symbol
       // cannot fail it, as it would if sent to Binance.
-      const all = await cache("all", () => exchange.getTickers());
+      const all = await cache(`${exchange.venue} all`, () =>
+        exchange.getTickers(),
+      );
       const wanted = query.symbols && new Set(query.symbols);
       return {
         status: "connected",
@@ -83,8 +87,9 @@ export function klines(now: () => number) {
       await listed(exchange, instrument);
       // Binance charges the same weight for any limit, so fetch the maximum
       // and let every limit share one cache entry.
-      const klines = await cache(`${instrument} ${interval}`, () =>
-        exchange.getKlines(instrument, interval, MAX_KLINE_LIMIT),
+      const klines = await cache(
+        `${exchange.venue} ${instrument} ${interval}`,
+        () => exchange.getKlines(instrument, interval, MAX_KLINE_LIMIT),
       );
       return { status: "connected", klines: klines.slice(-limit) };
     },
@@ -102,8 +107,9 @@ export function depth(now: () => number) {
     async handle({ exchange, query }) {
       const { instrument, limit = MAX_DEPTH_LIMIT } = query;
       await listed(exchange, instrument);
-      const { lastUpdateId, bids, asks } = await cache(instrument, () =>
-        exchange.getDepth(instrument, MAX_DEPTH_LIMIT),
+      const { lastUpdateId, bids, asks } = await cache(
+        `${exchange.venue} ${instrument}`,
+        () => exchange.getDepth(instrument, MAX_DEPTH_LIMIT),
       );
       return {
         status: "connected",

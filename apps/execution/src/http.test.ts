@@ -2,10 +2,15 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { once } from "node:events";
+import { randomUUID } from "node:crypto";
 import { test, type TestContext } from "node:test";
 import { z } from "zod";
-import { BinanceSpotTestnet } from "@crypto-trading/exchanges";
-import type { AccountResolver } from "./accounts";
+import {
+  BinanceSpotTestnet,
+  type AccountAdapter,
+  type MarketDataAdapter,
+} from "@crypto-trading/exchanges";
+import type { AccountLister, AccountResolver } from "./accounts";
 import { binanceExchangeInfo } from "./fixtures/binance-exchange-info";
 import { fixedExchanges } from "./fixtures/fixed-exchanges";
 import {
@@ -60,8 +65,11 @@ const secondTestnetAccount = testnetAccount(
   "5a3b2c1d-0e9f-4a8b-9c7d-6e5f4a3b2c0b",
   { label: "Second testnet" },
 );
-const ownerOnly: AccountResolver = async (customerId) =>
-  customerId === owner.customerId ? owner : undefined;
+const ownerOnly: AccountResolver = async (customerId, exchangeAccountId) =>
+  customerId === owner.customerId &&
+  exchangeAccountId === owner.exchangeAccountId
+    ? owner
+    : undefined;
 const ticker = (symbol: string) => ({
   symbol,
   priceChange: "-1.50000000",
@@ -147,10 +155,12 @@ async function serve(
     exchange,
     routes,
     accounts = ownerOnly,
+    listAccounts,
   }: {
-    exchange?: BinanceSpotTestnet;
+    exchange?: AccountAdapter & MarketDataAdapter;
     routes?: Route[];
     accounts?: AccountResolver;
+    listAccounts?: AccountLister;
   } = {},
 ) {
   let now = 1_800_000_000_000;
@@ -160,6 +170,7 @@ async function serve(
       assistantToken,
       exchanges: fixedExchanges(exchange),
       accounts,
+      listAccounts,
       routes: routes ?? createRoutes({ ...memory(), now: () => now }),
     }),
   );
@@ -170,17 +181,30 @@ async function serve(
     server.close();
   });
   const { port } = server.address() as AddressInfo;
+  // As the web server calls it: for the owner, on their exchange account,
+  // and market data on Binance Spot Testnet.
   const call = (path: string, init: RequestInit = {}) =>
-    fetch(`http://127.0.0.1:${port}${path}`, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "X-Customer-Id": owner.customerId,
-        ...init.headers,
+    fetch(
+      `http://127.0.0.1:${port}${
+        path.startsWith("/market/") && !/[?&]venue=/.test(path)
+          ? `${path}${path.includes("?") ? "&" : "?"}venue=binance-spot-testnet`
+          : path
+      }`,
+      {
+        ...init,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "X-Customer-Id": owner.customerId,
+          "X-Exchange-Account-Id": owner.exchangeAccountId,
+          ...init.headers,
+        },
       },
-    });
+    );
   return {
     call,
+    // As sent, with no account or venue added.
+    raw: (path: string, init: RequestInit = {}) =>
+      fetch(`http://127.0.0.1:${port}${path}`, init),
     json: async (path: string) => {
       const response = await call(path);
       assert.equal(response.status, 200, path);
@@ -423,7 +447,7 @@ test("without an exchange, valid requests report not_configured", async (t) => {
       status: "not_configured",
       reason: "exchange",
       message:
-        "Configure Binance Spot Testnet in the execution service to connect your virtual account.",
+        "Add API keys for this exchange account in Settings, or configure its venue in the execution service.",
     });
   assert.equal((await call("/market/depth?limit=5")).status, 400);
 });
@@ -452,6 +476,25 @@ test("customer routes serve only the customer who owns the exchange account", as
     });
     assert.equal(stranger.status, 200);
     assert.equal((await stranger.json()).reason, "exchange_account");
+    // Another account, even one the customer may own elsewhere, is not this
+    // one: the request names the account it acts on.
+    const otherAccount = await call(path, {
+      headers: {
+        "X-Exchange-Account-Id": "5a3b2c1d-0e9f-4a8b-9c7d-6e5f4a3b2cfe",
+      },
+    });
+    assert.equal(otherAccount.status, 200);
+    assert.equal((await otherAccount.json()).reason, "exchange_account");
+    for (const account of ["", "not-a-uuid"]) {
+      const response = await call(path, {
+        headers: { "X-Exchange-Account-Id": account },
+      });
+      assert.equal(response.status, 400, `${path} ${account}`);
+      assert.deepEqual(await response.json(), {
+        status: "invalid_request",
+        message: "Check the exchange account.",
+      });
+    }
   }
   assert.equal(fake.calls.length, 0);
   // Market data is public: it needs no customer.
@@ -1198,4 +1241,107 @@ test("the portfolio lists the customer's accounts, which one the worker reads, a
   const { portfolio: theirs } = await stranger.json();
   assert.deepEqual(theirs.accounts, []);
   assert.equal(theirs.reportingCurrency, "USDT");
+});
+
+test("market data names its venue, and an unknown venue is refused", async (t) => {
+  const fake = binance();
+  const { raw } = await serve(t, { exchange: fake.exchange });
+  const headers = { Authorization: `Bearer ${token}` };
+  for (const path of [
+    "/market/tickers",
+    "/market/tickers?venue=",
+    "/market/tickers?venue=binance",
+    "/market/depth?instrument=BTC-USDT&venue=binance-spot-testnet&venue=binance-spot-testnet",
+  ]) {
+    const response = await raw(path, { headers });
+    assert.equal(response.status, 400, path);
+  }
+  const listed = await raw(
+    "/market/depth?instrument=BTC-USDT&venue=binance-spot-testnet",
+    { headers },
+  );
+  assert.equal((await listed.json()).status, "connected");
+});
+
+test("a read-only account takes no orders, whatever the request", async (t) => {
+  const fake = binance();
+  // The same venue's client without its order methods, as a read-only
+  // venue's adapter is built.
+  const trading = new Set([
+    "placeProtectedEntry",
+    "testProtectedEntry",
+    "cancelOrderList",
+    "cancelOrderById",
+    "placeMarketSell",
+    "placeLimitOrder",
+  ]);
+  const reader = new Proxy(fake.exchange, {
+    has: (target, property) =>
+      !trading.has(String(property)) && Reflect.has(target, property),
+    get: (target, property) => {
+      if (trading.has(String(property))) return undefined;
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const { call, json } = await serve(t, {
+    exchange: reader,
+    routes: createRoutes({
+      ...memory(),
+      env: {
+        TESTNET_MANUAL_INSTRUMENTS: "BTC-USDT",
+        TESTNET_MANUAL_ALLOCATION_USDT: "300",
+      },
+    }),
+  });
+  const ticket = await json("/orders/ticket");
+  assert.match(ticket.disabled, /read only here, so it takes no orders/);
+  const placed = await call("/orders", post("/orders", order));
+  assert.equal((await placed.json()).outcome.status, "rejected");
+  const cancelled = await call(
+    "/orders/cancel",
+    post("/orders/cancel", {
+      instrument: "BTC-USDT",
+      orderId: "12",
+      acceptUnprotected: false,
+    }),
+  );
+  assert.match((await cancelled.json()).outcome.message, /read only/);
+  // It is still read for display.
+  assert.equal((await json("/snapshot")).status, "connected");
+  assert.equal(
+    fake.calls.filter((url) => url.pathname.startsWith("/api/v3/order")).length,
+    0,
+  );
+});
+
+test("a decision that names no account goes to the customer's one trading account, or none", async (t) => {
+  const fake = binance();
+  let accounts = [{ ...owner, readOnly: false }];
+  const { raw } = await serve(t, {
+    exchange: fake.exchange,
+    listAccounts: async () => accounts,
+  });
+  const record = () =>
+    raw("/decisions", {
+      ...post("/decisions", decision()),
+      headers: {
+        ...asAssistant,
+        "X-Customer-Id": owner.customerId,
+        "Content-Type": "application/json",
+      },
+    });
+  const recorded = await (await record()).json();
+  assert.equal(recorded.decision.proposal.status, "draft");
+  // With two trading accounts, or only read-only ones, which is unclear.
+  for (const listed of [
+    [
+      { ...owner, readOnly: false },
+      { ...owner, exchangeAccountId: randomUUID(), readOnly: false },
+    ],
+    [{ ...owner, readOnly: true }],
+  ]) {
+    accounts = listed;
+    assert.equal((await (await record()).json()).reason, "exchange_account");
+  }
 });

@@ -1,17 +1,21 @@
 import assert from "node:assert/strict";
 import { afterEach, before, beforeEach, mock, test } from "node:test";
 import { z } from "zod";
-import { DEV_CUSTOMER_ID } from "@crypto-trading/database/dev-seed";
+import {
+  DEV_CUSTOMER_ID,
+  DEV_EXCHANGE_ACCOUNT_ID,
+} from "@crypto-trading/database/dev-seed";
 import { signInForTesting } from "./current-customer.testing";
 import type * as WorkerClient from "./worker-client";
 
 let callWorker: typeof WorkerClient.callWorker;
+let callWorkerForAccount: typeof WorkerClient.callWorkerForAccount;
 let callWorkerForCustomer: typeof WorkerClient.callWorkerForCustomer;
 let parseWorkerUrl: typeof WorkerClient.parseWorkerUrl;
 
 before(async () => {
   signInForTesting();
-  ({ callWorker, callWorkerForCustomer, parseWorkerUrl } =
+  ({ callWorker, callWorkerForAccount, callWorkerForCustomer, parseWorkerUrl } =
     await import("./worker-client"));
 });
 
@@ -231,5 +235,18 @@ test("customer calls tell the worker which customer they are for", async () => {
   assert.deepEqual(init.headers, {
     Authorization: `Bearer ${token}`,
     "X-Customer-Id": DEV_CUSTOMER_ID,
+  });
+});
+
+test("account calls also name the exchange account they act on", async () => {
+  const fetch = respond(() =>
+    Response.json({ status: "connected", value: "" }),
+  );
+  await callWorkerForAccount({ path: "/snapshot", schema });
+  const [, init] = fetch.mock.calls[0].arguments as [URL, RequestInit];
+  assert.deepEqual(init.headers, {
+    Authorization: `Bearer ${token}`,
+    "X-Customer-Id": DEV_CUSTOMER_ID,
+    "X-Exchange-Account-Id": DEV_EXCHANGE_ACCOUNT_ID,
   });
 });

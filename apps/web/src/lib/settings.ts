@@ -25,6 +25,7 @@ import {
 } from "@crypto-trading/exchanges/execution";
 import { z } from "zod";
 import {
+  callWorkerForAccount,
   callWorkerForCustomer,
   type WorkerFailureReason,
   type WorkerRequest,
@@ -64,10 +65,23 @@ const NOT_SENT = new Set<WorkerFailureReason>([
   "invalid_request",
 ]);
 
+// Risk limits belong to the current exchange account. The exchange accounts
+// themselves, the webhook and notifications are the customer's own.
+type Scope = { account: boolean };
+const customer: Scope = { account: false };
+const call = <T>(
+  request: Omit<WorkerRequest<T>, "customerId" | "exchangeAccountId">,
+  { account }: Scope,
+) => (account ? callWorkerForAccount(request) : callWorkerForCustomer(request));
+
 async function read<T extends object>(
-  request: Omit<WorkerRequest<T>, "customerId" | "method">,
+  request: Omit<
+    WorkerRequest<T>,
+    "customerId" | "exchangeAccountId" | "method"
+  >,
+  scope: Scope = { account: true },
 ): Promise<WorkerState<T>> {
-  const result = await callWorkerForCustomer(request);
+  const result = await call(request, scope);
   return result.status === "connected"
     ? { status: "connected", ...result.data }
     : { status: result.status, message: result.message };
@@ -79,12 +93,13 @@ async function read<T extends object>(
  * are safe to save again once the refreshed page shows what happened.
  */
 async function write<T>(
-  request: Omit<WorkerRequest<T>, "customerId">,
+  request: Omit<WorkerRequest<T>, "customerId" | "exchangeAccountId">,
   answer: (data: T) => SettingsActionResult,
   // False for checks, such as a connection test, that change nothing.
   changes = true,
+  scope: Scope = { account: true },
 ): Promise<SettingsActionResult> {
-  const result = await callWorkerForCustomer(request);
+  const result = await call(request, scope);
   if (result.status === "connected") return answer(result.data);
   return !changes || NOT_SENT.has(result.reason)
     ? { result: "unavailable", message: result.message }
@@ -103,10 +118,13 @@ const changeResult = ({ change }: { change: SettingsActionResult }) => ({
 export function getExchangeAccounts(): Promise<
   WorkerState<{ exchangeAccounts: ExchangeAccountsState }>
 > {
-  return read({
-    path: "/exchange-accounts",
-    schema: z.object({ exchangeAccounts: exchangeAccountsStateSchema }),
-  });
+  return read(
+    {
+      path: "/exchange-accounts",
+      schema: z.object({ exchangeAccounts: exchangeAccountsStateSchema }),
+    },
+    customer,
+  );
 }
 
 const accountChange = {
@@ -118,6 +136,8 @@ export function addExchangeAccount(request: AddExchangeAccountRequest) {
   return write(
     { ...accountChange, path: "/exchange-accounts", body: request },
     changeResult,
+    true,
+    customer,
   );
 }
 
@@ -125,6 +145,8 @@ export function relabelExchangeAccount(request: RelabelExchangeAccountRequest) {
   return write(
     { ...accountChange, path: "/exchange-accounts/label", body: request },
     changeResult,
+    true,
+    customer,
   );
 }
 
@@ -132,6 +154,8 @@ export function replaceExchangeKeys(request: ReplaceExchangeKeysRequest) {
   return write(
     { ...accountChange, path: "/exchange-accounts/keys", body: request },
     changeResult,
+    true,
+    customer,
   );
 }
 
@@ -143,6 +167,8 @@ export function removeExchangeAccount(exchangeAccountId: string) {
       body: { exchangeAccountId },
     },
     changeResult,
+    true,
+    customer,
   );
 }
 
@@ -156,6 +182,7 @@ export function testExchangeAccount(exchangeAccountId: string) {
     },
     ({ test }) => ({ result: test.result, message: test.message }),
     false,
+    customer,
   );
 }
 
@@ -181,10 +208,13 @@ export function saveRiskLimits(request: RiskLimitsChangeRequest) {
 }
 
 export function getWebhook(): Promise<WorkerState<{ webhook: WebhookStatus }>> {
-  return read({
-    path: "/settings/webhook",
-    schema: z.object({ webhook: webhookStatusSchema }),
-  });
+  return read(
+    {
+      path: "/settings/webhook",
+      schema: z.object({ webhook: webhookStatusSchema }),
+    },
+    customer,
+  );
 }
 
 export function saveWebhook(url: string) {
@@ -196,6 +226,8 @@ export function saveWebhook(url: string) {
       schema: z.object({ change: webhookChangeSchema }),
     },
     changeResult,
+    true,
+    customer,
   );
 }
 
@@ -207,6 +239,8 @@ export function removeWebhook() {
       schema: z.object({ change: webhookChangeSchema }),
     },
     changeResult,
+    true,
+    customer,
   );
 }
 
@@ -219,23 +253,29 @@ export function sendTestWebhook() {
     },
     ({ test }) => ({ result: test.result, message: test.message }),
     false,
+    customer,
   );
 }
 
 export function getNotifications(): Promise<
   WorkerState<{ notifications: Notification[] }>
 > {
-  return read({
-    path: "/notifications",
-    schema: z.object({
-      notifications: z.array(notificationSchema).max(MAX_NOTIFICATIONS),
-    }),
-  });
+  return read(
+    {
+      path: "/notifications",
+      schema: z.object({
+        notifications: z.array(notificationSchema).max(MAX_NOTIFICATIONS),
+      }),
+    },
+    customer,
+  );
 }
 
 export function markNotificationsRead() {
   return write(
     { method: "POST", path: "/notifications/read", schema: z.object({}) },
     () => ({ result: "done", message: "Marked every alert read." }),
+    true,
+    customer,
   );
 }

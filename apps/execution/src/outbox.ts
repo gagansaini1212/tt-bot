@@ -20,13 +20,21 @@ export const JOB_LEASE_MS = 2 * 60_000;
  * claim leases the job: it is not due again until the lease ends, so two
  * workers never handle it at once, and a worker that dies mid-job leaves it
  * to be retried. Finish each job with `completeJob` or `retryJob`.
+ *
+ * With `exchangeAccountId`, only jobs about that account's order intents
+ * are claimed: those whose payload names an `orderIntentId` on it. Each
+ * account's pass settles its own, with its own venue's client.
  */
 export function claimDueJobs(
   database: Database,
   customerId: string,
   topic: string,
   now: Date,
-  { limit = 20, leaseMs = JOB_LEASE_MS } = {},
+  {
+    limit = 20,
+    leaseMs = JOB_LEASE_MS,
+    exchangeAccountId,
+  }: { limit?: number; leaseMs?: number; exchangeAccountId?: string } = {},
 ): Promise<OutboxJob[]> {
   return withCustomerScope(database, customerId, async (tx) => {
     const rows = await tx<
@@ -42,9 +50,17 @@ export function claimDueJobs(
         available_at = ${new Date(now.getTime() + leaseMs)},
         attempts = attempts + 1
       where id in (
-        select id from outbox_jobs
-        where topic = ${topic} and completed_at is null and available_at <= ${now}
-        order by available_at, id
+        select j.id from outbox_jobs j
+        where j.topic = ${topic} and j.completed_at is null
+          and j.available_at <= ${now}
+          and (${exchangeAccountId ?? null}::uuid is null or exists (
+            select from order_intents i
+            left join trade_proposals p on p.id = i.proposal_id
+            where i.id::text = j.payload ->> 'orderIntentId'
+              and coalesce(i.exchange_account_id, p.exchange_account_id)
+                = ${exchangeAccountId ?? null}::uuid
+          ))
+        order by j.available_at, j.id
         limit ${limit}
         for update skip locked
       )

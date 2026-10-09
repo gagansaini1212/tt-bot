@@ -59,10 +59,10 @@ test("tickers are requested for every symbol or a list", async () => {
     tickers: [ticker],
   });
   await getMarketTickers(["BTCUSDT", "ETHUSDT"]);
-  assert.equal(requested(fetch), "/market/tickers");
+  assert.equal(requested(fetch), "/market/tickers?venue=binance-spot-testnet");
   assert.equal(
     requested(fetch, 1),
-    "/market/tickers?symbols=BTCUSDT%2CETHUSDT",
+    "/market/tickers?venue=binance-spot-testnet&symbols=BTCUSDT%2CETHUSDT",
   );
   // An account without other assets needs no prices.
   assert.deepEqual(await getMarketTickers([]), {
@@ -85,13 +85,16 @@ test("a list longer than the worker's filter is filtered here", async () => {
     ...Array.from({ length: 499 }, (_, index) => `T${index}USDT`),
   ];
   const result = await getMarketTickers(symbols);
-  assert.equal(requested(fetch), "/market/tickers");
+  assert.equal(requested(fetch), "/market/tickers?venue=binance-spot-testnet");
   assert.deepEqual(
     result.status === "connected" && result.tickers.map(({ symbol }) => symbol),
     ["BTCUSDT", "XRPUSDT"],
   );
   await getMarketTickers(symbols.slice(0, 500));
-  assert.match(requested(fetch, 1), /^\/market\/tickers\?symbols=XRPUSDT%2C/);
+  assert.match(
+    requested(fetch, 1),
+    /^\/market\/tickers\?venue=binance-spot-testnet&symbols=XRPUSDT%2C/,
+  );
 });
 
 test("klines and depth pass their parameters and keep decimal strings", async () => {
@@ -103,7 +106,7 @@ test("klines and depth pass their parameters and keep decimal strings", async ()
   );
   assert.equal(
     requested(klines),
-    "/market/klines?instrument=ETH-USDT&interval=4h&limit=200",
+    "/market/klines?venue=binance-spot-testnet&instrument=ETH-USDT&interval=4h&limit=200",
   );
   mock.restoreAll();
 
@@ -112,7 +115,10 @@ test("klines and depth pass their parameters and keep decimal strings", async ()
     status: "connected",
     depth,
   });
-  assert.equal(requested(books), "/market/depth?instrument=BTC-USDT");
+  assert.equal(
+    requested(books),
+    "/market/depth?venue=binance-spot-testnet&instrument=BTC-USDT",
+  );
 });
 
 test("malformed or failed market data becomes a message, not data", async () => {

@@ -1,10 +1,12 @@
 import Decimal from "decimal.js";
 import {
   assistantDecisionRequestSchema,
+  canTrade,
   exchangeAccountName,
   rejectProposalRequestSchema,
+  type AccountAdapter,
+  type AccountReader,
   type AssistantDecisionRequest,
-  type BinanceSpotTestnet,
 } from "@crypto-trading/exchanges";
 import {
   instrumentAssets,
@@ -48,12 +50,18 @@ export function decisions({
   // The customer's exchange accounts.
   directory?: Pick<ReportingDirectory, "accounts">;
   now: () => number;
-  deskFor: (exchange: BinanceSpotTestnet) => ManualOrderDesk | undefined;
-  disabledMessage: string;
+  deskFor: (
+    exchange: AccountAdapter,
+    account: AccountScope,
+  ) => ManualOrderDesk | undefined;
+  disabledMessage: (exchange: AccountAdapter) => string;
   // Approves an AI-managed strategy's proposals under its own limits.
   strategies?: Pick<StrategyRunner, "approve">;
 }) {
-  const disabled = { status: "rejected" as const, message: disabledMessage };
+  const disabled = (exchange: AccountAdapter) => ({
+    status: "rejected" as const,
+    message: disabledMessage(exchange),
+  });
   const clock = () => new Date(now());
   // After an approval or rejection, a failed read must not hide its outcome.
   const latest = (account: AccountScope, proposalId: string) =>
@@ -167,18 +175,20 @@ export function decisions({
         // A strategy's proposal is checked against the strategy, not the
         // dashboard's limits.
         const saved = await proposals.find(account, body.proposalId);
-        const desk = deskFor(exchange);
-        const outcome = saved?.strategyId
-          ? strategies
-            ? await strategies.approve(account, exchange, body.proposalId)
-            : {
-                status: "rejected" as const,
-                message:
-                  "This worker does not run strategies. Nothing was sent.",
-              }
-          : desk
-            ? await desk.approve(account, body.proposalId)
-            : disabled;
+        const desk = deskFor(exchange, account);
+        const outcome = !canTrade(exchange)
+          ? disabled(exchange)
+          : saved?.strategyId
+            ? strategies
+              ? await strategies.approve(account, exchange, body.proposalId)
+              : {
+                  status: "rejected" as const,
+                  message:
+                    "This worker does not run strategies. Nothing was sent.",
+                }
+            : desk
+              ? await desk.approve(account, body.proposalId)
+              : disabled(exchange);
         return {
           status: "connected",
           outcome,
@@ -238,7 +248,7 @@ export function decisions({
  * account never pays for it, so no other account's balance is read.
  */
 async function paidByOwnBalance(
-  exchange: Pick<BinanceSpotTestnet, "getAccount">,
+  exchange: Pick<AccountReader, "getAccount">,
   name: string,
   proposal: { instrument: Instrument; quantity: string; entryPrice: string },
 ) {

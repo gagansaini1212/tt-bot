@@ -11,7 +11,7 @@ import {
 } from "@crypto-trading/exchanges/ai-decisions";
 import { z } from "zod";
 import {
-  callWorkerForCustomer,
+  callWorkerForAccount,
   type WorkerFailure,
   type WorkerState,
 } from "./worker-client";
@@ -24,7 +24,7 @@ export type DecisionHistoryState = WorkerState<{
 
 /** The customer's latest AI decisions, newest first, with their proposals. */
 export async function getDecisionHistory(): Promise<DecisionHistoryState> {
-  const result = await callWorkerForCustomer({
+  const result = await callWorkerForAccount({
     path: "/decisions",
     schema: z.object({ decisions: z.array(decisionViewSchema) }),
   });
@@ -41,7 +41,7 @@ export async function getDecisionHistory(): Promise<DecisionHistoryState> {
 export async function getProposal(
   proposalId: string,
 ): Promise<ProposalView | null> {
-  const result = await callWorkerForCustomer({
+  const result = await callWorkerForAccount({
     path: "/proposals",
     query: { proposalId },
     schema: z.object({ proposal: proposalViewSchema.nullable() }),
@@ -70,7 +70,7 @@ const NOT_SENT = new Set<WorkerFailure["reason"]>([
 export async function submitApproval(
   proposalId: string,
 ): Promise<ProposalApproval> {
-  const result = await callWorkerForCustomer({
+  const result = await callWorkerForAccount({
     method: "POST",
     path: "/proposals/approve",
     body: { proposalId },
@@ -93,7 +93,7 @@ export async function submitRejection(
   proposalId: string,
   reason: string | undefined,
 ): Promise<ProposalRejection> {
-  const result = await callWorkerForCustomer({
+  const result = await callWorkerForAccount({
     method: "POST",
     path: "/proposals/reject",
     body: { proposalId, reason },

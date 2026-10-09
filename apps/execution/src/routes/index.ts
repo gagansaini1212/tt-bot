@@ -1,8 +1,10 @@
 import type { ReportingDirectory } from "../reporting-directory";
+import type { ExchangeAccount } from "../accounts";
 import { route, type Route } from "../http";
 import type { OrderIntentStore } from "../order-intents";
 import type { RiskLimitStore } from "../risk-limits";
 import type { TradeProposalStore } from "../trade-proposals";
+import { accounts as accountRoutes } from "./accounts";
 import { decisions } from "./decisions";
 import {
   exchangeAccounts as exchangeAccountRoutes,
@@ -16,22 +18,23 @@ import { settings, type SettingsDependencies } from "./settings";
 import { createSnapshotCache, snapshot } from "./snapshot";
 import { strategies as strategyRoutes } from "./strategies";
 import type { StrategyRunner } from "../strategy-runner";
-import type { Serializer } from "../manual-orders";
+import type { AccountQueues } from "../manual-orders";
 
 /**
  * The worker's HTTP endpoints and the dashboard order desks they share with
  * the execution loop. To add an endpoint, write a handler module and list it
  * here: `handler` for a customer's exchange account, `accountHandler` or
- * `customerHandler` for their data without Binance, and `publicHandler` for
- * market data. Each call creates fresh caches; `now` is their clock. Without
- * `settings`, the Settings routes are left out, without `exchangeAccounts`,
- * the exchange account routes, without `proposals`, the AI decision routes,
- * and without `strategies`, the strategy routes. `directory` lists the
- * customer's exchange accounts for totals and the assistant's proposals:
- * without it, the assistant's trade proposals are refused, and without
- * `portfolio` too, the routes for totals across accounts are left out.
- * Dashboard placements and a strategy runner made with `exclusive` run one
- * at a time.
+ * `customerHandler` for their data without the venue, and `publicHandler`
+ * for market data. Each call creates fresh caches; `now` is their clock.
+ * Without `settings`, the Settings routes are left out, without
+ * `exchangeAccounts`, the exchange account routes, without `proposals`, the
+ * AI decision routes, without `strategies`, the strategy routes, and without
+ * `listAccounts`, the list of accounts the worker serves. `directory` lists
+ * the customer's exchange accounts for totals and the assistant's
+ * proposals: without it, the assistant's trade proposals are refused, and
+ * without `portfolio` too, the routes for totals across accounts are left
+ * out. Dashboard placements and a strategy runner made with `exclusive` run
+ * one at a time per account.
  */
 export function createWorker({
   intents,
@@ -43,6 +46,7 @@ export function createWorker({
   strategies,
   directory,
   portfolio: portfolioDependencies,
+  listAccounts,
   exclusive,
   now = Date.now,
   env = process.env,
@@ -60,9 +64,10 @@ export function createWorker({
   exchangeAccounts?: ExchangeAccountDependencies;
   strategies?: Pick<
     StrategyRunner,
-    "state" | "resumeProblem" | "store" | "approve"
+    "state" | "readOnlyState" | "resumeProblem" | "store" | "approve"
   >;
-  exclusive?: Serializer;
+  listAccounts?: (customerId: string) => Promise<ExchangeAccount[]>;
+  exclusive?: AccountQueues;
   now?: () => number;
   env?: NodeJS.ProcessEnv;
 }) {
@@ -78,6 +83,9 @@ export function createWorker({
   });
   const desk = orders(desks);
   const routes: Route[] = [
+    ...(listAccounts
+      ? [route("GET", "/accounts", accountRoutes(listAccounts))]
+      : []),
     route(
       "GET",
       "/snapshot",
