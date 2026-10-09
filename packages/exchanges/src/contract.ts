@@ -223,7 +223,9 @@ export type ExchangeErrorKind =
 /**
  * Why a venue request failed, in terms every adapter shares:
  * - rejected: the venue refused it. Nothing changed.
- * - unavailable: it could not be read. Nothing changed.
+ * - unavailable: the venue could not serve it now, such as during an
+ *   outage or after a clock-skew error. Nothing changed, for an order
+ *   request too: one whose outcome is uncertain is unknown_outcome.
  * - rate_limited: the venue asks the application to wait
  *   `retryAfterSeconds`. Nothing changed.
  * - unknown_outcome: an order request may or may not have acted. Look the

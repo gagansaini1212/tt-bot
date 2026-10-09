@@ -1,4 +1,3 @@
-import { createHmac, createPrivateKey, sign } from "node:crypto";
 import { instrumentFor, type Instrument } from "@crypto-trading/domain";
 import { z } from "zod";
 import {
@@ -32,6 +31,14 @@ import {
   protectedLegIds,
   type ProtectedEntry,
 } from "./order-rules";
+import {
+  binanceRequestSigner,
+  credentialsFromKeys,
+  CredentialsError,
+  type RequestSigner,
+  type SigningCredentials,
+} from "./signing";
+import { Backoff, VenueLimits } from "./venue-limits";
 import { binanceClientOrderIds, binanceVenueSymbols } from "./venues";
 
 // Deliberately fixed: this adapter cannot be configured to send real orders.
@@ -236,6 +243,12 @@ function documentedRejection(message: unknown) {
 const NO_SUCH_ORDER = -2013;
 // Binance's "Invalid symbol.", for a market it does not list.
 const INVALID_SYMBOL = -1121;
+// Binance's "Too many new orders": the order count it keeps per account. Any
+// other 429 or 418 is the request weight it counts per IP, which every
+// account on this worker shares.
+const TOO_MANY_ORDERS = -1015;
+// Binance's "Timestamp for this request is outside of the recvWindow."
+const INVALID_TIMESTAMP = -1021;
 
 /** An ExchangeError from Binance Spot Testnet, with Binance's numeric code. */
 export class BinanceTestnetError extends ExchangeError {
@@ -262,33 +275,35 @@ export class BinanceTestnetError extends ExchangeError {
   }
 }
 
+export type BinanceSpotTestnetOptions = (
+  | { apiKey: string; apiSecret?: string; privateKey?: string }
+  | { credentials: SigningCredentials }
+  // Public market data needs no key. Signed requests then throw before
+  // anything is sent.
+  | { publicData: true }
+) & {
+  fetch?: typeof fetch;
+  now?: () => number;
+  // The venue's catalogue, shared with its other clients. Without one,
+  // this client keeps its own.
+  markets?: MarketCatalogue;
+  // The venue's backoff and clock, shared with its other clients. Without
+  // them, this client keeps its own.
+  limits?: VenueLimits;
+};
+
 export class BinanceSpotTestnet implements TradingAdapter {
   readonly venue = VENUE;
   readonly markets: MarketCatalogue;
+  readonly #limits: VenueLimits;
+  // This account's own limits, such as its order count.
+  readonly #accountBackoff: Backoff;
   // Unset on a public market data client.
-  readonly #apiKey?: string;
-  readonly #signPayload?: (payload: string) => string;
+  readonly #signer?: RequestSigner;
   readonly #fetch: typeof fetch;
   readonly #now: () => number;
-  #clockOffset = 0;
-  #clockSyncedAt = -Infinity;
-  #clockSync?: Promise<void>;
-  #blockedUntil = 0;
 
-  constructor(
-    options: (
-      | { apiKey: string; apiSecret?: string; privateKey?: string }
-      // Public market data needs no key. Signed requests then throw before
-      // anything is sent.
-      | { publicData: true }
-    ) & {
-      fetch?: typeof fetch;
-      now?: () => number;
-      // The venue's catalogue, shared with its other clients. Without one,
-      // this client keeps its own.
-      markets?: MarketCatalogue;
-    },
-  ) {
+  constructor(options: BinanceSpotTestnetOptions) {
     this.#fetch = options.fetch ?? fetch;
     this.#now = options.now ?? Date.now;
     this.markets =
@@ -300,71 +315,28 @@ export class BinanceSpotTestnet implements TradingAdapter {
       });
     if (this.markets.venue !== VENUE)
       throw new Error("The market catalogue belongs to another venue.");
+    this.#limits =
+      options.limits ?? new VenueLimits({ venue: VENUE, now: this.#now });
+    if (this.#limits.venue !== VENUE)
+      throw new Error("The venue limits belong to another venue.");
+    this.#accountBackoff = new Backoff(this.#now);
     if ("publicData" in options) return;
-    if (
-      !options.apiKey.trim() ||
-      (!options.apiSecret?.trim() && !options.privateKey?.trim())
-    ) {
-      throw new Error(
-        "A Binance testnet API key and either a private key or HMAC secret are required in the execution service.",
-      );
-    }
-    if (options.privateKey?.trim() && options.apiSecret?.trim()) {
-      throw new Error(
-        "Configure either a Binance private key or HMAC secret, not both.",
-      );
-    }
-    this.#apiKey = options.apiKey;
-    if (options.privateKey?.trim()) {
-      try {
-        const key = createPrivateKey(options.privateKey);
-        if (
-          key.asymmetricKeyType !== "ed25519" &&
-          key.asymmetricKeyType !== "rsa"
-        )
-          throw new Error();
-        if (
-          key.asymmetricKeyType === "rsa" &&
-          (key.asymmetricKeyDetails?.modulusLength ?? 0) < 2048
-        )
-          throw new Error();
-        this.#signPayload = (payload) =>
-          sign(
-            key.asymmetricKeyType === "ed25519" ? null : "sha256",
-            Buffer.from(payload),
-            key,
-          ).toString("base64");
-      } catch {
-        throw new Error(
-          "The Binance private key must be an unencrypted Ed25519 or RSA PEM key. RSA keys must have at least 2048 bits.",
-        );
-      }
-    } else {
-      const secret = options.apiSecret!;
-      this.#signPayload = (payload) =>
-        createHmac("sha256", secret).update(payload).digest("hex");
-    }
+    this.#signer = binanceRequestSigner(
+      "credentials" in options ? options.credentials : binanceKeys(options),
+    );
   }
 
   async #syncClock() {
-    if (this.#now() - this.#clockSyncedAt < 60_000) return;
-    if (!this.#clockSync) {
-      this.#clockSync = (async () => {
-        const start = this.#now();
-        const { serverTime } = await this.#request(
-          "GET",
-          "/api/v3/time",
-          {},
-          z.object({ serverTime: id }),
-          false,
-        );
-        this.#clockOffset = serverTime - Math.floor((start + this.#now()) / 2);
-        this.#clockSyncedAt = this.#now();
-      })().finally(() => {
-        this.#clockSync = undefined;
-      });
-    }
-    await this.#clockSync;
+    await this.#limits.clock.sync(async () => {
+      const { serverTime } = await this.#request(
+        "GET",
+        "/api/v3/time",
+        {},
+        z.object({ serverTime: id }),
+        false,
+      );
+      return serverTime;
+    });
   }
 
   async #request<T>(
@@ -374,42 +346,48 @@ export class BinanceSpotTestnet implements TradingAdapter {
     schema: z.ZodType<T>,
     signed = true,
   ): Promise<T> {
-    if (this.#now() < this.#blockedUntil) {
-      throw new BinanceTestnetError(
-        "rate_limited",
-        undefined,
-        Math.ceil((this.#blockedUntil - this.#now()) / 1000),
-      );
-    }
-    if (signed && (!this.#signPayload || !this.#apiKey))
+    // The venue's limits hold every request back; the account's only its
+    // own signed ones.
+    const wait = Math.max(
+      this.#limits.backoff.remainingSeconds(),
+      signed ? this.#accountBackoff.remainingSeconds() : 0,
+    );
+    if (wait > 0)
+      throw new BinanceTestnetError("rate_limited", undefined, wait);
+    if (signed && !this.#signer)
       throw new Error(
         "This Binance client serves public market data only. Configure API keys for account requests.",
       );
     if (signed) await this.#syncClock();
+    const unsigned = new URL(`${BINANCE_SPOT_TESTNET_URL}${path}`);
     const query = new URLSearchParams(parameters);
-    if (signed) {
-      query.set("recvWindow", "5000");
-      query.set("timestamp", String(this.#now() + this.#clockOffset));
-      query.set("signature", this.#signPayload!(query.toString()));
-    }
+    if (method === "GET") unsigned.search = query.toString();
+    const request =
+      signed && this.#signer
+        ? this.#signer.sign({
+            method,
+            url: unsigned,
+            ...(method === "GET" ? {} : { body: query.toString() }),
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+            timestamp: this.#limits.clock.now(),
+          })
+        : {
+            url: unsigned,
+            ...(method === "GET" ? {} : { body: query.toString() }),
+            headers: {},
+          };
     const mutation = method !== "GET" && path !== "/api/v3/order/test";
     let response: Response;
     try {
-      response = await this.#fetch(
-        `${BINANCE_SPOT_TESTNET_URL}${path}${method === "GET" ? `?${query}` : ""}`,
-        {
-          method,
-          redirect: "error",
-          signal: AbortSignal.timeout(12_000),
-          headers: signed
-            ? {
-                "X-MBX-APIKEY": this.#apiKey!,
-                "Content-Type": "application/x-www-form-urlencoded",
-              }
-            : {},
-          ...(method === "GET" ? {} : { body: query.toString() }),
-        },
-      );
+      response = await this.#fetch(request.url, {
+        method,
+        redirect: "error",
+        signal: AbortSignal.timeout(12_000),
+        headers: request.headers,
+        ...(request.body === undefined ? {} : { body: request.body }),
+      });
     } catch {
       // Never include request URLs, signatures, headers or transport errors.
       throw new BinanceTestnetError(
@@ -432,8 +410,17 @@ export class BinanceSpotTestnet implements TradingAdapter {
         const seconds = Number(response.headers.get("Retry-After"));
         const retryAfter =
           Number.isFinite(seconds) && seconds > 0 ? seconds : 60;
-        this.#blockedUntil = this.#now() + retryAfter * 1000;
+        (code === TOO_MANY_ORDERS
+          ? this.#accountBackoff
+          : this.#limits.backoff
+        ).hold(retryAfter);
         throw new BinanceTestnetError("rate_limited", code, retryAfter);
+      }
+      if (code === INVALID_TIMESTAMP) {
+        // Binance checked the timestamp before acting, so nothing changed.
+        // The venue's clock is read again before the next signed request.
+        this.#limits.clock.invalidate();
+        throw new BinanceTestnetError("unavailable", code);
       }
       const unknown =
         mutation &&
@@ -959,4 +946,30 @@ function orderParameters(raw: LimitOrderRequest) {
     newClientOrderId: clientId(order.clientOrderId),
     newOrderRespType: "RESULT",
   };
+}
+
+/** Keys as the worker's .env and the credential store hold them. */
+function binanceKeys(keys: {
+  apiKey: string;
+  apiSecret?: string;
+  privateKey?: string;
+}): SigningCredentials {
+  if (
+    !keys.apiKey.trim() ||
+    (!keys.apiSecret?.trim() && !keys.privateKey?.trim())
+  )
+    throw new CredentialsError(
+      "A Binance testnet API key and either a private key or HMAC secret are required in the execution service.",
+    );
+  if (keys.privateKey?.trim() && keys.apiSecret?.trim())
+    throw new CredentialsError(
+      "Configure either a Binance private key or HMAC secret, not both.",
+    );
+  try {
+    return credentialsFromKeys(keys);
+  } catch {
+    throw new CredentialsError(
+      "The Binance private key must be an unencrypted Ed25519 or RSA PEM key. RSA keys must have at least 2048 bits.",
+    );
+  }
 }
