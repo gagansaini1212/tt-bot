@@ -90,7 +90,8 @@ function OtherAccount({ entry }: { entry: AccountTotals }) {
             <h3 className="text-sm font-medium">Open orders</h3>
             <div
               aria-label={`Open orders on ${entry.name}`}
-              className="overflow-x-auto rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+              // This focusable region scrolls a wide table, not the table's own container.
+              className="overflow-x-auto rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50 [&_[data-slot=table-container]]:overflow-visible"
               role="region"
               tabIndex={0}
             >

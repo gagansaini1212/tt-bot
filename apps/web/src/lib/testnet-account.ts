@@ -16,9 +16,9 @@ const MAX_SNAPSHOT_AGE_MS = 30_000;
 // Covers the Date header's one-second resolution and small clock adjustments.
 const MAX_SNAPSHOT_LEAD_MS = 5_000;
 const REJECTED =
-  "The testnet account is unavailable. Check the execution worker and its credentials, then refresh.";
+  "The exchange account is unavailable: its venue may be limiting or refusing requests. Check the execution worker and the account's credentials, then refresh.";
 const UNREACHABLE =
-  "The testnet account is unavailable. Start the execution worker and refresh to reconnect.";
+  "The exchange account is unavailable. Start the execution worker and refresh to reconnect.";
 // Account wording for some failures. The others keep the worker client's.
 const MESSAGES: Partial<Record<WorkerFailureReason, string>> = {
   missing_token:
@@ -74,7 +74,7 @@ export async function getTestnetAccount(
     return {
       status: "unavailable",
       message:
-        "The execution worker is running, but its account snapshot is more than 30 seconds old. Check the worker's connection to Binance Spot Testnet, then refresh.",
+        "The execution worker is running, but its account snapshot is more than 30 seconds old. Check the worker's connection to the exchange, then refresh.",
     };
   if (freshness === "future")
     return {
