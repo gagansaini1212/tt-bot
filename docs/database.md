@@ -87,6 +87,10 @@ The web app decides which customer a request acts for, and the worker acts only 
 
 `manual_risk_limits` keeps an exchange account's limits for orders placed by hand: the per-order cap, the daily risk limit and the default stop-loss percentage. The daily risk limit bounds what the day's manual orders would lose at their stops, a CLI buy counting in full (`manualOrderRisk`); it is not a strategy's loss limit. Each change from Settings inserts the next version, made from the version the customer edited, and an audit event; a change from a stale version is refused. The app role can only read and insert. The worker reads the latest version immediately before each order and lowers it to the platform maximums in `apps/execution/src/risk-limits.ts`. Without a version, dashboard and CLI orders stay off.
 
+## Allowed instruments
+
+`exchange_accounts.allowed_instruments` lists the instruments, named `BASE-QUOTE`, that the account's customer allows. It defaults to `BTC-USDT` and `ETH-USDT`, and must hold at least one. Its venue's market catalogue decides what exists, and the account's accounting currency what a strategy may trade there ([ADR 0008](adr/0008-normalize-venues-markets-and-order-ids.md)). `apps/execution/src/instrument-access.ts` reads it in the customer's scope: strategy creation and every entry's reservation read it in their own transaction, and dashboard orders, the assistant's decisions and the snapshot read it through `RiskLimitStore.allowedInstruments`. There is no screen to change it yet; to widen it, update the column.
+
 ## Notifications and webhooks
 
 `notifications` is shared: the execution worker's alerts are rows in it, written in the customer's scope. `notification_webhooks` holds a customer's Discord or Telegram URL, sealed like exchange keys. A trigger on `notifications` inserts a `notification.webhook` outbox job for each of the customer's webhooks in the same transaction as the alert. `NotificationWebhooks.deliver` handles one job: it reads the alert and URL in one scope, posts with no transaction open, and says whether the job is done, worth retrying or failed for good. The execution loop runs a delivery round after each pass, beside the next one, so a slow webhook never delays protective work: it claims each customer's due jobs of that topic with the outbox's lease and settles them with `settleDelivery`, retrying with the outbox's backoff (from 30 seconds to 15 minutes, never sooner than the destination asks) and giving up after eight attempts with an audit event. Each alert is queued once and posted once; only a worker that stops between posting and recording the post can post it again.
@@ -95,11 +99,11 @@ The web app decides which customer a request acts for, and the worker acts only 
 
 `pnpm db:seed` inserts these rows if they are missing and leaves existing ones alone.
 
-| Row                          | ID                                     | Details                                                                  |
-| ---------------------------- | -------------------------------------- | ------------------------------------------------------------------------ |
-| Dev customer                 | `6d1f3c52-8b7e-4a51-9a0d-2f4e8c1b7a01` | "Development customer"                                                   |
-| Binance Spot Testnet account | `6d1f3c52-8b7e-4a51-9a0d-2f4e8c1b7a02` | `binance-spot-testnet`, mode `simulation`, USDT, status `connected`      |
-| Dev login                    | `6d1f3c52-8b7e-4a51-9a0d-2f4e8c1b7a03` | `dev@example.com`, password `development-password`, for the dev customer |
+| Row                          | ID                                     | Details                                                                                            |
+| ---------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Dev customer                 | `6d1f3c52-8b7e-4a51-9a0d-2f4e8c1b7a01` | "Development customer"                                                                             |
+| Binance Spot Testnet account | `6d1f3c52-8b7e-4a51-9a0d-2f4e8c1b7a02` | `binance-spot-testnet`, mode `simulation`, USDT, status `connected`, BTC-USDT and ETH-USDT allowed |
+| Dev login                    | `6d1f3c52-8b7e-4a51-9a0d-2f4e8c1b7a03` | `dev@example.com`, password `development-password`, for the dev customer                           |
 
 Sign in to the web app with the dev login. The seed never resets its password, so a changed password stays changed.
 
