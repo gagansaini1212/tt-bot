@@ -8,11 +8,12 @@ import type {
 import {
   accountModes,
   canPlaceOrders,
-  venueIdSchema,
   VENUES,
   type ExchangeKeyType,
   type Venue,
 } from "@crypto-trading/exchanges/venues";
+
+export { accountVenue } from "@crypto-trading/exchanges/exchange-accounts";
 
 export const MODE_LABELS: Record<ExchangeAccountMode, string> = {
   simulation: "Simulation (testnet)",
@@ -33,12 +34,6 @@ export const KEY_TYPE_LABELS: Record<ExchangeKeyType, string> = {
   rsa: "RSA",
   es256: "ES256",
 };
-
-/** The venue an account names, or undefined if this build has no adapter for it. */
-export function accountVenue(id: string): Venue | undefined {
-  const parsed = venueIdSchema.safeParse(id);
-  return parsed.success ? VENUES[parsed.data] : undefined;
-}
 
 /** The venues an account can be added on: those with a mode this build allows. */
 export function addableVenues(): Venue[] {

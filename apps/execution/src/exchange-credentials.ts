@@ -34,7 +34,8 @@ export type ExchangeKeys = {
 export type SavedKeysInfo = {
   keyType: ExchangeKeyType;
   apiKeyLast4: string;
-  hasPassphrase: boolean;
+  // Whether a passphrase is saved with the keys. Absent means none.
+  hasPassphrase?: boolean;
   updatedAt: Date;
 };
 
@@ -56,6 +57,14 @@ export type VenueConnector = (
   venue: VenueId,
   keys: ExchangeKeys,
 ) => AccountReader;
+
+/** A connector has no adapter for the venue. */
+export class NoAdapterError extends Error {
+  constructor(venue: VenueId) {
+    super(`The execution worker has no adapter for ${venue}.`);
+    this.name = "NoAdapterError";
+  }
+}
 
 const KEY_TYPE_NAMES: Record<ExchangeKeyType, string> = {
   hmac: "HMAC secret",
@@ -119,7 +128,9 @@ export function prepareCredentials(
   try {
     // The adapter refuses keys it cannot sign with.
     return { ok: true, keyType, keys, reader: connect(venue.id, keys) };
-  } catch {
+  } catch (error) {
+    if (error instanceof NoAdapterError)
+      return invalid(`The execution worker has no ${venue.name} adapter yet.`);
     return invalid(
       request.kind === "hmac"
         ? "Check the API key and secret key."
@@ -212,9 +223,14 @@ function context(scope: AccountScope, column: string) {
     column,
   ];
 }
-// API keys are fingerprinted without their account, so one key cannot be
-// saved for two accounts.
-const FINGERPRINT_CONTEXT = ["exchange_credentials", "api_key"];
+// Keys are fingerprinted without their account, so one set cannot be saved
+// for two accounts. The secret is part of it, so knowing someone's API key
+// is not enough to claim it first.
+const fingerprintContext = (apiKey: string) => [
+  "exchange_credentials",
+  "keys",
+  apiKey,
+];
 
 /** Keys sealed for one account, ready to write with `writeSealedKeys`. */
 export type SealedKeys = {
@@ -240,8 +256,8 @@ type Row = {
  * Exchange accounts' API keys in PostgreSQL, sealed with the master key:
  * the API key, the secret or private key, and the passphrase if there is
  * one. Only the last four characters of the API key are stored in the
- * clear, with a keyed fingerprint of it. Changes are audited without the
- * keys.
+ * clear, with a keyed fingerprint of the key and its secret. Changes are
+ * audited without the keys.
  */
 export class ExchangeCredentialStore {
   readonly #database: Database;
@@ -318,13 +334,12 @@ export class ExchangeCredentialStore {
     const box = this.#box;
     if (!box)
       throw new Error(`Set ${MASTER_KEY_VARIABLE} to save exchange keys.`);
-    const secret = keyType === "hmac" ? keys.apiSecret : keys.privateKey;
-    if (!secret)
-      throw new Error(
-        keyType === "hmac"
-          ? "HMAC keys need a secret."
-          : "Exchange keys of this type need a private key.",
-      );
+    // As before, whichever of the two is given.
+    const secret =
+      keyType === "hmac"
+        ? (keys.apiSecret ?? keys.privateKey)
+        : (keys.privateKey ?? keys.apiSecret);
+    if (!secret) throw new Error("Exchange keys need a secret or private key.");
     return {
       keyType,
       apiKey: box.seal(keys.apiKey, context(scope, "api_key")),
@@ -333,14 +348,15 @@ export class ExchangeCredentialStore {
         keys.passphrase === undefined
           ? null
           : box.seal(keys.passphrase, context(scope, "passphrase")),
-      fingerprint: box.fingerprint(keys.apiKey, FINGERPRINT_CONTEXT),
+      fingerprint: box.fingerprint(secret, fingerprintContext(keys.apiKey)),
       apiKeyLast4: keys.apiKey.slice(-4),
     };
   }
 
   /**
    * Replaces the account's keys. Requires a master key. Throws
-   * `KeysInUseError` if another exchange account holds the same API key.
+   * `KeysInUseError` if another exchange account holds the same keys, and
+   * `AccountRemovedError` if the account was removed.
    */
   async save(
     scope: AccountScope,
@@ -357,7 +373,15 @@ export class ExchangeCredentialStore {
   }
 }
 
-/** Another exchange account already holds this API key. */
+/** The account was removed, so it takes no keys. */
+export class AccountRemovedError extends Error {
+  constructor() {
+    super("This exchange account was removed.");
+    this.name = "AccountRemovedError";
+  }
+}
+
+/** Another exchange account already holds these keys. */
 export class KeysInUseError extends Error {
   constructor() {
     super("These keys are already saved for another exchange account.");
@@ -367,14 +391,24 @@ export class KeysInUseError extends Error {
 
 /**
  * Writes sealed keys in `tx`, replacing the account's, and audits it
- * without the keys. Throws `KeysInUseError` if another exchange account
- * holds the same API key; the transaction is then unusable.
+ * without the keys. Throws `AccountRemovedError` if the account was removed,
+ * and `KeysInUseError` if another exchange account holds the same keys; the
+ * transaction is then unusable.
  */
 export async function writeSealedKeys(
   tx: Transaction,
   scope: AccountScope,
   sealed: SealedKeys,
 ): Promise<SavedKeysInfo> {
+  // Waits for a removal in progress, and never gives keys to an account
+  // that was removed.
+  const [account] = await tx`
+    select id from exchange_accounts
+    where id = ${scope.exchangeAccountId}
+      and status not in ('disconnected', 'handed_over')
+    for update
+  `;
+  if (!account) throw new AccountRemovedError();
   let row: { id: string; updated_at: Date };
   try {
     [row] = await tx<{ id: string; updated_at: Date }[]>`

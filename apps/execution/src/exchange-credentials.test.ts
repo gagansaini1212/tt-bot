@@ -20,6 +20,7 @@ import {
   checkKeyPermissions,
   ExchangeCredentialStore,
   KeysInUseError,
+  NoAdapterError,
   prepareCredentials,
   prepareKeys,
   savedOrEnvironmentExchanges,
@@ -139,6 +140,15 @@ test("new keys must suit their venue: its key types, and a passphrase only where
   );
   assert.ok(!unsignable.ok);
   assert.doesNotMatch(unsignable.message, new RegExp(secretKey));
+  const noAdapter = prepareCredentials(
+    binance,
+    { kind: "hmac", apiKey, secretKey },
+    (venue) => {
+      throw new NoAdapterError(venue);
+    },
+  );
+  assert.ok(!noAdapter.ok);
+  assert.match(noAdapter.message, /no Binance Spot Testnet adapter yet/);
 });
 
 test("keys that can do more than their account allows are refused", async () => {
@@ -335,10 +345,13 @@ describe(
       );
       assert.equal(row.api_key_fingerprint.length, 32);
 
-      // The same API key cannot be saved for another account, any customer's.
+      // The same keys cannot be saved for another account, any customer's.
       const theirs = await customer();
       await assert.rejects(store.save(theirs, "es256", keys), KeysInUseError);
       assert.equal(await store.load(theirs), undefined);
+      // The API key alone, with another secret, claims nothing.
+      await store.save(theirs, "es256", { ...keys, privateKey: es256() });
+      await store.remove(theirs);
       // Replacing an account's keys with the same key is no conflict.
       await store.save(mine, "es256", { ...keys, passphrase: "another one" });
       assert.equal((await store.load(mine))?.open().passphrase, "another one");

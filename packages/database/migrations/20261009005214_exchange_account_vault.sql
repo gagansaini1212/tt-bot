@@ -1,6 +1,8 @@
 -- Several exchange accounts per customer, on any venue, each with its own
--- credential set (#24, ADR 0009). Existing accounts and their saved keys
--- keep working: every change below widens a constraint or adds a column.
+-- credential set (#24, ADR 0009, ADR 0011). Existing accounts and their
+-- saved keys keep working: the columns are new, the key types and statuses
+-- only widen, and the new checks hold for every account made so far (one
+-- per customer, labelled by the seed or the tests).
 
 -- An account the customer removed is kept, marked 'disconnected', so its
 -- orders, fills and audit trail still name it. Its keys are deleted. The
@@ -40,11 +42,11 @@ CREATE UNIQUE INDEX exchange_accounts_label_key
 -- as Coinbase's keys do. A venue that needs a passphrase, as OKX does, keeps
 -- it sealed in encrypted_passphrase.
 --
--- api_key_fingerprint is an HMAC of the venue and the API key under a key
--- derived from the master key. One API key belongs to one exchange account,
--- so the same venue account cannot be connected twice and its capital
--- counted twice (ADR 0009). Keys saved before it existed have none until
--- they are replaced.
+-- api_key_fingerprint is an HMAC of the API key and its secret under a key
+-- derived from the master key. One set of keys belongs to one exchange
+-- account, so the same venue account cannot be connected twice and its
+-- capital counted twice (ADR 0009, ADR 0011). Keys saved before it existed
+-- have none until they are replaced.
 ALTER TABLE exchange_credentials
   DROP CONSTRAINT exchange_credentials_key_type_check,
   ADD CONSTRAINT exchange_credentials_key_type_check

@@ -11,6 +11,7 @@ import {
 import {
   canPlaceOrders,
   venueIdSchema,
+  VENUES,
   type Venue,
   type VenueCapabilities,
 } from "./venues";
@@ -147,6 +148,15 @@ export const exchangeAccountChangeSchema = z.object({
   message: z.string().max(1000),
 });
 export type ExchangeAccountChange = z.infer<typeof exchangeAccountChangeSchema>;
+
+/**
+ * The venue an account's `exchange` column names, or undefined if this build
+ * has no adapter for it.
+ */
+export function accountVenue(id: string): Venue | undefined {
+  const parsed = venueIdSchema.safeParse(id);
+  return parsed.success ? VENUES[parsed.data] : undefined;
+}
 
 /**
  * The permissions a key has beyond what an account on `venue` allows. No

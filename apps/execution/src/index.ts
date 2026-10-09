@@ -24,6 +24,7 @@ import { accountResolver } from "./accounts";
 import { ExchangeAccountStore } from "./exchange-accounts";
 import {
   ExchangeCredentialStore,
+  NoAdapterError,
   privateKeyType,
   savedOrEnvironmentExchanges,
   type VenueConnector,
@@ -154,8 +155,7 @@ async function main() {
   // Builds an adapter for new keys, so they can be checked before they are
   // saved. Binance Spot Testnet is the only venue with an adapter so far.
   const connect: VenueConnector = (venue, keys) => {
-    if (venue !== "binance-spot-testnet")
-      throw new Error(`No adapter for ${venue}.`);
+    if (venue !== "binance-spot-testnet") throw new NoAdapterError(venue);
     return new BinanceSpotTestnet({ ...keys, markets });
   };
   if (process.env.TESTNET_MAX_ORDER_NOTIONAL_USDT)

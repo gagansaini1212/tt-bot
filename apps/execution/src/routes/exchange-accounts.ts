@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   accountModes,
+  accountVenue,
   addExchangeAccountRequestSchema,
   canPlaceOrders,
   ExchangeError,
@@ -8,7 +9,6 @@ import {
   relabelExchangeAccountRequestSchema,
   replaceExchangeKeysRequestSchema,
   venueFor,
-  venueIdSchema,
   type AccountReader,
   type ConnectionTest,
   type ExchangeAccountChange,
@@ -26,6 +26,7 @@ import type {
   OpenWork,
 } from "../exchange-accounts";
 import {
+  AccountRemovedError,
   checkKeyPermissions,
   KeysInUseError,
   prepareCredentials,
@@ -57,12 +58,8 @@ const MODE_NAMES = {
   live: "live, read only",
 } as const;
 
-/** The venue an account names, or undefined if this build has no adapter for it. */
-function knownVenue(id: string): Venue | undefined {
-  return venueIdSchema.safeParse(id).success
-    ? venueFor(venueIdSchema.parse(id))
-    : undefined;
-}
+const NO_SUCH_ACCOUNT =
+  "There is no such exchange account. Refresh the page and try again.";
 
 /**
  * Settings → Exchange accounts: the customer's accounts on every venue, each
@@ -90,7 +87,7 @@ export function exchangeAccounts(
         source: "saved",
         keyType: saved.keyType,
         apiKeyLast4: saved.apiKeyLast4,
-        hasPassphrase: saved.hasPassphrase,
+        hasPassphrase: saved.hasPassphrase ?? false,
         updatedAt: saved.updatedAt.toISOString(),
         problem,
       };
@@ -133,10 +130,11 @@ export function exchangeAccounts(
     result: ExchangeAccountChange["result"],
     message: string,
   ) => ({ status: "connected", change: { result, message } });
-  const missing = () =>
+  const missing = () => change("invalid", NO_SUCH_ACCOUNT);
+  const labelTaken = (label: string) =>
     change(
-      "invalid",
-      "There is no such exchange account. Refresh the page and try again.",
+      "conflict",
+      `You already have an exchange account called ${label}. Choose another label.`,
     );
   const noMasterKey = () =>
     change(
@@ -233,11 +231,7 @@ export function exchangeAccounts(
           if (error instanceof KeysInUseError) return keysInUse();
           throw error;
         }
-        if (added.result === "label_taken")
-          return change(
-            "conflict",
-            `You already have an exchange account called ${body.label}. Choose another label.`,
-          );
+        if (added.result === "label_taken") return labelTaken(body.label);
         if (added.result === "limit_reached")
           return change(
             "refused",
@@ -259,11 +253,7 @@ export function exchangeAccounts(
           body.label,
         );
         if (result.result === "not_found") return missing();
-        if (result.result === "label_taken")
-          return change(
-            "conflict",
-            `You already have an exchange account called ${body.label}. Choose another label.`,
-          );
+        if (result.result === "label_taken") return labelTaken(body.label);
         onChange();
         return change("saved", `Renamed to ${body.label}.`);
       },
@@ -275,7 +265,7 @@ export function exchangeAccounts(
         const scope = { customerId, exchangeAccountId: body.exchangeAccountId };
         const account = await accounts.get(scope);
         if (!account) return missing();
-        const venue = knownVenue(account.venue);
+        const venue = accountVenue(account.venue);
         if (!venue)
           return change(
             "unavailable",
@@ -288,6 +278,8 @@ export function exchangeAccounts(
           await keys.save(scope, vetted.prepared.keyType, vetted.prepared.keys);
         } catch (error) {
           if (error instanceof KeysInUseError) return keysInUse();
+          // Removed while the venue was checking the keys.
+          if (error instanceof AccountRemovedError) return missing();
           throw error;
         }
         await accounts.refreshFeatures(
@@ -310,12 +302,7 @@ export function exchangeAccounts(
         const account = await accounts.get(scope);
         const test: ConnectionTest = account
           ? await testConnection(scope, account)
-          : {
-              result: "failed",
-              source: "none",
-              message:
-                "There is no such exchange account. Refresh the page and try again.",
-            };
+          : { result: "failed", source: "none", message: NO_SUCH_ACCOUNT };
         return { status: "connected", test };
       },
     }),
@@ -348,7 +335,7 @@ export function exchangeAccounts(
     scope: AccountScope,
     account: ExchangeAccountRecord,
   ): Promise<ConnectionTest> {
-    const venue = knownVenue(account.venue);
+    const venue = accountVenue(account.venue);
     if (!venue)
       return {
         result: "failed",

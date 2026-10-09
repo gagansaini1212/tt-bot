@@ -19,7 +19,10 @@ import {
 import { MAX_EXCHANGE_ACCOUNTS, VENUES } from "@crypto-trading/exchanges";
 import { accountResolver, type AccountScope } from "./accounts";
 import { ExchangeAccountStore } from "./exchange-accounts";
-import { ExchangeCredentialStore } from "./exchange-credentials";
+import {
+  AccountRemovedError,
+  ExchangeCredentialStore,
+} from "./exchange-credentials";
 import { SecretBox } from "./secret-box";
 
 const MIGRATIONS = fileURLToPath(
@@ -309,9 +312,16 @@ describe("exchange accounts", { skip: databaseTestsSkipped }, () => {
     `;
     // A paused strategy that holds nothing does not keep the account.
     assert.deepEqual(await store.remove(scope), { result: "removed" });
-    assert.equal(
-      await new ExchangeCredentialStore(database.app, box).load(scope),
-      undefined,
+    const keys = new ExchangeCredentialStore(database.app, box);
+    assert.equal(await keys.load(scope), undefined);
+    // Keys checked with the venue while it was being removed are not saved.
+    await assert.rejects(
+      keys.save(scope, "hmac", {
+        apiKey: "k".repeat(20),
+        apiSecret: "s".repeat(20),
+      }),
+      AccountRemovedError,
     );
+    assert.equal(await keys.load(scope), undefined);
   });
 });

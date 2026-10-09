@@ -55,13 +55,13 @@ const ACCOUNT_FIELDS: Record<string, string> = {
   mode: "Choose the account's mode.",
   accountingCurrency: "Choose the accounting currency.",
   apiKey:
-    "Check the API key: paste it as the exchange shows it, 16 to 256 characters without spaces.",
+    "Check the API key: paste it as the venue shows it, 16 to 256 characters without spaces.",
   secretKey:
-    "Check the secret key: paste it as the exchange shows it, 16 to 256 characters without spaces.",
+    "Check the secret key: paste it as the venue shows it, 16 to 256 characters without spaces.",
   privateKey:
     "Paste the whole private key, from -----BEGIN PRIVATE KEY----- to -----END PRIVATE KEY-----.",
   passphrase:
-    "Check the passphrase: up to 128 printable characters, as you set it at the exchange.",
+    "Check the passphrase: up to 128 printable characters, as you set it at the venue.",
 };
 
 function invalid(error: z.ZodError): SettingsActionResult {
