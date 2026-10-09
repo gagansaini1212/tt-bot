@@ -265,7 +265,7 @@ const decisionOutputJsonSchema = (instruments: readonly Instrument[]) => ({
  * decision the assistant makes for a strategy. Change it whenever the prompt
  * or the output schema changes.
  */
-export const STRATEGY_PROMPT_VERSION = "strategy-analysis-2026-10-08.1";
+export const STRATEGY_PROMPT_VERSION = "strategy-analysis-2026-10-09.1";
 
 /** What eve's client does for one analysis; replaced in tests. */
 export type EveConnection = {

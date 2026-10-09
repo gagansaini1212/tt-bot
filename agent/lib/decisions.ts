@@ -6,7 +6,7 @@ export const ASSISTANT_MODEL = "openai/gpt-6-luna";
  * with every decision. Change it whenever instructions.md or a decision tool
  * changes what the assistant is told or asked to give.
  */
-export const PROMPT_VERSION = "assistant-2026-10-08.2";
+export const PROMPT_VERSION = "assistant-2026-10-09.1";
 
 // The assistant sends its worker token here, so it must stay on this machine.
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
@@ -22,7 +22,8 @@ export type RecordedDecision =
   | { recorded: false; reason: string };
 
 type DecisionBody =
-  | { kind: "trade_proposal"; proposal: object }
+  // A proposal names the one exchange account it trades on.
+  | { kind: "trade_proposal"; exchangeAccountId: string; proposal: object }
   | { kind: "no_trade"; instrument: string | null };
 
 /**
