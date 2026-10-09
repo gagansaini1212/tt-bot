@@ -1,0 +1,40 @@
+# Serve every exchange account from one worker
+
+Status: accepted, 2026-10-09, for milestone M4 (issues #22 and #21). It carries out [ADR 0009](0009-keep-exchange-accounts-isolated-across-venues.md) §5 and §6 in the execution worker, on top of [ADR 0008](0008-normalize-venues-markets-and-order-ids.md)'s exchange-neutral contract and [ADR 0011](0011-disconnect-exchange-accounts-without-deleting-them.md)'s exchange accounts. It replaces ADR 0008's `EXCHANGE_PROVIDER`, which the worker no longer reads.
+
+Until now the worker had one active venue, chosen by `EXCHANGE_PROVIDER`, and one exchange account, the seeded dev account. One rate-limit timestamp and one clock offset lived in each Binance client. Now one worker serves every exchange account of every customer, each through its own venue's adapter and its own keys, and keeps each venue's and each account's failures to itself.
+
+## Venues and accounts
+
+- The worker builds a **venue registry** at start (`VenueRegistry` in `packages/exchanges/src/venue-registry.ts`), one entry per venue it has an adapter for. An entry holds what every client of that venue shares, and nothing another venue's clients see: its market catalogue, its public market data client, and its `VenueLimits`. A new venue's adapter registers there, in the worker's `index.ts`; nothing else in the worker names a venue.
+- The worker serves an exchange account while its status is `connected`, `reconciling` or `unavailable`, on a venue the registry has. A disconnected or handed-over account is never resolved, read, traded or reconciled. A venue that places orders does so on the testnet only, so a `live` account there is refused; a read-only venue's account is monitored whatever its mode.
+- Each account gets one client, built from its saved keys through its venue's entry and kept while the keys stay the same, so its own limits last. The dev Binance account still falls back to the worker's `.env` keys. Building a client records the adapter's capabilities in the account's `supported_features`.
+- Account routes name their account in the `X-Exchange-Account-Id` header, next to `X-Customer-Id`, and the worker checks that the customer owns it before anything else. A header rather than a query or body field leaves every route's own parameters as they were, and identifies who and what a request acts for in one place. Market data routes take a `venue` query parameter instead. `GET /accounts` lists the accounts the worker serves, so the dashboard can choose one: the customer's oldest that trades, until it lets the customer choose.
+- Until the assistant names the account of every decision (#26), a decision without one goes to the customer's only trading account, and is refused when there is none or several.
+
+## Failures stay with their venue and account
+
+- `VenueLimits` holds a venue's backoff for the limits it applies to everything the worker sends, and its clock offset. Binance counts request weight per IP, so a 429 or 418 other than "too many orders" holds back every client of the venue until its Retry-After, as Binance requires to avoid an IP ban, and no other venue's. Binance counts orders per account, so a 429 with code -1015 holds back only that account's signed requests. A clock-skew error (-1021) makes the venue read its time again before the next signed request; nothing changed at the venue, so it is `unavailable`, not `rejected`.
+- The execution loop checks accounts side by side, at most four at once, each under its own advisory lock. A pass still running when the next tick comes is left to finish rather than started again, so a slow or failing venue holds one slot and delays no other account.
+- An account whose venue fails any request in a pass (down, limiting, out of sync, or an order's outcome unknown) becomes `unavailable`, with one notification. Its entries wait: no stop-limit entry is sent, strategies only get their upkeep and keep their status. Exits, cancels and sells keep trying, and a sell the venue did not serve does not count as one of the three refused sells. The first pass that finds the venue serving it again sends no entry: it reconciles orders, fills and balances, sets the account `connected` with one notification, and its strategies measure their limits before the next entry.
+- Each account's placements go out one at a time in its own queue, so a slow account never holds up another's dashboard orders or strategy entries.
+
+## Order IDs across accounts and venues
+
+The order intent's key is already unique across every customer, account and venue, and each venue's codec translates it deterministically (ADR 0008). Two gaps remained, and a migration closes them without changing a stored row's meaning:
+
+- An intent made from a proposal could leave its account empty. Each is given its proposal's account, the column is required, and an intent's account must be its proposal's, so each key belongs to one account and so one venue.
+- An intent key could end like another intent's leg or close ID (`_en`, `_tp`, `_sl`, `_c1` to `_c9`), so one client order ID could name two orders, on one account or two. A trigger refuses such keys as they are written, and an exit whose key is not that of the entry it closes on the same account. Rows from before are not checked again. The worker's writes and reads of intents, orders and fills also name the account, so a venue's report never lands under another account's intent.
+
+## Signing and nonces
+
+- A `RequestSigner` adds an account's authentication to a request in its venue's scheme. It gets the method, URL with its query, body, headers, the venue-corrected timestamp and, for nonce venues, the nonce, which is everything Binance's query signature, HTX's signature version 2, OKX's passphrase headers, Coinbase's ES256 JWT and Kraken's nonce signature need. Binance's HMAC, Ed25519 and RSA signing now sits behind it. `SigningCredentials` carries an account's key and its secret or PEM private key (`hmac`, `ed25519`, `rsa`, `es256`) and any passphrase; HMAC, key-pair signing and ES256 JWTs are primitives a new adapter reuses.
+- A `NonceQueue` per account sends one signed request at a time with nonces above every one used before, at least the time in microseconds. `PostgresNonceStore` makes it hold across worker processes, under an advisory lock per account, and saves each nonce before its request goes, in a new `exchange_account_nonces` table beside the credentials rather than in them. No adapter uses it yet.
+
+## Considered options
+
+- **One worker process per venue or per account.** Isolation would come from the operating system, but every process would need the database pool, the strategy runner and the webhook delivery, and ADR 0002's single loop over every customer would split. Rejected for isolation inside one process.
+- **Holding back every request to a venue after any 429.** Simpler, but Binance counts orders per account, so one busy account would pause its neighbours' exits. Rejected for the split above; an unknown 429 still holds back the whole venue, the safe side of an IP ban.
+- **Proactive request-weight budgets from Binance's `X-MBX-USED-WEIGHT` headers.** Left out: Retry-After is what Binance requires, and a budget needs per-endpoint weights that change.
+- **Strategy entries during an outage.** Sending them while the venue answers some requests would be faster, but an entry made before reconciliation could exceed a limit that a missed fill already reached. Rejected: entries wait for a reconciled pass.
+- **Partitioning intents by account with a per-account unique key.** The global key is stricter and every stored row already has it. Kept.
