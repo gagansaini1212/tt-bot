@@ -280,6 +280,7 @@ export class ExecutionStore {
       >`
         select idempotency_key, status, manual_order from order_intents
         where id = ${orderIntentId}
+          and exchange_account_id = ${scope.exchangeAccountId}
       `;
       if (!row) return undefined;
       return {
@@ -327,11 +328,16 @@ export class ExecutionStore {
             customer_id, exchange_order_id, exchange_fill_id, quantity, price,
             fee, fee_currency, filled_at
           )
-          select ${scope.customerId}, id, ${String(fill.id)}, ${fill.qty}::numeric,
+          select ${scope.customerId}, o.id, ${String(fill.id)}, ${fill.qty}::numeric,
             ${fill.price}::numeric, ${fill.commission}::numeric,
             ${fill.commissionAsset}, ${new Date(fill.time)}
-          from exchange_orders
-          where client_order_id = ${clientOrderId}
+          from exchange_orders o
+          where o.client_order_id = ${clientOrderId}
+            and exists (
+              select from order_intents i
+              where i.id = o.order_intent_id
+                and i.exchange_account_id = ${scope.exchangeAccountId}
+            )
           on conflict (exchange_order_id, exchange_fill_id) do nothing
         `;
     });
@@ -414,6 +420,7 @@ export class ExecutionStore {
         update holding_deadlines d set status = 'triggered'
         from order_intents i
         where d.order_intent_id = i.id and d.status = 'pending'
+          and i.exchange_account_id = ${scope.exchangeAccountId}
           and d.deadline_at <= ${now}
         returning d.order_intent_id, d.deadline_at, i.idempotency_key
       `;
@@ -447,6 +454,7 @@ export class ExecutionStore {
         update holding_deadlines d set status = 'overdue'
         from order_intents i, entry_reconciliations r
         where d.order_intent_id = i.id and r.order_intent_id = i.id
+          and i.exchange_account_id = ${scope.exchangeAccountId}
           and d.status = 'triggered'
           and d.deadline_at <= ${new Date(now.getTime() - OVERDUE_AFTER_MS)}
           and r.state not in ${tx(terminal)}
@@ -490,8 +498,9 @@ export class ExecutionStore {
         join order_intents i on i.id = r.order_intent_id
         left join trade_proposals p on p.id = i.proposal_id
         left join holding_deadlines d on d.order_intent_id = i.id
-        where r.state in ('unprotected', 'exiting')
-          or (d.status = 'overdue' and r.state in ('protected', 'partly_filled'))
+        where i.exchange_account_id = ${scope.exchangeAccountId}
+          and (r.state in ('unprotected', 'exiting')
+            or (d.status = 'overdue' and r.state in ('protected', 'partly_filled')))
         order by r.updated_at desc, i.id
       `;
       return rows.flatMap((row) => {

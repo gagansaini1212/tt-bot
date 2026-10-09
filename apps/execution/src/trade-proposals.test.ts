@@ -247,8 +247,9 @@ describe("AI decisions in PostgreSQL", { skip: databaseTestsSkipped }, () => {
         mine.customerId,
         (tx) => tx`
           insert into order_intents
-            (customer_id, proposal_id, idempotency_key, status)
-          values (${mine.customerId}, ${id}, 'ct_second', 'submitting')
+            (customer_id, exchange_account_id, proposal_id, idempotency_key, status)
+          values (${mine.customerId}, ${mine.exchangeAccountId}, ${id},
+            'ct_second', 'submitting')
         `,
       ),
       /order_intents_proposal_id_key/,

@@ -37,6 +37,21 @@ export function closeOrderId(listClientOrderId: string, attempt: number) {
   return `${listClientOrderIdSchema.parse(listClientOrderId)}_c${attempt}`;
 }
 
+// The suffixes application order IDs are derived with: a protected entry's
+// legs, and the worker's sells closing it.
+const DERIVED_SUFFIX = /_(en|tp|sl|c[1-9])$/;
+
+/**
+ * Whether `key` may be an order intent's own key: an application order ID
+ * that no leg or close ID of another order could equal (ADR 0008). The
+ * worker's sells are keyed by `closeOrderId` instead. The database refuses
+ * any other key, so one client order ID never names two orders, on any
+ * account or venue.
+ */
+export function isOrderIntentKey(key: string) {
+  return /^ct_[A-Za-z0-9_-]{1,33}$/.test(key) && !DERIVED_SUFFIX.test(key);
+}
+
 /**
  * A strategy's protected entries have list client order IDs that start with
  * this, so dashboard limits can leave them out: they count against their

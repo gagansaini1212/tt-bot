@@ -16,6 +16,7 @@ import { exchangeIdSchema, type ExchangeOrder } from "./contract";
 import { marketRulesSchema } from "./market-catalogue";
 import {
   floorToStep,
+  isOrderIntentKey,
   isStrategyListId,
   listClientOrderIdSchema,
   protectedEntryFilterIssues,
@@ -35,9 +36,10 @@ const orderFields = {
   stopLossPrice: amount,
   takeProfitPrice: amount,
   // Chosen by the browser once per order, so a repeated request cannot
-  // place a second order. Strategies' IDs are reserved for them.
+  // place a second order. Strategies' IDs are reserved for them, and an ID
+  // that ends like a leg or close ID could name another order.
   listClientOrderId: listClientOrderIdSchema.refine(
-    (id) => !isStrategyListId(id),
+    (id) => !isStrategyListId(id) && isOrderIntentKey(id),
   ),
 };
 /**

@@ -297,4 +297,100 @@ describe("order intents in PostgreSQL", { skip: databaseTestsSkipped }, () => {
     );
     assert.equal(fixture.calls.place, 1);
   });
+
+  test("an intent's key can never also name another order's leg or close", async () => {
+    // A key ending like a leg or close ID could name another entry's order,
+    // on another account or venue alike.
+    for (const id of [
+      "ct_iso_key_en",
+      "ct_iso_key_tp",
+      "ct_iso_key_sl",
+      "ct_iso_key_c1",
+    ])
+      await assert.rejects(
+        intents.record(mine, entry(id), "dashboard"),
+        /ends like a leg or close ID/,
+        id,
+      );
+    // The database refuses it too, whoever writes it.
+    await assert.rejects(
+      withCustomerScope(
+        database.app,
+        mine.customerId,
+        (tx) => tx`
+          insert into order_intents
+            (customer_id, exchange_account_id, idempotency_key, status, manual_order)
+          values (${mine.customerId}, ${mine.exchangeAccountId}, 'ct_raw_tp',
+            'submitting', ${tx.json(entry("ct_raw_tp"))})
+        `,
+      ),
+      /order intent's key may not end like a leg or exit ID/,
+    );
+    // An exit is keyed by the entry it closes, on the same account.
+    assert.ok(await intents.record(mine, entry("ct_iso_closed"), "dashboard"));
+    const exit = (closes: string, clientOrderId: string): ManualOrder => ({
+      kind: "exit",
+      closes,
+      reason: "holding_deadline",
+      order: { instrument: "BTC-USDT", quantity: "0.001", clientOrderId },
+    });
+    await assert.rejects(
+      intents.record(mine, exit("ct_iso_closed", "ct_iso_other_c1"), "worker"),
+      /ends like a leg or close ID/,
+    );
+    // Another account cannot close it, even with the right key.
+    await assert.rejects(
+      intents.record(
+        { ...mine, exchangeAccountId: theirs.exchangeAccountId },
+        exit("ct_iso_closed", "ct_iso_closed_c1"),
+        "worker",
+      ),
+      /exit's key is the key of the entry it closes, on the same exchange account/,
+    );
+    assert.ok(
+      await intents.record(
+        mine,
+        exit("ct_iso_closed", "ct_iso_closed_c1"),
+        "worker",
+      ),
+    );
+  });
+
+  test("an account's intents and orders are its own, though one customer owns both accounts", async () => {
+    const other = { ...mine, exchangeAccountId: randomUUID() };
+    await withCustomerScope(
+      database.app,
+      mine.customerId,
+      (tx) => tx`
+        insert into exchange_accounts
+          (id, customer_id, exchange, label, mode, accounting_currency, status)
+        values (${other.exchangeAccountId}, ${mine.customerId},
+          'binance-spot-testnet', 'Second testnet', 'simulation', 'USDT', 'connected')
+      `,
+    );
+    assert.ok(await intents.record(mine, entry("ct_iso_mine"), "dashboard"));
+    // The other account's venue reports an order with this entry's leg ID,
+    // such as one placed there by hand: it is not this entry's.
+    await intents.recordOrders(other, [leg("ct_iso_mine_en")]);
+    await intents.settle(other, "ct_iso_mine", { status: "rejected" });
+    assert.equal(await intents.find(other, "ct_iso_mine"), undefined);
+    assert.equal(await intents.cancelTrigger(other, "ct_iso_mine"), false);
+    const orders = await database.admin`
+      select o.client_order_id from exchange_orders o
+      join order_intents i on i.id = o.order_intent_id
+      where i.idempotency_key = 'ct_iso_mine'
+    `;
+    assert.equal(orders.length, 0);
+    assert.equal((await row("ct_iso_mine")).status, "submitting");
+    // Its own account records it.
+    await intents.recordOrders(mine, [leg("ct_iso_mine_en")]);
+    assert.equal(
+      (
+        await database.admin`
+          select 1 from exchange_orders where client_order_id = 'ct_iso_mine_en'
+        `
+      ).length,
+      1,
+    );
+  });
 });

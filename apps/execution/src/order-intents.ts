@@ -8,6 +8,7 @@ import {
 } from "@crypto-trading/database";
 import {
   exitReasonSchema,
+  isOrderIntentKey,
   limitOrderSchema,
   marketSellSchema,
   positiveDecimal,
@@ -287,6 +288,7 @@ export class PostgresOrderIntents implements OrderIntentStore {
         update order_intents set status = 'pending', updated_at = now()
         where idempotency_key = ${clientOrderId} and status = 'submitting'
           and manual_order ? 'trigger'
+          and exchange_account_id = ${scope.exchangeAccountId}
         returning id
       `;
       if (!row) return;
@@ -307,6 +309,7 @@ export class PostgresOrderIntents implements OrderIntentStore {
       const [row] = await tx<{ id: string }[]>`
         update order_intents set status = 'cancelled', updated_at = now()
         where idempotency_key = ${clientOrderId} and status = 'pending'
+          and exchange_account_id = ${scope.exchangeAccountId}
         returning id
       `;
       if (row)
@@ -332,6 +335,7 @@ export class PostgresOrderIntents implements OrderIntentStore {
         select ${scope.customerId}, id, 'partly_filled',
           ${accepted === null ? null : tx`now()`}, ${accepted}::numeric
         from order_intents where idempotency_key = ${listClientOrderId}
+          and exchange_account_id = ${scope.exchangeAccountId}
         on conflict (order_intent_id) do update set
           customer_cancelled_at = excluded.customer_cancelled_at,
           customer_accepted_quantity = excluded.customer_accepted_quantity,
@@ -346,6 +350,7 @@ export class PostgresOrderIntents implements OrderIntentStore {
         update order_intents set status = ${settlement.status}, updated_at = now()
         where idempotency_key = ${clientOrderId}
           and status in ${tx(SETTLES_FROM[settlement.status])}
+          and exchange_account_id = ${scope.exchangeAccountId}
         returning id
       `;
       if (changed) {
@@ -393,6 +398,7 @@ export class PostgresOrderIntents implements OrderIntentStore {
       const [changed] = await tx<{ id: string }[]>`
         update order_intents set status = 'rejected', updated_at = now()
         where idempotency_key = ${clientOrderId} and status in ('submitting', 'unknown')
+          and exchange_account_id = ${scope.exchangeAccountId}
         returning id
       `;
       if (!changed) return false;
@@ -420,6 +426,7 @@ export class PostgresOrderIntents implements OrderIntentStore {
       >`
         select status, manual_order, created_at from order_intents
         where idempotency_key = ${clientOrderId} and manual_order is not null
+          and exchange_account_id = ${scope.exchangeAccountId}
       `;
       if (!row) return undefined;
       return {
@@ -440,6 +447,7 @@ export class PostgresOrderIntents implements OrderIntentStore {
         from order_intents
         where idempotency_key in ${tx(listClientOrderIds)}
           and manual_order ->> 'kind' = 'protected_entry'
+          and exchange_account_id = ${scope.exchangeAccountId}
       `,
     );
     return new Map(rows.map(({ id, price }) => [id, price]));
@@ -491,6 +499,16 @@ export async function insertOrderIntent(
 ): Promise<string | undefined> {
   const parsed = manualOrderSchema.parse(order);
   const clientOrderId = clientOrderIdOf(parsed);
+  // The database refuses it too; this says why before the transaction fails.
+  if (
+    parsed.kind === "exit"
+      ? clientOrderId.slice(0, -3) !== parsed.closes ||
+        !/_c[1-9]$/.test(clientOrderId)
+      : !isOrderIntentKey(clientOrderId)
+  )
+    throw new Error(
+      `${clientOrderId} ends like a leg or close ID (_en, _tp, _sl, _c1 to _c9), so it could name another order. Choose another client order ID.`,
+    );
   const [intent] = await tx<{ id: string }[]>`
     insert into order_intents (
       customer_id, exchange_account_id, proposal_id, idempotency_key, status,
@@ -501,7 +519,11 @@ export async function insertOrderIntent(
       ${clientOrderId}, ${status}, ${tx.json(order)},
       ${
         parsed.kind === "exit"
-          ? tx`(select id from order_intents where idempotency_key = ${parsed.closes})`
+          ? tx`(
+              select id from order_intents
+              where idempotency_key = ${parsed.closes}
+                and exchange_account_id = ${scope.exchangeAccountId}
+            )`
           : null
       },
       coalesce(${createdAt ?? null}::timestamptz, now()),
@@ -549,7 +571,11 @@ function actorFor(source: IntentSource) {
       : ("customer" as const);
 }
 
-/** Keeps Binance's report of each order, under its intent. */
+/**
+ * Keeps the venue's report of each order, under its intent on the same
+ * account: an order reported by one account's venue never lands under
+ * another account's intent, whatever client ID it carries.
+ */
 export async function upsertOrders(
   tx: Transaction,
   scope: AccountScope,
@@ -574,6 +600,7 @@ export async function upsertOrders(
         ${order.status}, ${order.origQty}::numeric, ${order.executedQty}::numeric,
         ${averagePrice}::numeric
       from order_intents where idempotency_key = ${intent}
+        and exchange_account_id = ${scope.exchangeAccountId}
       on conflict (customer_id, client_order_id) do update set
         exchange_order_id = excluded.exchange_order_id,
         status = excluded.status,
