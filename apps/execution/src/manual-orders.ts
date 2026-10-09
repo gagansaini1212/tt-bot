@@ -626,7 +626,8 @@ export class ManualOrderDesk {
    * claim it. Every check runs again with fresh account data first; if one
    * fails, nothing is sent and the entry is rejected. If the checks cannot
    * run, it is held again and the error is thrown. Resolves undefined if the
-   * entry was no longer pending.
+   * entry was no longer pending, or if the venue could not serve it now: it
+   * is then held again for a later pass.
    */
   submitTrigger(
     scope: AccountScope,
@@ -672,7 +673,10 @@ export class ManualOrderDesk {
           checks: plan.checks,
         };
       }
-      return this.#sender.send(scope, entry);
+      // A venue that cannot serve it now leaves it held, for a later pass.
+      return this.#sender.send(scope, entry, () =>
+        this.#intents.releaseTrigger(scope, listClientOrderId),
+      );
     });
   }
 
@@ -918,16 +922,37 @@ export class ProtectedEntrySender {
     this.#onChange = options.onChange ?? (() => {});
   }
 
-  /** Sends a saved entry and records Binance's answer. */
+  /**
+   * Sends a saved entry and records Binance's answer. With `notServed`, an
+   * entry the venue could not serve now (a rate limit, an outage, a clock
+   * it could not agree with) is not rejected: nothing was placed, and
+   * `notServed` keeps it for later, as a held stop-limit entry waits while
+   * its account is unavailable (ADR 0009 §5). It then resolves undefined.
+   */
+  send(scope: AccountScope, entry: ProtectedEntry): Promise<ManualOrderOutcome>;
+  send(
+    scope: AccountScope,
+    entry: ProtectedEntry,
+    notServed: () => Promise<void>,
+  ): Promise<ManualOrderOutcome | undefined>;
   async send(
     scope: AccountScope,
     entry: ProtectedEntry,
-  ): Promise<ManualOrderOutcome> {
+    notServed?: () => Promise<void>,
+  ): Promise<ManualOrderOutcome | undefined> {
     const id = entry.listClientOrderId;
     let list: ExchangeOrderList | ExchangeOrderListReport | undefined;
     try {
       list = await this.#exchange.placeProtectedEntry(entry);
     } catch (error) {
+      if (
+        notServed &&
+        error instanceof ExchangeError &&
+        (error.kind === "rate_limited" || error.kind === "unavailable")
+      ) {
+        await notServed();
+        return undefined;
+      }
       // The venue refused the request outright, or could not serve it, so
       // nothing was placed.
       if (

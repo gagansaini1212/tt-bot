@@ -233,7 +233,7 @@ export class StrategyRunner {
         if (isRunning(strategy.status) && !notes.has(strategy.id))
           notes.set(
             strategy.id,
-            "Waiting: the exchange cannot serve this account now, so no entries are sent. Exits and cancels keep trying.",
+            "Waiting for its venue: no entries are sent until the venue serves this account again and it is reconciled. Exits and cancels keep trying.",
           );
       return this.#saveNotes(scope, strategies, notes);
     }
@@ -961,14 +961,18 @@ export class StrategyRunner {
     }
   }
 
-  /** The open of the hourly candle at the latest midnight UTC. */
+  /**
+   * The open of the hourly candle at the latest midnight UTC, on the
+   * account's own venue: one runner serves every account, and another
+   * venue's price never measures this one's losses (ADR 0009).
+   */
   #dayStartPrice(
     instrument: Instrument,
     now: Date,
     exchange: ExecutionExchange,
   ) {
     const dayStart = utcDayStart(now).getTime();
-    const key = `${instrument}@${dayStart}`;
+    const key = `${exchange.venue} ${instrument}@${dayStart}`;
     let price = this.#dayStartPrices.get(key);
     if (!price) {
       const hours = Math.floor((now.getTime() - dayStart) / HOUR_MS) + 1;
@@ -982,7 +986,9 @@ export class StrategyRunner {
             );
           return candle.open;
         });
-      this.#dayStartPrices.clear();
+      // Only today's prices are kept.
+      for (const kept of this.#dayStartPrices.keys())
+        if (!kept.endsWith(`@${dayStart}`)) this.#dayStartPrices.delete(kept);
       this.#dayStartPrices.set(key, price);
       price.catch(() => this.#dayStartPrices.delete(key));
     }

@@ -167,9 +167,8 @@ export class ExecutionLoop {
   readonly #lastProbe = new Map<string, number>();
   // Each account's pass in progress or waiting for a slot.
   readonly #visits = new Map<string, Promise<void>>();
-  #lockConnection?: Promise<ReservedConnection>;
-  // Passes using the lock connection; it goes back to the pool at none.
-  #lockUsers = 0;
+  // The session the passes running now take their locks on.
+  #lockSession?: LockSession;
   #delivering?: Promise<void>;
   #timer?: NodeJS.Timeout;
   #stopped = false;
@@ -322,13 +321,17 @@ export class ExecutionLoop {
       }
       for (const scope of accounts) visits.push(this.#visit(scope));
     }
-    // Not awaited: a slow webhook must never delay protective work.
-    void Promise.allSettled(visits).then(() =>
-      this.deliverAlerts(customerIds).catch((error: unknown) =>
+    // Not awaited: a slow webhook must never delay protective work, and a
+    // slow account never delays anyone's alerts. A tick delivers what is
+    // due now; a pass run to completion, after its own alerts.
+    const deliver = () =>
+      void this.deliverAlerts(customerIds).catch((error: unknown) =>
         this.#warn(`Webhook deliveries failed: ${describe(error)}`),
-      ),
-    );
-    if (wait) await Promise.all(visits);
+      );
+    if (!wait) return deliver();
+    await Promise.allSettled(visits);
+    deliver();
+    await Promise.all(visits);
   }
 
   /** The account's pass, or the one already running or waiting for it. */
@@ -403,9 +406,10 @@ export class ExecutionLoop {
   /**
    * Runs `work` unless another worker is checking this account. The lock is
    * held by a session, not a transaction, so no row stays locked while the
-   * pass waits on the venue. Every account's lock is taken on one reserved
-   * connection, so passes running side by side never hold more than it, and
-   * it goes back to the pool once no pass holds a lock.
+   * pass waits on the venue. Passes running side by side take their locks on
+   * one reserved session, which goes back to the pool once none holds a
+   * lock. A session that fails is replaced for new passes, and released only
+   * when the last pass using it is done, never under another's lock.
    */
   async #exclusively(scope: AccountScope, work: () => Promise<void>) {
     if (!this.#lockAccounts) {
@@ -413,16 +417,18 @@ export class ExecutionLoop {
       return true;
     }
     const key = `execution-loop:${scope.exchangeAccountId}`;
-    this.#lockUsers++;
+    const session = (this.#lockSession ??= {
+      connection: this.#database.reserve(),
+      users: 0,
+    });
+    session.users++;
     try {
-      this.#lockConnection ??= this.#database.reserve();
-      const reserving = this.#lockConnection;
       let connection: ReservedConnection;
       try {
-        connection = await reserving;
+        connection = await session.connection;
       } catch (error) {
-        if (this.#lockConnection === reserving)
-          this.#lockConnection = undefined;
+        // The session could not be reserved.
+        this.#retire(session);
         throw error;
       }
       let locked: boolean;
@@ -431,7 +437,7 @@ export class ExecutionLoop {
           select pg_try_advisory_lock(hashtextextended(${key}, 0)) as locked
         `;
       } catch (error) {
-        this.#dropLockConnection(reserving);
+        this.#retire(session);
         throw error;
       }
       if (!locked) return false;
@@ -441,22 +447,23 @@ export class ExecutionLoop {
       } finally {
         await connection`select pg_advisory_unlock(hashtextextended(${key}, 0))`.catch(
           // A broken session has released its locks already.
-          () => this.#dropLockConnection(reserving),
+          () => this.#retire(session),
         );
       }
     } finally {
-      if (--this.#lockUsers === 0 && this.#lockConnection)
-        this.#dropLockConnection(this.#lockConnection);
+      if (--session.users === 0) {
+        if (this.#lockSession === session) this.#lockSession = undefined;
+        session.connection.then(
+          (connection) => connection.release(),
+          () => {},
+        );
+      }
     }
   }
 
-  /** Releases the lock connection; the next pass reserves another. */
-  #dropLockConnection(reserving: Promise<ReservedConnection>) {
-    if (this.#lockConnection === reserving) this.#lockConnection = undefined;
-    reserving.then(
-      (connection) => connection.release(),
-      () => {},
-    );
+  /** New passes take their locks on a new session. */
+  #retire(session: LockSession) {
+    if (this.#lockSession === session) this.#lockSession = undefined;
   }
 
   /**
@@ -466,6 +473,8 @@ export class ExecutionLoop {
   async #account(scope: AccountScope, clients: PassClients) {
     const health = new PassHealth();
     const status = await this.#status(scope);
+    // Removed since the pass was started: it is never read or traded again.
+    if (status === "disconnected" || status === "handed_over") return;
     // The account was unavailable: entries wait until a pass reconciles it.
     const recovering = status !== "connected";
     if (clients.readOnly) {
@@ -497,7 +506,8 @@ export class ExecutionLoop {
       }
     }
     await this.#store.markOverdueExits(scope, this.#now(), exitOverdue);
-    // Balances too, before the account counts as served again.
+    // Balances too (every asset's), before the account counts as served
+    // again.
     if (recovering && !health.failed)
       await reads.balance("USDT").catch(() => undefined);
     const available = await this.#settleAvailability(
@@ -508,7 +518,11 @@ export class ExecutionLoop {
     );
     if (this.#strategies)
       try {
-        await this.#strategies.run(scope, reads, { entries: available });
+        // The pass that finds the venue serving again opens nothing: its
+        // strategies are measured again on the next pass, before any entry.
+        await this.#strategies.run(scope, reads, {
+          entries: available && !recovering,
+        });
       } catch (error) {
         this.#warn(
           `Could not run the account's strategies: ${describe(error)}`,
@@ -1240,6 +1254,9 @@ export class ExecutionLoop {
 }
 
 type ReservedConnection = Awaited<ReturnType<Database["reserve"]>>;
+
+/** A reserved session holding passes' advisory locks, and how many use it. */
+type LockSession = { connection: Promise<ReservedConnection>; users: number };
 
 /** Whether the account's venue failed to serve any request in a pass. */
 class PassHealth {

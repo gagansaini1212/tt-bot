@@ -55,10 +55,8 @@ export function claimDueJobs(
           and j.available_at <= ${now}
           and (${exchangeAccountId ?? null}::uuid is null or exists (
             select from order_intents i
-            left join trade_proposals p on p.id = i.proposal_id
             where i.id::text = j.payload ->> 'orderIntentId'
-              and coalesce(i.exchange_account_id, p.exchange_account_id)
-                = ${exchangeAccountId ?? null}::uuid
+              and i.exchange_account_id = ${exchangeAccountId ?? null}::uuid
           ))
         order by j.available_at, j.id
         limit ${limit}

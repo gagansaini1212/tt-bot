@@ -131,4 +131,33 @@ describe("nonces in PostgreSQL", { skip: databaseTestsSkipped }, () => {
     );
     assert.equal(await queue.run(async (nonce) => nonce), BigInt(3_000_001));
   });
+
+  test("as many nonce accounts at once as the pool has connections need no more", async () => {
+    // The test pool has four connections; four accounts each hold a turn,
+    // and every request waits until all four are in flight.
+    const scopes = await Promise.all([0, 1, 2, 3].map(() => account()));
+    let started = 0;
+    let allStarted!: () => void;
+    const together = new Promise<void>((resolve) => (allStarted = resolve));
+    const sent = await Promise.race([
+      Promise.all(
+        scopes.map((scope) =>
+          new NonceQueue({
+            store: new PostgresNonceStore(database.app, scope),
+            now: () => 4_000,
+          }).run(async (nonce) => {
+            if (++started === scopes.length) allStarted();
+            await together;
+            return nonce;
+          }),
+        ),
+      ),
+      sleep(10_000).then(() => "stuck" as const),
+    ]);
+    assert.notEqual(sent, "stuck");
+    assert.deepEqual(
+      sent,
+      scopes.map(() => BigInt(4_000_000)),
+    );
+  });
 });

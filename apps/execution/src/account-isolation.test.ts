@@ -244,6 +244,22 @@ describe("accounts on separate venues", { skip: databaseTestsSkipped }, () => {
       ]);
     });
 
+  test("a held stop-limit entry whose send the venue cannot serve stays held, and goes out later", async () => {
+    const w = await world();
+    await w.place(w.a, stopLimit("ct_iso_held"));
+    w.stopTrades();
+    // The venue answers reads but limits the order itself.
+    w.venues[0].fake.failNext(
+      "placeProtectedEntry",
+      new BinanceTestnetError("rate_limited", -1015, 10),
+    );
+    await w.loop.runPass();
+    assert.equal(await intentStatus("ct_iso_held"), "pending");
+    await w.loop.runPass();
+    assert.equal(await intentStatus("ct_iso_held"), "acknowledged");
+    assert.equal(w.venues[0].fake.count("placeProtectedEntry"), 2);
+  });
+
   test("a slow venue holds up only its own account's pass", async () => {
     const w = await world();
     await w.place(w.a, stopLimit("ct_iso_slow_a"));
