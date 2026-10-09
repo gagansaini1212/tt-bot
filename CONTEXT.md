@@ -162,5 +162,9 @@ The customer-specified time after which an unfilled standing entry instruction m
 **Strategy version**:
 An immutable set of strategy rules. Open positions retain the version under which they were opened; changed versions require simulation before live activation.
 
+**Disconnection**:
+Removing an exchange account from the product. Its keys are deleted and it is never read or traded again, while its history stays. It requires closure of everything the product manages there, or an account handover.
+_Avoid_: Deleting an account
+
 **Account handover**:
 An explicit transfer of responsibility for remaining positions to the customer when disconnecting, with positions and protective orders disclosed.
