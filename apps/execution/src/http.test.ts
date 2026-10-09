@@ -976,7 +976,8 @@ test("a trade proposal names one of the customer's accounts that can trade, and 
     ],
     [
       { ...decision(), exchangeAccountId: secondTestnetAccount.id },
-      /does not trade on Binance Spot Testnet · Second testnet yet/,
+      // This worker serves only the owner's first account.
+      /does not serve Binance Spot Testnet · Second testnet/,
     ],
     // 0.02 × 59000 = 1180 USDT, more than the 1000 USDT free here.
     [
@@ -1132,7 +1133,7 @@ test("the web lists decisions, and a rejected proposal keeps its reason and cann
   assert.equal(fake.count("/api/v3/orderList/opoco"), 0);
 });
 
-test("the portfolio lists the customer's accounts, which one the worker reads, and the reporting currency", async (t) => {
+test("the portfolio lists the customer's accounts, which ones the worker reads, and the reporting currency", async (t) => {
   const listed = new Set(["USDC-USDT", "EUR-USDT", "BTC-USDT"]);
   const portfolio = {
     // Only Binance's markets are known here.
@@ -1140,7 +1141,12 @@ test("the portfolio lists the customer's accounts, which one the worker reads, a
       venue === "binance-spot-testnet"
         ? (instrument: string) => listed.has(instrument)
         : undefined,
-    served: ownerOnly,
+    // The worker serves both of the owner's testnet accounts. It has no
+    // adapter for HTX, so it does not read that one.
+    served: async (customerId: string) =>
+      customerId === owner.customerId
+        ? [owner, { ...owner, exchangeAccountId: secondTestnetAccount.id }]
+        : [],
   };
   const binanceOnly = new MemoryReportingDirectory({
     [owner.customerId]: [
@@ -1166,7 +1172,7 @@ test("the portfolio lists the customer's accounts, which one the worker reads, a
     [
       [owner.exchangeAccountId, "trade", true],
       [readOnlyAccount.id, "read_only", false],
-      [secondTestnetAccount.id, "trade", false],
+      [secondTestnetAccount.id, "trade", true],
     ],
   );
   // The worker cannot read HTX's markets, so only USDT, which needs no
@@ -1315,33 +1321,69 @@ test("a read-only account takes no orders, whatever the request", async (t) => {
   );
 });
 
-test("a decision that names no account goes to the customer's one trading account, or none", async (t) => {
+test("the assistant's decisions go to the account they name, or else the customer's one trading account", async (t) => {
   const fake = binance();
-  let accounts = [{ ...owner, readOnly: false }];
+  const second = { ...owner, exchangeAccountId: secondTestnetAccount.id };
+  // The worker serves both of the owner's testnet accounts here.
+  let accounts = [
+    { ...owner, readOnly: false },
+    { ...second, readOnly: false },
+  ];
   const { raw } = await serve(t, {
     exchange: fake.exchange,
+    accounts: async (customerId, exchangeAccountId) =>
+      accounts.find(
+        (account) =>
+          account.customerId === customerId &&
+          account.exchangeAccountId === exchangeAccountId,
+      ),
     listAccounts: async () => accounts,
   });
-  const record = () =>
-    raw("/decisions", {
-      ...post("/decisions", decision()),
-      headers: {
-        ...asAssistant,
-        "X-Customer-Id": owner.customerId,
-        "Content-Type": "application/json",
-      },
-    });
-  const recorded = await (await record()).json();
-  assert.equal(recorded.decision.proposal.status, "draft");
-  // With two trading accounts, or only read-only ones, which is unclear.
-  for (const listed of [
-    [
-      { ...owner, readOnly: false },
-      { ...owner, exchangeAccountId: randomUUID(), readOnly: false },
-    ],
-    [{ ...owner, readOnly: true }],
-  ]) {
-    accounts = listed;
-    assert.equal((await (await record()).json()).reason, "exchange_account");
-  }
+  // As the assistant sends them: no account header.
+  const record = async (body: unknown) =>
+    (
+      await raw("/decisions", {
+        ...post("/decisions", body),
+        headers: {
+          ...asAssistant,
+          "X-Customer-Id": owner.customerId,
+          "Content-Type": "application/json",
+        },
+      })
+    ).json();
+  // A proposal is checked and saved on the account it names.
+  const proposed = await record({
+    ...decision(),
+    exchangeAccountId: second.exchangeAccountId,
+    idempotencyKey: "session-1:second",
+  });
+  assert.equal(proposed.decision.proposal.status, "draft");
+  // A decision not to trade names none: with one trading account it is
+  // that account's, and with several, or none, it is not recorded.
+  const noTrade = (key: string) => ({
+    kind: "no_trade",
+    instrument: "BTC-USDT",
+    model: "openai/gpt-6-luna",
+    promptVersion: "assistant-2026-10-08",
+    sourceSnapshotId: "5a3b2c1d-0e9f-4a8b-9c7d-6e5f4a3b2c09",
+    rationale: "No setup.",
+    idempotencyKey: key,
+  });
+  assert.equal(
+    (await record(noTrade("session-1:a"))).reason,
+    "exchange_account",
+  );
+  accounts = [
+    { ...owner, readOnly: false },
+    { ...second, readOnly: true },
+  ];
+  assert.equal(
+    (await record(noTrade("session-1:b"))).decision.kind,
+    "no_trade",
+  );
+  accounts = [{ ...owner, readOnly: true }];
+  assert.equal(
+    (await record(noTrade("session-1:c"))).reason,
+    "exchange_account",
+  );
 });

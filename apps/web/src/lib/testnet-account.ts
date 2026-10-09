@@ -48,11 +48,17 @@ export function snapshotFreshness(
   return "fresh";
 }
 
-export async function getTestnetAccount(): Promise<TestnetAccountState> {
-  const result = await callWorkerForAccount({
-    path: "/snapshot",
-    schema: z.object({ snapshot: accountSnapshotSchema }),
-  });
+/** The snapshot of `exchangeAccountId`, or of the current exchange account. */
+export async function getTestnetAccount(
+  exchangeAccountId?: string,
+): Promise<TestnetAccountState> {
+  const result = await callWorkerForAccount(
+    {
+      path: "/snapshot",
+      schema: z.object({ snapshot: accountSnapshotSchema }),
+    },
+    exchangeAccountId,
+  );
   if (result.status !== "connected")
     return {
       status: result.status,

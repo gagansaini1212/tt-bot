@@ -6,7 +6,7 @@ import {
   type ReportingCurrencyChange,
 } from "@crypto-trading/exchanges";
 import { z } from "zod";
-import type { AccountResolver } from "../accounts";
+import type { AccountLister } from "../accounts";
 import type {
   ReportingAccount,
   ReportingDirectory,
@@ -19,9 +19,10 @@ export type PortfolioDependencies = {
   // The markets each venue lists, to tell which reporting currencies every
   // account can convert into.
   markets: VenueMarkets;
-  // The account this worker reads for a customer: its snapshot is the one
-  // /snapshot serves. Other accounts are listed, but not read yet.
-  served: AccountResolver;
+  // The accounts this worker serves for a customer: /snapshot reads each
+  // one's balances. Others, such as on a venue it has no adapter for, are
+  // listed but not read.
+  served: AccountLister;
 };
 
 /**
@@ -46,17 +47,18 @@ export function portfolio({
       ),
     );
   const read = async (customerId: string): Promise<CustomerPortfolio> => {
-    const [accounts, reportingCurrency, scope] = await Promise.all([
+    const [accounts, reportingCurrency, scopes] = await Promise.all([
       directory.accounts(customerId),
       directory.reportingCurrency(customerId),
       served(customerId),
     ]);
+    const read = new Set(scopes.map((scope) => scope.exchangeAccountId));
     return {
       reportingCurrency,
       options: await options(accounts),
       accounts: accounts.map((account) => ({
         ...account,
-        served: account.id === scope?.exchangeAccountId,
+        served: read.has(account.id),
       })),
     };
   };

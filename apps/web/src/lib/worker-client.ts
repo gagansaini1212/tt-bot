@@ -257,14 +257,27 @@ const listAccounts = () =>
 
 /**
  * Calls a worker route that serves or changes an exchange account's data,
- * for the current customer on their current exchange account
- * (current-account.ts). The worker acts only if that customer owns it.
+ * for the current customer on `exchangeAccountId`, or else on their current
+ * exchange account (current-account.ts). The worker acts only if that
+ * customer owns it.
  */
 export async function callWorkerForAccount<T>(
   request: Omit<WorkerRequest<T>, "customerId" | "exchangeAccountId">,
+  exchangeAccountId?: string,
 ): Promise<WorkerResult<T>> {
+  if (exchangeAccountId !== undefined)
+    return callWorkerForCustomer({ ...request, exchangeAccountId });
   const account = await getCurrentExchangeAccount(listAccounts);
   if (!account) return failure("no_exchange_account");
   if ("reason" in account) return account;
   return callWorkerForCustomer({ ...request, exchangeAccountId: account.id });
+}
+
+/**
+ * The ID of the exchange account this request acts on, or undefined when
+ * the customer has none the worker serves, or it cannot say.
+ */
+export async function currentExchangeAccountId(): Promise<string | undefined> {
+  const account = await getCurrentExchangeAccount(listAccounts);
+  return account && !("reason" in account) ? account.id : undefined;
 }

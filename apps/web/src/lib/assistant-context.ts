@@ -64,8 +64,9 @@ function accountSnapshot(
 /**
  * What the analysis assistant sees of the customer's exchange accounts:
  * each one labelled with its venue and account, whether it can trade, and
- * its own snapshot, or why it has none (ADR 0009). The worker reads one
- * account's snapshot today, `account`; the others are listed without one.
+ * its own snapshot, or why it has none (ADR 0009). `account` is the current
+ * account's snapshot, used only while the account list is unavailable;
+ * otherwise each account the worker serves carries its own.
  */
 export function assistantAccounts(
   account: TestnetAccountState,
@@ -94,7 +95,8 @@ export function assistantAccounts(
       },
     ];
   }
-  return overview.overview.accounts.map(({ account: summary }): JsonObject => {
+  return overview.overview.accounts.map((entry): JsonObject => {
+    const summary = entry.account;
     const context = {
       exchangeAccountId: summary.id,
       venue: summary.venueName,
@@ -107,16 +109,17 @@ export function assistantAccounts(
         summary.mode === "simulation" &&
         summary.served,
     };
-    if (!summary.served)
+    const own = entry.snapshot;
+    if (!summary.served || !own)
       return {
         ...context,
         snapshot: null,
-        noSnapshot: "The execution worker does not read this account yet.",
+        noSnapshot: "The execution worker does not read this account.",
       };
-    return account.status === "connected"
+    return own.status === "connected"
       ? {
           ...context,
-          snapshot: accountSnapshot(account.snapshot, {
+          snapshot: accountSnapshot(own.snapshot, {
             exchangeAccountId: summary.id,
             venue: summary.venue,
             venueName: summary.venueName,
@@ -124,6 +127,6 @@ export function assistantAccounts(
             accountingCurrency: summary.accountingCurrency,
           }),
         }
-      : { ...context, snapshot: null, noSnapshot: account.message };
+      : { ...context, snapshot: null, noSnapshot: own.message };
   });
 }

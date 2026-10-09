@@ -42,6 +42,12 @@ export interface Handler<Query, Body> {
   caller?: Caller;
   query: z.ZodType<Query>;
   body?: z.ZodType<Body>;
+  /**
+   * The exchange account the body names, for a caller that sends no
+   * X-Exchange-Account-Id, such as the assistant, whose trade proposals
+   * name their account. Undefined when it names none.
+   */
+  accountFrom?: (body: Body) => string | undefined;
   handle(context: {
     exchange: AccountAdapter;
     query: Query;
@@ -210,16 +216,30 @@ export function route<Query, Body>(
       );
       if ("needs" in definition && definition.needs === "customer")
         return definition.handle({ query, body, customerId });
-      const named = request.headers["x-exchange-account-id"];
+      const header = request.headers["x-exchange-account-id"];
+      const named =
+        header ??
+        ("accountFrom" in definition
+          ? definition.accountFrom?.(body)
+          : undefined);
       let account: AccountScope | undefined;
       try {
-        account =
-          named === undefined && caller === "assistant" && listAccounts
-            ? onlyTradingAccount(await listAccounts(customerId))
-            : await accounts(
-                customerId,
-                parse(exchangeAccountIdSchema, named, "exchange account"),
-              );
+        if (header === undefined && caller === "assistant") {
+          // The account the body names, else the customer's only trading
+          // account: the handler then says why a proposal cannot go there.
+          const fromBody = exchangeAccountIdSchema.safeParse(named);
+          account =
+            (fromBody.success
+              ? await accounts(customerId, fromBody.data)
+              : undefined) ??
+            (listAccounts
+              ? onlyTradingAccount(await listAccounts(customerId))
+              : undefined);
+        } else
+          account = await accounts(
+            customerId,
+            parse(exchangeAccountIdSchema, named, "exchange account"),
+          );
       } catch (error) {
         if (error instanceof RequestError) throw error;
         return notConfigured("database");
@@ -317,10 +337,11 @@ export function createRequestListener({
 }
 
 /**
- * The account an assistant's decision is for when it names none: the
- * customer's one account that trades, if they have exactly one. Until the
- * assistant names the account of every decision (#26), a customer with
- * several trading accounts gets none, and the decision is not recorded.
+ * The account an assistant's decision is for when it names none the worker
+ * serves for the customer, as a decision not to trade names none: the
+ * customer's one account that trades, if they have exactly one. A customer
+ * with several trading accounts gets none, and such a decision is not
+ * recorded.
  */
 function onlyTradingAccount(accounts: AccountScope[]) {
   const trading = accounts.filter(

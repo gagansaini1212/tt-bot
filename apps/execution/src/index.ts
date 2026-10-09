@@ -212,12 +212,18 @@ async function main() {
       proposals,
       strategies,
       // The customer's exchange accounts, for totals across them and the
-      // assistant's proposals. The resolver still decides which one this
-      // worker trades on.
+      // assistant's proposals, each read with its own venue's markets.
       directory: new PostgresReportingDirectory(db, exchangeAccounts),
       portfolio: {
-        markets: catalogueMarkets(new Map([[markets.venue, markets]])),
-        served: accounts,
+        markets: catalogueMarkets(
+          new Map(
+            registry.venues.map((venue) => [
+              venue,
+              registry.get(venue)!.market.markets,
+            ]),
+          ),
+        ),
+        served: listAccounts,
       },
       exclusive,
       listAccounts,

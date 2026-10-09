@@ -100,7 +100,7 @@ export function decisions({
       );
     if (target.id !== account.exchangeAccountId)
       throw invalidDecision(
-        `The execution worker does not trade on ${name} yet, so it cannot check or place a proposal there.`,
+        `The execution worker does not serve ${name}, so it cannot check or place a proposal there.`,
       );
     return name;
   };
@@ -111,6 +111,12 @@ export function decisions({
       query: z.strictObject({}),
       // Checked below, so the assistant learns what to fix.
       body: z.unknown(),
+      // A trade proposal is checked and recorded on the account it names.
+      accountFrom: (body) => {
+        const named = (body as { exchangeAccountId?: unknown } | null)
+          ?.exchangeAccountId;
+        return typeof named === "string" ? named : undefined;
+      },
       async handle({ body, account, exchange }) {
         const parsed = assistantDecisionRequestSchema.safeParse(body);
         if (!parsed.success)

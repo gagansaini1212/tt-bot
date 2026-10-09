@@ -132,10 +132,10 @@ test("totals every account in the reporting currency, and names the accounts and
   assert.deepEqual(
     combined.leftOutAccounts.map(({ label, reason }) => [label, reason]),
     [
-      ["htx · Savings", "The execution worker does not read this account yet."],
+      ["htx · Savings", "The execution worker does not read this account."],
       [
         "Binance Spot Testnet · Second",
-        "The execution worker does not read this account yet.",
+        "The execution worker does not read this account.",
       ],
     ],
   );
@@ -331,4 +331,91 @@ test("changing the reporting currency says what the worker did", async () => {
   });
   const unknown = await saveReportingCurrency({ reportingCurrency: "EUR" });
   assert.equal(unknown.result, "unconfirmed");
+});
+
+test("every account the worker serves counts with its own snapshot, and one its venue cannot serve is named", async () => {
+  const third = {
+    ...second,
+    id: "6d1f3c52-8b7e-4a51-9a0d-2f4e8c1b7a0c",
+    label: "Third",
+    served: true,
+  };
+  const servedSecond = { ...second, served: true };
+  const balances: Record<string, { asset: string; free: string }[]> = {
+    [served.id]: [{ asset: "USDT", free: "100" }],
+    [servedSecond.id]: [{ asset: "USDT", free: "250" }],
+  };
+  const fetch = mock.method(
+    globalThis,
+    "fetch",
+    async (input: string | URL, init: RequestInit = {}) => {
+      const { pathname } = new URL(String(input));
+      const account = (init.headers as Record<string, string>)[
+        "X-Exchange-Account-Id"
+      ];
+      if (pathname === "/portfolio")
+        return Response.json({
+          status: "connected",
+          portfolio: {
+            reportingCurrency: "USDT",
+            options,
+            accounts: [served, servedSecond, third],
+          },
+        });
+      if (pathname === "/market/tickers")
+        return Response.json({ status: "connected", tickers: [] });
+      if (pathname === "/snapshot" && balances[account])
+        return Response.json({
+          status: "connected",
+          ...snapshot(balances[account]),
+        });
+      // The third account's venue cannot serve it now.
+      return Response.json({ status: "unavailable" }, { status: 503 });
+    },
+  );
+  const { overview } = await getAccountPortfolio();
+  assert.equal(overview.status, "connected");
+  if (overview.status !== "connected") return;
+  const { combined } = overview.overview;
+  assert.equal(combined.total, "350");
+  assert.equal(combined.counted, 2);
+  assert.equal(combined.complete, false);
+  assert.deepEqual(
+    combined.leftOutAccounts.map(({ label }) => label),
+    ["Binance Spot Testnet · Third"],
+  );
+  // Each account's snapshot was read for it, once.
+  const snapshots = fetch.mock.calls
+    .filter(
+      (call) => new URL(String(call.arguments[0])).pathname === "/snapshot",
+    )
+    .map(
+      (call) =>
+        (call.arguments[1]?.headers as Record<string, string>)[
+          "X-Exchange-Account-Id"
+        ],
+    );
+  assert.deepEqual(
+    snapshots.sort(),
+    [served.id, servedSecond.id, third.id].sort(),
+  );
+  // The assistant sees each account with its own balances, never another's.
+  const contexts = assistantAccounts(
+    { status: "unavailable", message: "unused" },
+    overview,
+  ) as {
+    exchangeAccountId: string;
+    snapshot: { balances: { free: string }[] } | null;
+  }[];
+  assert.deepEqual(
+    contexts.map((context) => [
+      context.exchangeAccountId,
+      context.snapshot?.balances[0]?.free ?? null,
+    ]),
+    [
+      [served.id, "100"],
+      [servedSecond.id, "250"],
+      [third.id, null],
+    ],
+  );
 });

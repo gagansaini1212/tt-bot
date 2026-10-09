@@ -43,16 +43,20 @@ export type StrategyActionResult =
     };
 
 /**
- * Every strategy on the customer's account, with its results, and when the
- * worker read them, by its own clock.
+ * Every strategy on the customer's current exchange account, or on
+ * `exchangeAccountId`, with its results, and when the worker read them, by
+ * its own clock.
  */
-export async function getStrategies(): Promise<
-  WorkerState<{ state: StrategiesState; readAt: number }>
-> {
-  const result = await callWorkerForAccount({
-    path: "/strategies",
-    schema: z.object({ state: strategiesStateSchema }),
-  });
+export async function getStrategies(
+  exchangeAccountId?: string,
+): Promise<WorkerState<{ state: StrategiesState; readAt: number }>> {
+  const result = await callWorkerForAccount(
+    {
+      path: "/strategies",
+      schema: z.object({ state: strategiesStateSchema }),
+    },
+    exchangeAccountId,
+  );
   return result.status === "connected"
     ? {
         status: "connected",
