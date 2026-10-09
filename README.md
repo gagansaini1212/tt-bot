@@ -106,6 +106,10 @@ The worker listens on `127.0.0.1:4001`, and on `[::1]:4001` when IPv6 is availab
 
 The worker talks to each exchange through an adapter for its **venue**, such as `binance-spot-testnet`, which declares what it can do: Binance Spot Testnet trades spot with attached exits, on virtual funds, and a read-only venue only reads. Markets are named by instrument, `BASE-QUOTE` such as `BTC-USDT`, whatever the venue calls them; each adapter translates them to its venue symbol (`BTCUSDT` on Binance) and reads each market's tick size, step size, minimum and maximum quantity, minimum notional and status from the venue's market catalogue, refreshed every five minutes. See [ADR 0008](docs/adr/0008-normalize-venues-markets-and-order-ids.md). HTX (`htx`) is a read-only venue: its adapter reads market data, balances, open orders and fills, and cannot place orders. See [HTX](docs/venues/htx.md).
 
+### Connect HTX (read only)
+
+HTX has no spot test environment, so an HTX account holds real funds, and the product only monitors it ([ADR 0013](docs/adr/0013-connect-htx-accounts-read-only.md)). In HTX's API Management, create a key with read permission only, without trade or withdraw permission. Then add it in **Settings → Exchange accounts** as an HTX account, which is always "Live, read only". The worker asks HTX what the key may do and refuses a key that can trade or withdraw. HTX will not say for a sub-account's key, so tick "This key has read permission only" to save one. The Overview then lists the HTX account's balances, open orders and recent fills beside your Binance account's, and totals count its holdings at HTX's own prices. Every order path refuses an HTX account.
+
 An exchange account trades the markets its venue lists that are among its **allowed instruments** and quoted in its accounting currency, USDT here. The allowed instruments start as BTC-USDT and ETH-USDT; a customer widens them in the database for now (see [the database guide](docs/database.md#allowed-instruments)). A strategy, dashboard order or assistant proposal on any other market is refused.
 
 ### Dashboard orders

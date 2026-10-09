@@ -1,6 +1,6 @@
 # HTX (Huobi) spot
 
-HTX is a read-only venue in M4 ([ADR 0009](../adr/0009-keep-exchange-accounts-isolated-across-venues.md#4-read-only-venues)). Its adapter, `HtxSpot` in `packages/exchanges/src/htx-spot.ts`, reads market data and an exchange account, and has no code that places, cancels or withdraws anything. Its venue ID is `htx`.
+HTX is a read-only venue in M4 ([ADR 0009](../adr/0009-keep-exchange-accounts-isolated-across-venues.md#4-read-only-venues), [ADR 0013](../adr/0013-connect-htx-accounts-read-only.md)). Its adapter, `HtxSpot` in `packages/exchanges/src/htx-spot.ts`, reads market data and an exchange account, and has no code that places, cancels or withdraws anything. Its venue ID is `htx`, and the worker registers it with `htxVenue()` beside Binance Spot Testnet.
 
 The facts below come from HTX's Spot API reference at <https://huobiapi.github.io/docs/spot/v1/en/> (written as Huobi, read on 2026-10-09). HTX's newer portal, <https://www.htx.com/en-us/opend/newApiPages/>, renders its pages in the browser and serves no readable text, so it was not used. Market data shapes were checked against HTX's live public endpoints the same day, using unsigned GET requests only.
 
@@ -17,7 +17,7 @@ Private endpoints are signed with HmacSHA256 ([Signature Method](https://huobiap
 2. URL-encode names and values as UTF-8 with upper-case hex (`:` is `%3A`, a space `%20`), sort them by name in ASCII order, and join them with `&`.
 3. Sign `GET\n` + the lowercase host + `\n` + the path + `\n` + that query. The signature is the raw digest in base64, not its hex, and is sent URL-encoded as `Signature`.
 
-`htxSignatureV2` in `htx-signature.ts` does this, and needs nothing else from the adapter. Its tests reproduce the test vectors in HTX's official SDKs: [huobi_Golang](https://github.com/HuobiRDCenter/huobi_Golang/blob/master/internal/requestbuilder/privateurlbuilder_test.go) and [huobi_CSharp](https://github.com/HuobiRDCenter/huobi_CSharp/blob/master/Huobi.SDK.Core.Test/RequestBuilder/SignerTest.cs). The reference's own example masks its access key and leaves out the secret, so the tests check the text it signs, not its signature. The adapter signs GET requests only.
+`htxRequestSigner` in `htx-signature.ts` does this behind the worker's `RequestSigner` interface ([ADR 0010](../adr/0010-serve-every-exchange-account-from-one-worker.md#signing-and-nonces)), with the venue-corrected timestamp the interface gives it. Its tests reproduce the test vectors in HTX's official SDKs: [huobi_Golang](https://github.com/HuobiRDCenter/huobi_Golang/blob/master/internal/requestbuilder/privateurlbuilder_test.go) and [huobi_CSharp](https://github.com/HuobiRDCenter/huobi_CSharp/blob/master/Huobi.SDK.Core.Test/RequestBuilder/SignerTest.cs). The reference's own example masks its access key and leaves out the secret, so the tests check the text it signs, not its signature. The adapter signs GET requests only.
 
 ## Endpoints the adapter reads
 
@@ -52,9 +52,10 @@ HTX sends prices, amounts and some IDs as JSON numbers, some in exponent form (`
 - Private endpoints are limited per UID, across all of the user's keys, per endpoint: for example 100 requests per 2 s for accounts and balances, 50 per 2 s for open orders and order lookups, and 20 per 2 s for match results ([rate limit rule](https://huobiapi.github.io/docs/spot/v1/en/#new-version-rate-limit-rule)). HTX suggests reading the `X-HB-RateLimit-Requests-Remain` and `X-HB-RateLimit-Requests-Expire` headers. Its public market endpoints sent neither on 2026-10-09, and the reference states no limit for them.
 - Responses use a v1 envelope, `{"status":"ok","data":…}` or `{"status":"error","err-code":…,"err-msg":…}`, or a v2 one, `{"code":200,"data":…}` ([Response Format](https://huobiapi.github.io/docs/spot/v1/en/#response-format)). Errors usually come with HTTP 200: an unlisted symbol answers `{"status":"error","err-code":"invalid-parameter","err-msg":"invalid symbol"}`.
 - The adapter maps them to the contract's `ExchangeError` kinds, as `HtxError` with HTX's code:
-  - **rate_limited:** HTTP 429, or HTX's documented "Exceed rate limit" (`1006`) or `frequent-invoke`. The client waits `Retry-After`, or 10 seconds, before sending anything else. The reference does not document which REST error a rate limit returns, so this is the conservative reading.
+  - **rate_limited:** HTTP 429, or HTX's documented "Exceed rate limit" (`1006`) or `frequent-invoke`. The wait is `Retry-After`, or 10 seconds. HTX counts private endpoints per user, so its own codes on a signed request hold back only that account's signed requests. An HTTP 429 without one of them, or a limit on public data, holds back every HTX client. Binance's clients never wait for HTX's limits, nor HTX's for Binance's. The reference does not document which REST error a rate limit returns, so this is the conservative reading.
   - **unavailable:** HTTP 5xx, `base-system-error`, `gateway-internal-error` or `500`, an unreadable body, or a network failure.
-  - **rejected:** everything else, such as `api-signature-not-valid` or `invalid-parameter`. `base-record-invalid`, `base-not-found` and `not-found` also set `orderNotFound`.
+  - **rejected:** everything else, such as `invalid-parameter`. `base-record-invalid`, `base-not-found` and `not-found` also set `orderNotFound`.
+  - **Clock skew:** HTX reports a stale timestamp as `api-signature-not-valid`, the same as a wrong signature. On that answer the adapter reads HTX's time again and sends the GET once more. A second refusal is `rejected`. If HTX's time cannot be read, the request is `unavailable`. HTX's clock offset is shared by HTX's clients only.
   - An outcome is never unknown, because the adapter sends no orders.
 - Messages carry HTX's code only when it looks like a code. They never include URLs, signatures or keys.
 
@@ -62,15 +63,16 @@ HTX sends prices, amounts and some IDs as JSON numbers, some in exponent form (`
 
 - An HTX API key has any of three permissions: read, trade and withdraw. A sub-user's key has read and trade only ([FAQ Q2](https://huobiapi.github.io/docs/spot/v1/en/#q2-how-many-api-keys-one-user-can-apply)).
 - **HTX reports them, but only to a parent user.** `GET /v2/user/api-key?uid=…&accessKey=…` lists a key's `permission`, such as `readOnly,trade,withdraw`. It needs the user's UID from `GET /v2/user/uid`. Neither endpoint is open to sub-users, who get "error-code 403" on anything outside their list ([Sub User](https://huobiapi.github.io/docs/spot/v1/en/#sub-user)).
-- `HtxSpot.getKeyPermissions()` returns `{ trade, withdraw }`, or null when HTX refuses to say (HTTP 403, or code `403` or `1002`). A permission the reference does not document is an error, never a pass. `checkReadOnlyKey()` refuses a key that can trade or withdraw. It returns `verified` for a read-only key, and `unverified` when HTX will not report the key's permissions. **An unverified key must not be saved until the customer confirms it has read permission only.** That confirmation belongs to the account vault and Settings (#24).
+- `HtxSpot.getKeyPermissions()` returns `{ trade, withdraw }`, or null when HTX refuses to say (HTTP 403, or code `403` or `1002`). A permission the reference does not document is an error, never a pass. `checkReadOnlyKey()` refuses a key that can trade or withdraw. It returns `verified` for a read-only key, and `unverified` when HTX will not report the key's permissions.
+- The worker asks before it saves keys, and when the customer tests the connection. It refuses a key that can trade or withdraw. It saves an unverified key only when the customer has ticked "This key has read permission only" in Settings, which sends `confirmReadOnly`. The audit trail records whether the key was verified or confirmed ([ADR 0013](../adr/0013-connect-htx-accounts-read-only.md)).
 - The reference's Quick Start says a key without an IP binding expires after 90 days. Its change log of 2022-06-14 narrows that to keys with trade or withdraw permission after 90 days without use. Customers may want to bind their read-only key to the worker's IP address.
 
-## Not yet wired
+## In the worker and dashboard
 
-This branch adds the adapter only. The worker's multi-account wiring (#22) and the account vault and Settings UI (#24) are being built separately. When they land:
-
-- the worker builds `HtxSpot` for HTX accounts, shares one `MarketCatalogue` across them, and checks keys with `checkReadOnlyKey()` before saving them;
-- the worker's ticker route accepts HTX's lowercase venue symbols (it validates Binance's capitals today);
-- issue #29's side-by-side check runs a Binance Spot Testnet account and an HTX account in one worker. `src/fixtures/fake-htx.ts` is a fake HTX for it: a `fetch` that checks signatures and refuses anything but a GET.
+- The worker registers HTX with `htxVenue()`: one market catalogue, one public client and one `VenueLimits` (backoff and clock) for every HTX account, and none of Binance's. Each HTX account's client is built from its saved keys and keeps its own per-user backoff.
+- HTX accounts are added in Settings → Exchange accounts, as `live` and read only. Every order path refuses them, because their clients cannot trade.
+- The worker's ticker route accepts HTX's lowercase symbols, and the dashboard values HTX holdings with HTX's own tickers, so they count in totals across accounts.
+- The Overview lists each other account the worker reads, HTX included, with its own balances, open orders and recent fills, and no cancel buttons.
+- `@crypto-trading/exchanges/fixtures/fake-htx` is a fake HTX for tests and local checks: a `fetch` that checks each signature and refuses anything but a GET.
 
 Live market data can be checked at any time with `HTX_LIVE_MARKET_DATA=1 pnpm --filter @crypto-trading/exchanges test`, which sends unsigned public GET requests only.
