@@ -8,6 +8,10 @@ import { BinanceSpotTestnet } from "@crypto-trading/exchanges";
 import type { AccountResolver } from "./accounts";
 import { binanceExchangeInfo } from "./fixtures/binance-exchange-info";
 import { fixedExchanges } from "./fixtures/fixed-exchanges";
+import {
+  MemoryReportingDirectory,
+  testnetAccount,
+} from "./fixtures/memory-reporting-directory";
 import { MemoryOrderIntents } from "./fixtures/memory-order-intents";
 import {
   MemoryRiskLimits,
@@ -22,7 +26,7 @@ const assistantToken = "http-test-assistant-token-at-least-32";
 
 /**
  * Order intents and proposals that share one memory, as the database does,
- * and the customer's risk limits.
+ * the customer's risk limits, and their exchange accounts.
  */
 function memory() {
   const intents = new MemoryOrderIntents();
@@ -30,6 +34,13 @@ function memory() {
     intents,
     proposals: new MemoryTradeProposals(intents),
     risk: new MemoryRiskLimits({ limits: TEST_RISK_LIMITS }),
+    directory: new MemoryReportingDirectory({
+      [owner.customerId]: [
+        testnetAccount(owner.exchangeAccountId),
+        readOnlyAccount,
+        secondTestnetAccount,
+      ],
+    }),
   };
 }
 // The customer who owns the worker's exchange account.
@@ -37,6 +48,18 @@ const owner = {
   customerId: "5a3b2c1d-0e9f-4a8b-9c7d-6e5f4a3b2c01",
   exchangeAccountId: "5a3b2c1d-0e9f-4a8b-9c7d-6e5f4a3b2c02",
 };
+// Two more of the owner's accounts, which the worker does not trade on: one
+// on a venue the product only reads, and a second testnet account.
+const readOnlyAccount = testnetAccount("5a3b2c1d-0e9f-4a8b-9c7d-6e5f4a3b2c0a", {
+  venue: "htx",
+  venueName: "htx",
+  label: "HTX savings",
+  access: "read_only",
+});
+const secondTestnetAccount = testnetAccount(
+  "5a3b2c1d-0e9f-4a8b-9c7d-6e5f4a3b2c0b",
+  { label: "Second testnet" },
+);
 const ownerOnly: AccountResolver = async (customerId) =>
   customerId === owner.customerId ? owner : undefined;
 const ticker = (symbol: string) => ({
@@ -83,7 +106,10 @@ function binance(respond?: (url: URL) => Response) {
         case "/api/v3/exchangeInfo":
           return Response.json(binanceExchangeInfo());
         case "/api/v3/account":
-          return Response.json({ canTrade: true, balances: [] });
+          return Response.json({
+            canTrade: true,
+            balances: [{ asset: "USDT", free: "1000", locked: "0" }],
+          });
         case "/api/v3/openOrders":
         case "/api/v3/openOrderList":
         case "/api/v3/myTrades":
@@ -819,6 +845,7 @@ const asAssistant = {
 };
 const decision = (overrides: Record<string, unknown> = {}) => ({
   kind: "trade_proposal",
+  exchangeAccountId: owner.exchangeAccountId,
   proposal: {
     instrument: "BTC-USDT",
     marketKind: "spot",
@@ -869,7 +896,98 @@ test("the assistant's token records decisions and reaches nothing else", async (
   // The web server cannot record AI decisions.
   const forged = await call("/decisions", post("/decisions", decision()));
   assert.equal(forged.status, 403);
-  assert.equal(fake.calls.length, 0);
+  // Recording read the account's balance, and placed nothing.
+  assert.deepEqual([...new Set(fake.calls.map((url) => url.pathname))].sort(), [
+    "/api/v3/account",
+    "/api/v3/time",
+  ]);
+});
+
+test("a trade proposal names one of the customer's accounts that can trade, and its own balance pays for it", async (t) => {
+  const fake = binance();
+  const { call, json } = await serve(t, { exchange: fake.exchange });
+  const record = async (body: unknown) => {
+    const response = await call("/decisions", {
+      ...post("/decisions", body),
+      headers: asAssistant,
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const refusals = [
+    // No account at all.
+    [
+      (({ exchangeAccountId: _, ...rest }) => rest)(decision()),
+      /exchangeAccountId/,
+    ],
+    // An account the customer does not have, or another customer's.
+    [
+      {
+        ...decision(),
+        exchangeAccountId: "5a3b2c1d-0e9f-4a8b-9c7d-6e5f4a3b2cee",
+      },
+      /None of this customer's exchange accounts/,
+    ],
+    [
+      { ...decision(), exchangeAccountId: readOnlyAccount.id },
+      /read-only exchange account/,
+    ],
+    [
+      { ...decision(), exchangeAccountId: secondTestnetAccount.id },
+      /does not trade on Binance Spot Testnet · Second testnet yet/,
+    ],
+    // 0.02 × 59000 = 1180 USDT, more than the 1000 USDT free here.
+    [
+      decision({ quantity: "0.02" }),
+      /costs 1180 USDT, but Binance Spot Testnet has 1000 USDT free\. Only this account's own balance can pay for it: capital on another exchange account cannot\./,
+    ],
+  ] as const;
+  for (const [body, message] of refusals) {
+    const refused = await record(body);
+    assert.equal(refused.status, 400, String(message));
+    assert.match(refused.body.message, message);
+  }
+  // Nothing was recorded, and nothing placed.
+  assert.deepEqual((await json("/decisions")).decisions, []);
+  assert.equal(fake.count("/api/v3/orderList/opoco"), 0);
+  // Within the account's own balance, the draft is saved for that account.
+  const saved = await record(decision({ quantity: "0.0169" }));
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body.decision.proposal.status, "draft");
+});
+
+test("a live exchange account takes no proposals", async (t) => {
+  const live = testnetAccount(owner.exchangeAccountId, { mode: "live" });
+  const { call } = await serve(t, {
+    exchange: binance().exchange,
+    routes: createRoutes({
+      ...memory(),
+      directory: new MemoryReportingDirectory({ [owner.customerId]: [live] }),
+      now: () => 1_800_000_000_000,
+    }),
+  });
+  const response = await call("/decisions", {
+    ...post("/decisions", decision()),
+    headers: asAssistant,
+  });
+  assert.equal(response.status, 400);
+  assert.match((await response.json()).message, /live trading is turned off/);
+});
+
+test("without the customer's accounts, the worker records no trade proposal", async (t) => {
+  const { directory: _, ...stores } = memory();
+  const { call } = await serve(t, {
+    exchange: binance().exchange,
+    routes: createRoutes({ ...stores, now: () => 1_800_000_000_000 }),
+  });
+  const response = await call("/decisions", {
+    ...post("/decisions", decision()),
+    headers: asAssistant,
+  });
+  assert.equal(response.status, 400);
+  assert.match(
+    (await response.json()).message,
+    /cannot check exchange accounts/,
+  );
 });
 
 test("the assistant learns why a decision was not recorded", async (t) => {
@@ -969,4 +1087,115 @@ test("the web lists decisions, and a rejected proposal keeps its reason and cann
   assert.match(approval.outcome.message, /was rejected/);
   assert.equal(approval.proposal.status, "rejected");
   assert.equal(fake.count("/api/v3/orderList/opoco"), 0);
+});
+
+test("the portfolio lists the customer's accounts, which one the worker reads, and the reporting currency", async (t) => {
+  const listed = new Set(["USDC-USDT", "EUR-USDT", "BTC-USDT"]);
+  const portfolio = {
+    // Only Binance's markets are known here.
+    markets: async (venue: string) =>
+      venue === "binance-spot-testnet"
+        ? (instrument: string) => listed.has(instrument)
+        : undefined,
+    served: ownerOnly,
+  };
+  const binanceOnly = new MemoryReportingDirectory({
+    [owner.customerId]: [
+      testnetAccount(owner.exchangeAccountId),
+      secondTestnetAccount,
+    ],
+  });
+  const withHtx = memory();
+  const { call, json } = await serve(t, {
+    exchange: binance().exchange,
+    routes: createRoutes({ ...withHtx, portfolio }),
+  });
+  const read = (await json("/portfolio")).portfolio;
+  assert.equal(read.reportingCurrency, "USDT");
+  assert.deepEqual(
+    read.accounts.map(
+      (account: { id: string; access: string; served: boolean }) => [
+        account.id,
+        account.access,
+        account.served,
+      ],
+    ),
+    [
+      [owner.exchangeAccountId, "trade", true],
+      [readOnlyAccount.id, "read_only", false],
+      [secondTestnetAccount.id, "trade", false],
+    ],
+  );
+  // The worker cannot read HTX's markets, so only USDT, which needs no
+  // conversion there, is offered.
+  assert.deepEqual(
+    read.options
+      .filter((option: { available: boolean }) => option.available)
+      .map((option: { currency: string }) => option.currency),
+    ["USDT"],
+  );
+  const change = async (reportingCurrency: string, headers = {}) => {
+    const request = post("/settings/reporting-currency", { reportingCurrency });
+    const response = await call("/settings/reporting-currency", {
+      ...request,
+      headers: { ...request.headers, ...headers },
+    });
+    return {
+      status: response.status,
+      change: (await response.json()).change,
+    };
+  };
+  const refused = await change("EUR");
+  assert.equal(refused.change.result, "refused");
+  assert.match(
+    refused.change.message,
+    /EUR is not offered: htx · HTX savings cannot convert to it/,
+  );
+  assert.equal(refused.change.reportingCurrency, "USDT");
+  assert.deepEqual(withHtx.directory.changes, []);
+  // Only the offered currencies are requests at all, and only the web's.
+  assert.equal((await change("JPY")).status, 400);
+  assert.equal((await change("USDC", asAssistant)).status, 403);
+
+  // With Binance accounts only, every currency Binance can convert to is.
+  const { json: readOnly, call: callOnly } = await serve(t, {
+    exchange: binance().exchange,
+    routes: createRoutes({ ...memory(), directory: binanceOnly, portfolio }),
+  });
+  assert.deepEqual(
+    (await readOnly("/portfolio")).portfolio.options.map(
+      (option: { currency: string; available: boolean }) => [
+        option.currency,
+        option.available,
+      ],
+    ),
+    [
+      ["USDT", true],
+      ["USDC", true],
+      ["USD", false],
+      ["EUR", true],
+      ["GBP", false],
+    ],
+  );
+  const saved = await (
+    await callOnly(
+      "/settings/reporting-currency",
+      post("/settings/reporting-currency", { reportingCurrency: "EUR" }),
+    )
+  ).json();
+  assert.equal(saved.change.result, "saved");
+  assert.equal(
+    (await readOnly("/portfolio")).portfolio.reportingCurrency,
+    "EUR",
+  );
+  assert.deepEqual(binanceOnly.changes, [
+    { customerId: owner.customerId, reportingCurrency: "EUR" },
+  ]);
+  // Another customer sees none of the owner's accounts.
+  const stranger = await callOnly("/portfolio", {
+    headers: { "X-Customer-Id": "5a3b2c1d-0e9f-4a8b-9c7d-6e5f4a3b2cff" },
+  });
+  const { portfolio: theirs } = await stranger.json();
+  assert.deepEqual(theirs.accounts, []);
+  assert.equal(theirs.reportingCurrency, "USDT");
 });

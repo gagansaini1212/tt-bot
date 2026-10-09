@@ -226,9 +226,3 @@ export function exchangeAccountAccess(exchange: string): "trade" | "read_only" {
     ? "trade"
     : "read_only";
 }
-
-/** How the dashboard names the venue an exchange account is on. */
-export function venueName(exchange: string) {
-  const venue = venueIdSchema.safeParse(exchange);
-  return venue.success ? venueFor(venue.data).name : exchange;
-}

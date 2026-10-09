@@ -7,6 +7,7 @@ export * from "./execution-state";
 export * from "./manual-order";
 export * from "./market-catalogue";
 export * from "./order-rules";
+export * from "./portfolio";
 export * from "./settings";
 export * from "./strategies";
 export * from "./venues";

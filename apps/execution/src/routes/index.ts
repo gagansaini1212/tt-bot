@@ -1,3 +1,4 @@
+import type { ReportingDirectory } from "../reporting-directory";
 import { route, type Route } from "../http";
 import type { OrderIntentStore } from "../order-intents";
 import type { RiskLimitStore } from "../risk-limits";
@@ -10,6 +11,7 @@ import {
 import { execution, type ExecutionReader } from "./execution";
 import { depth, klines, tickers } from "./market";
 import { deskProvider, orders } from "./orders";
+import { portfolio, type PortfolioDependencies } from "./portfolio";
 import { settings, type SettingsDependencies } from "./settings";
 import { createSnapshotCache, snapshot } from "./snapshot";
 import { strategies as strategyRoutes } from "./strategies";
@@ -24,7 +26,10 @@ import type { Serializer } from "../manual-orders";
  * market data. Each call creates fresh caches; `now` is their clock. Without
  * `settings`, the Settings routes are left out, without `exchangeAccounts`,
  * the exchange account routes, without `proposals`, the AI decision routes,
- * and without `strategies`, the strategy routes.
+ * and without `strategies`, the strategy routes. `directory` lists the
+ * customer's exchange accounts for totals and the assistant's proposals:
+ * without it, the assistant's trade proposals are refused, and without
+ * `portfolio` too, the routes for totals across accounts are left out.
  * Dashboard placements and a strategy runner made with `exclusive` run one
  * at a time.
  */
@@ -36,12 +41,16 @@ export function createWorker({
   settings: settingsDependencies,
   exchangeAccounts,
   strategies,
+  directory,
+  portfolio: portfolioDependencies,
   exclusive,
   now = Date.now,
   env = process.env,
 }: {
   intents: OrderIntentStore;
   proposals?: TradeProposalStore;
+  directory?: ReportingDirectory;
+  portfolio?: Omit<PortfolioDependencies, "directory">;
   risk: Pick<
     RiskLimitStore,
     "current" | "dailyRiskUsed" | "allowedInstruments"
@@ -91,6 +100,7 @@ export function createWorker({
       ...desks,
       strategies,
       instruments: (scope) => risk.allowedInstruments(scope),
+      directory,
     });
     routes.push(
       route("POST", "/decisions", ai.record),
@@ -115,6 +125,18 @@ export function createWorker({
         "POST",
         "/settings/portfolio-limits",
         strategy.changePortfolioLimits,
+      ),
+    );
+  }
+  if (directory && portfolioDependencies) {
+    // Totals across exchange accounts, in the reporting currency.
+    const totals = portfolio({ directory, ...portfolioDependencies });
+    routes.push(
+      route("GET", "/portfolio", totals.read),
+      route(
+        "POST",
+        "/settings/reporting-currency",
+        totals.changeReportingCurrency,
       ),
     );
   }

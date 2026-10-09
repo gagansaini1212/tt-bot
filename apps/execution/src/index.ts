@@ -23,6 +23,10 @@ import {
 import { accountResolver } from "./accounts";
 import { ExchangeAccountStore } from "./exchange-accounts";
 import {
+  catalogueMarkets,
+  PostgresReportingDirectory,
+} from "./reporting-directory";
+import {
   ExchangeCredentialStore,
   NoAdapterError,
   privateKeyType,
@@ -201,15 +205,24 @@ async function main() {
       exclusive,
     });
     let loop: ExecutionLoop | undefined;
+    const exchangeAccounts = new ExchangeAccountStore(db);
     const worker = createWorker({
       intents,
       proposals,
       strategies,
+      // The customer's exchange accounts, for totals across them and the
+      // assistant's proposals. The resolver still decides which one this
+      // worker trades on.
+      directory: new PostgresReportingDirectory(db, exchangeAccounts),
+      portfolio: {
+        markets: catalogueMarkets(new Map([[markets.venue, markets]])),
+        served: accounts,
+      },
       exclusive,
       risk,
       reader: { state: (scope) => loop!.state(scope) },
       exchangeAccounts: {
-        accounts: new ExchangeAccountStore(db),
+        accounts: exchangeAccounts,
         keys: new ExchangeCredentialStore(db, box),
         exchanges,
         connect,

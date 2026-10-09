@@ -12,6 +12,7 @@
     "./manual-order": "./src/manual-order.ts",
     "./market-catalogue": "./src/market-catalogue.ts",
     "./order-rules": "./src/order-rules.ts",
+    "./portfolio": "./src/portfolio.ts",
     "./settings": "./src/settings.ts",
     "./spot-history-cache": "./src/spot-history-cache.ts",
     "./strategies": "./src/strategies.ts",

@@ -1,11 +1,19 @@
+import Decimal from "decimal.js";
 import {
-  aiDecisionRequestSchema,
+  assistantDecisionRequestSchema,
+  exchangeAccountName,
   rejectProposalRequestSchema,
+  type AssistantDecisionRequest,
   type BinanceSpotTestnet,
 } from "@crypto-trading/exchanges";
-import { instrumentLabel, type Instrument } from "@crypto-trading/domain";
+import {
+  instrumentAssets,
+  instrumentLabel,
+  type Instrument,
+} from "@crypto-trading/domain";
 import { z } from "zod";
 import type { AccountScope } from "../accounts";
+import type { ReportingDirectory } from "../reporting-directory";
 import { accountHandler, handler, RequestError } from "../http";
 import type { ManualOrderDesk } from "../manual-orders";
 import type { StrategyRunner } from "../strategy-runner";
@@ -19,6 +27,11 @@ const DECISION_LIMIT = 50;
  * assistant records decisions; the web server lists them and approves or
  * rejects proposals for the signed-in customer. An approval places the
  * proposal through the dashboard desk, which runs every check again first.
+ *
+ * A trade proposal names the exchange account it trades on (ADR 0009). It is
+ * recorded only if the customer owns that account, the account can trade,
+ * this worker trades on it, and its own free balance pays for the entry.
+ * Without `directory`, the worker cannot tell, so it records no proposal.
  */
 export function decisions({
   proposals,
@@ -27,10 +40,13 @@ export function decisions({
   disabledMessage,
   strategies,
   instruments,
+  directory,
 }: {
   proposals: TradeProposalStore;
   // The instruments an account allows. A decision about any other is refused.
   instruments: (scope: AccountScope) => Promise<Instrument[]>;
+  // The customer's exchange accounts.
+  directory?: Pick<ReportingDirectory, "accounts">;
   now: () => number;
   deskFor: (exchange: BinanceSpotTestnet) => ManualOrderDesk | undefined;
   disabledMessage: string;
@@ -45,14 +61,50 @@ export function decisions({
       .view(account, proposalId, clock())
       .then((view) => view ?? null)
       .catch(() => null);
+  /**
+   * The name of the account a proposal targets, once it is the customer's,
+   * can trade, and is the one this worker trades on. Throws what the
+   * assistant should fix otherwise.
+   */
+  const targetAccount = async (
+    account: AccountScope,
+    request: Extract<AssistantDecisionRequest, { kind: "trade_proposal" }>,
+  ) => {
+    if (!directory)
+      throw invalidDecision(
+        "This execution worker cannot check exchange accounts, so it records no trade proposals.",
+      );
+    const target = (await directory.accounts(account.customerId)).find(
+      (entry) => entry.id === request.exchangeAccountId,
+    );
+    if (!target)
+      throw invalidDecision(
+        "None of this customer's exchange accounts has that exchangeAccountId. Use the exchangeAccountId of an account in the client context.",
+      );
+    const name = exchangeAccountName(target);
+    if (target.access === "read_only")
+      throw invalidDecision(
+        `${name} is a read-only exchange account: the product monitors it but never trades on it. Propose on an account that can trade, or record no trade.`,
+      );
+    if (target.mode !== "simulation")
+      throw invalidDecision(
+        `${name} is a live account, and live trading is turned off.`,
+      );
+    if (target.id !== account.exchangeAccountId)
+      throw invalidDecision(
+        `The execution worker does not trade on ${name} yet, so it cannot check or place a proposal there.`,
+      );
+    return name;
+  };
+
   return {
-    record: accountHandler({
+    record: handler({
       caller: "assistant",
       query: z.strictObject({}),
       // Checked below, so the assistant learns what to fix.
       body: z.unknown(),
-      async handle({ body, account }) {
-        const parsed = aiDecisionRequestSchema.safeParse(body);
+      async handle({ body, account, exchange }) {
+        const parsed = assistantDecisionRequestSchema.safeParse(body);
         if (!parsed.success)
           throw invalidDecision(z.prettifyError(parsed.error));
         const request = parsed.data;
@@ -61,20 +113,27 @@ export function decisions({
           Date.parse(request.proposal.entryExpiresAt) <= now()
         )
           throw invalidDecision("The entry expiry must be in the future.");
-        const instrument =
-          request.kind === "trade_proposal"
-            ? request.proposal.instrument
-            : request.instrument;
-        if (instrument) {
-          const allowed = await instruments(account);
-          if (!allowed.includes(instrument))
+        const allowed = async (instrument: Instrument) => {
+          const tradable = await instruments(account);
+          if (!tradable.includes(instrument))
             throw invalidDecision(
-              `${instrumentLabel(instrument)} is not among this exchange account's allowed instruments: ${allowed.map(instrumentLabel).join(", ") || "none"}.`,
+              `${instrumentLabel(instrument)} is not among this exchange account's allowed instruments: ${tradable.map(instrumentLabel).join(", ") || "none"}.`,
             );
+        };
+        if (request.kind === "no_trade") {
+          if (request.instrument) await allowed(request.instrument);
+          return {
+            status: "connected",
+            decision: await proposals.record(account, request, clock()),
+          };
         }
+        const name = await targetAccount(account, request);
+        const { exchangeAccountId: _target, ...decision } = request;
+        await allowed(decision.proposal.instrument);
+        await paidByOwnBalance(exchange, name, decision.proposal);
         return {
           status: "connected",
-          decision: await proposals.record(account, request, clock()),
+          decision: await proposals.record(account, decision, clock()),
         };
       },
     }),
@@ -171,6 +230,28 @@ export function decisions({
       },
     }),
   };
+}
+
+/**
+ * Refuses a proposal that the target account's own free balance in the
+ * market's quote currency cannot pay for. Capital on another exchange
+ * account never pays for it, so no other account's balance is read.
+ */
+async function paidByOwnBalance(
+  exchange: Pick<BinanceSpotTestnet, "getAccount">,
+  name: string,
+  proposal: { instrument: Instrument; quantity: string; entryPrice: string },
+) {
+  const { quote } = instrumentAssets(proposal.instrument);
+  const { balances } = await exchange.getAccount();
+  const free = new Decimal(
+    balances.find((balance) => balance.asset === quote)?.free ?? "0",
+  );
+  const cost = new Decimal(proposal.quantity).times(proposal.entryPrice);
+  if (cost.greaterThan(free))
+    throw invalidDecision(
+      `The entry costs ${cost.toFixed()} ${quote}, but ${name} has ${free.toFixed()} ${quote} free. Only this account's own balance can pay for it: capital on another exchange account cannot.`,
+    );
 }
 
 function invalidDecision(message: string) {

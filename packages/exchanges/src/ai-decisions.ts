@@ -77,6 +77,25 @@ export const aiDecisionRequestSchema = z.discriminatedUnion("kind", [
 export type AiDecisionRequest = z.infer<typeof aiDecisionRequestSchema>;
 
 /**
+ * What the analysis assistant sends the worker to record. A trade proposal
+ * names the one exchange account it trades on (ADR 0009). The worker checks
+ * that the customer owns it, that it can trade, and that its own balances pay
+ * for the entry: capital on another exchange account never does.
+ */
+export const assistantDecisionRequestSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("trade_proposal"),
+    exchangeAccountId: z.uuid(),
+    proposal: tradeProposalDraftSchema,
+    ...decisionFields,
+  }),
+  aiDecisionRequestSchema.options[1],
+]);
+export type AssistantDecisionRequest = z.infer<
+  typeof assistantDecisionRequestSchema
+>;
+
+/**
  * Where a proposal stands, as the customer sees it.
  * - draft: waiting for the customer, until its entry expiry.
  * - approved: approved and saved, but Binance has not confirmed the order.
