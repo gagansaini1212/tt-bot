@@ -185,8 +185,8 @@ function AccountContent({
             <CardHeader>
               <CardTitle>Recent trades</CardTitle>
               <CardDescription>
-                Latest 10 fills across BTC/USDT and ETH/USDT. Prices and fees
-                are reported by Binance.
+                Latest 10 fills across the markets your account allows. Prices
+                and fees are reported by Binance.
               </CardDescription>
             </CardHeader>
             <CardContent className="overflow-x-auto">

@@ -14,19 +14,25 @@ import {
   type EntryIntent,
   type StrategyRules,
   type StrategyStatus,
+  instrumentLabel,
+  type Instrument,
+  instrumentSchema,
 } from "@crypto-trading/domain";
 import {
   aiSettingsSchema,
-  testnetInstrumentSchema,
   type AiSettings,
   type PortfolioLimitsState,
   type ProtectedEntry,
   type StrategyDraft,
-  type TestnetInstrument,
 } from "@crypto-trading/exchanges";
 import type { AccountScope } from "./accounts";
 import { TERMINAL_STATES, type EntryState } from "./entry-assessment";
 import { requestExitIn, requestStrategyExits } from "./execution-store";
+import {
+  instrumentRefusal,
+  selectAccountInstruments,
+  tradableInstruments,
+} from "./instrument-access";
 import { raiseNotification, type NewNotification } from "./notifications";
 import {
   audit,
@@ -69,7 +75,7 @@ export type StrategyEntry = {
   version: number;
   key: string | null;
   attempt: number | null;
-  instrument: TestnetInstrument;
+  instrument: Instrument;
   quantity: string;
   entryPrice: string;
   stopLossPrice: string;
@@ -298,7 +304,7 @@ export class StrategyStore {
    * sent, or sent without Binance confirming them, in `instrument`. Each
    * may hold one of Binance's stop orders on the symbol soon.
    */
-  inFlightEntries(scope: AccountScope, instrument: TestnetInstrument) {
+  inFlightEntries(scope: AccountScope, instrument: Instrument) {
     return this.#scoped(scope, async (tx) =>
       (
         await tx<{ id: string }[]>`
@@ -355,8 +361,19 @@ export class StrategyStore {
   }
 
   /**
+   * The instruments the exchange account can trade: allowed by its
+   * customer, and quoted in its accounting currency.
+   */
+  allowedInstruments(scope: AccountScope): Promise<Instrument[]> {
+    return this.#scoped(scope, async (tx) =>
+      tradableInstruments(await selectAccountInstruments(tx, scope)),
+    );
+  }
+
+  /**
    * Creates a strategy, running in simulation, from its first version and
-   * its allocation. It needs the portfolio's daily drawdown limit set.
+   * its allocation. It needs the portfolio's daily drawdown limit set, and
+   * may trade only instruments the exchange account allows.
    */
   create(
     scope: AccountScope,
@@ -370,6 +387,8 @@ export class StrategyStore {
           message:
             "Set the portfolio's daily drawdown limit in Settings → Risk limits before starting a strategy.",
         };
+      const refused = await disallowedInstruments(tx, scope, draft);
+      if (refused) return refused;
       const id = randomUUID();
       await tx`
         insert into strategies (
@@ -445,6 +464,8 @@ export class StrategyStore {
           message:
             "A new version keeps the strategy's kind. Create a new strategy for another kind.",
         };
+      const refused = await disallowedInstruments(tx, scope, draft);
+      if (refused) return refused;
       const version = current.version + 1;
       await insertVersion(tx, scope, strategyId, version, draft);
       // The old rules' close stays on the entries it already reached.
@@ -1006,18 +1027,24 @@ export class StrategyStore {
       `;
       if (owner)
         return refuse(
-          `${owner.name} holds the ${intent.instrument.replace("-", "/")} position on this account; a strategy waits until it holds nothing there.`,
+          `${owner.name} holds the ${instrumentLabel(intent.instrument)} position on this account; a strategy waits until it holds nothing there.`,
           true,
         );
       if (candidate.freeStopOrders <= 0)
         return refuse(
-          `Binance's limit on open stop orders for ${intent.instrument.replace("-", "/")} is full, so the entry could not be protected.`,
+          `Binance's limit on open stop orders for ${instrumentLabel(intent.instrument)} is full, so the entry could not be protected.`,
           true,
         );
       const limits = ruleLimits(strategy.rules);
-      const positionNotionalByInstrument: Partial<
-        Record<TestnetInstrument, string>
-      > = {};
+      // The rules' instruments, narrowed to those the account can trade now.
+      const account = await selectAccountInstruments(tx, scope);
+      const refusal = instrumentRefusal(account, intent.instrument);
+      if (refusal) return refuse(refusal);
+      const allowedInstruments = limits.allowedInstruments.filter(
+        (instrument) => !instrumentRefusal(account, instrument),
+      );
+      const positionNotionalByInstrument: Partial<Record<Instrument, string>> =
+        {};
       for (const entry of entries)
         positionNotionalByInstrument[entry.instrument] = new Decimal(
           positionNotionalByInstrument[entry.instrument] ?? 0,
@@ -1052,7 +1079,7 @@ export class StrategyStore {
           tradingMode: "simulation",
           strategyStatus: strategy.status as "simulation" | "active",
           liveTradingEnabled: false,
-          allowedInstruments: limits.allowedInstruments,
+          allowedInstruments,
           allocation: plain(allocation.amount),
           committedCapital: budget.committed,
           reservedBudget: budget.reserved,
@@ -1116,7 +1143,7 @@ export class StrategyStore {
         )
       `;
       const entry: ProtectedEntry = {
-        instrument: intent.instrument as TestnetInstrument,
+        instrument: intent.instrument as Instrument,
         quantity: intent.quantity,
         price: intent.entryPrice,
         timeInForce: "GTC",
@@ -1214,6 +1241,24 @@ export const ENDED_LABELS: Record<string, string> = {
   range_stop: "the market reached the range stop",
   above_range: "the market rose above the range",
 };
+
+/**
+ * Refuses a draft whose rules name an instrument the exchange account cannot
+ * trade. Whether the venue lists it is checked before, by the route.
+ */
+async function disallowedInstruments(
+  tx: Transaction,
+  scope: AccountScope,
+  draft: StrategyDraft,
+): Promise<ControlResult | undefined> {
+  const account = await selectAccountInstruments(tx, scope);
+  const refusal = ruleLimits(draft.rules)
+    .allowedInstruments.map((instrument) =>
+      instrumentRefusal(account, instrument),
+    )
+    .find(Boolean);
+  return refusal ? { result: "refused", message: refusal } : undefined;
+}
 
 function refused(message: string) {
   return { refused: message };
@@ -1401,7 +1446,7 @@ function selectEntries(
 }
 
 function toEntry(row: EntryRow): StrategyEntry | undefined {
-  const instrument = testnetInstrumentSchema.safeParse(row.instrument);
+  const instrument = instrumentSchema.safeParse(row.instrument);
   if (!instrument.success) return undefined;
   return {
     proposalId: row.id,

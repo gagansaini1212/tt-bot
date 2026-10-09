@@ -3,20 +3,22 @@
 import Decimal from "decimal.js";
 import { z } from "zod";
 import {
+  allowedInstrumentsSchema,
   authorizeTradeProposal,
   executionPolicySchema,
+  instrumentLabel,
+  instrumentSchema,
   type ExecutionPolicy,
   type TradeProposal,
 } from "@crypto-trading/domain";
-import type { TestnetOrder } from "./binance-spot-testnet";
+import { exchangeIdSchema, type ExchangeOrder } from "./contract";
+import { marketRulesSchema } from "./market-catalogue";
 import {
   floorToStep,
   isStrategyListId,
   listClientOrderIdSchema,
   protectedEntryFilterIssues,
   protectedLeg,
-  symbolRulesSchema,
-  testnetInstrumentSchema,
   type ProtectedEntry,
 } from "./order-rules";
 
@@ -27,7 +29,7 @@ const decimal = z
 const amount = decimal.refine((value) => /[1-9]/.test(value));
 
 const orderFields = {
-  instrument: testnetInstrumentSchema,
+  instrument: instrumentSchema,
   quantity: amount,
   stopLossPrice: amount,
   takeProfitPrice: amount,
@@ -55,8 +57,9 @@ export const manualOrderRequestSchema = z.discriminatedUnion("type", [
 export type ManualOrderRequest = z.infer<typeof manualOrderRequestSchema>;
 
 export const manualCancelRequestSchema = z.strictObject({
-  instrument: testnetInstrumentSchema,
-  orderId: z.number().int().nonnegative().refine(Number.isSafeInteger),
+  instrument: instrumentSchema,
+  // The venue's order ID, as the snapshot reports it.
+  orderId: exchangeIdSchema,
   // Required when the cancel leaves a filled quantity without exits.
   acceptUnprotected: z.boolean(),
 });
@@ -109,7 +112,7 @@ export const MANUAL_TESTNET_STRATEGY = {
 } as const;
 
 export const manualTradingConfigSchema = z.object({
-  allowedInstruments: z.array(testnetInstrumentSchema).min(1),
+  allowedInstruments: allowedInstrumentsSchema,
   allocation: amount,
   // From the customer's risk limits; the rest is the worker's configuration.
   maxOrderNotional: amount,
@@ -208,12 +211,12 @@ export function manualTestnetPolicy(
  * so are a strategy's entries, which its own allocation covers.
  */
 export function manualExposure(
-  orders: TestnetOrder[],
+  orders: ExchangeOrder[],
   entryPriceOf: (listClientOrderId: string) => string | undefined,
 ) {
   let reserved = new Decimal(0);
   let committed = new Decimal(0);
-  const exits = new Map<string, TestnetOrder[]>();
+  const exits = new Map<string, ExchangeOrder[]>();
   for (const order of orders) {
     const list = protectedLeg(order.clientOrderId)?.listClientOrderId;
     if (list && isStrategyListId(list)) continue;
@@ -224,8 +227,8 @@ export function manualExposure(
         new Decimal(order.origQty).minus(filled).times(price),
       );
       committed = committed.plus(filled.times(price));
-    } else if (order.orderListId >= 0 && order.status !== "PENDING_NEW") {
-      const key = `${order.symbol}:${order.orderListId}`;
+    } else if (order.orderListId !== null && order.status !== "PENDING_NEW") {
+      const key = `${order.instrument}:${order.orderListId}`;
       exits.set(key, [...(exits.get(key) ?? []), order]);
     }
   }
@@ -268,7 +271,7 @@ export const manualOrderTicketSchema = z.object({
   freeUsdt: decimal,
   // The best ask is the market entry's reference and the preview's price hint.
   markets: z.array(
-    z.object({ rules: symbolRulesSchema, bestAsk: amount.nullable() }),
+    z.object({ rules: marketRulesSchema, bestAsk: amount.nullable() }),
   ),
 });
 export type ManualOrderTicket = z.infer<typeof manualOrderTicketSchema>;
@@ -520,7 +523,7 @@ function stopPriceCheck(
     );
   return check(
     true,
-    `The worker holds this entry and sends it with its exits once ${request.instrument.replace("-", "/")} trades at or above ${stop.toFixed()}.`,
+    `The worker holds this entry and sends it with its exits once ${instrumentLabel(request.instrument)} trades at or above ${stop.toFixed()}.`,
   );
 }
 
@@ -529,13 +532,13 @@ function stopPriceCheck(
  * any order in it is cancelled. If that list's entry has filled, even partly,
  * the filled quantity is left without a take profit or stop loss.
  */
-export function cancelImpact(target: TestnetOrder, orders: TestnetOrder[]) {
+export function cancelImpact(target: ExchangeOrder, orders: ExchangeOrder[]) {
   const cancels =
-    target.orderListId < 0
+    target.orderListId === null
       ? [target]
       : orders.filter(
           (order) =>
-            order.symbol === target.symbol &&
+            order.instrument === target.instrument &&
             order.orderListId === target.orderListId,
         );
   const entry = cancels.find((order) => order.side === "BUY");
@@ -543,7 +546,7 @@ export function cancelImpact(target: TestnetOrder, orders: TestnetOrder[]) {
     (order) => order.side === "SELL" && order.status !== "PENDING_NEW",
   );
   const unprotected =
-    target.orderListId < 0
+    target.orderListId === null
       ? new Decimal(0)
       : entry
         ? new Decimal(entry.executedQty)

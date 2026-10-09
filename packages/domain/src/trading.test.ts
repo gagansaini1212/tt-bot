@@ -56,6 +56,29 @@ describe("authorizeTradeProposal", () => {
     });
   });
 
+  it("rejects a market outside the allowed instruments, though it is a valid name", () => {
+    for (const instrument of ["SOL-USDT", "ETH-BTC", "BTC-USD"]) {
+      const result = authorizeTradeProposal(
+        { ...proposal, instrument },
+        policy,
+        now,
+      );
+      assert.equal(result.allowed, false, instrument);
+      assert.equal(
+        !result.allowed && result.code,
+        "instrument_not_allowed",
+        instrument,
+      );
+    }
+    // A name that is not BASE-QUOTE is not a proposal at all.
+    const malformed = authorizeTradeProposal(
+      { ...proposal, instrument: "BTCUSDT" },
+      policy,
+      now,
+    );
+    assert.equal(!malformed.allowed && malformed.code, "invalid_proposal");
+  });
+
   it("rejects a proposal that would spend reserved capital", () => {
     const result = authorizeTradeProposal(
       { ...proposal, quantity: "0.02" },

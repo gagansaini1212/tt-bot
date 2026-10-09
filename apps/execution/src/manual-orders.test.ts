@@ -250,7 +250,7 @@ test("cancelling any leg cancels the list, and leaving a filled quantity bare ne
   assert.match(accepted.message, /0.0004 is held without exits/);
   assert.equal((await f.desk.cancel(request)).status, "not_open");
   assert.equal(
-    (await f.desk.cancel({ ...request, orderId: "1" })).status,
+    (await f.desk.cancel({ ...request, orderId: 1 })).status,
     "invalid",
   );
 });
@@ -330,7 +330,8 @@ test("dashboard orders stay off until every limit is configured explicitly", () 
   assert.equal(loaded.config.marketSlippage, null);
   for (const [key, value] of [
     ["TESTNET_MANUAL_INSTRUMENTS", ""],
-    ["TESTNET_MANUAL_INSTRUMENTS", "BTC-USDT,SOL-USDT"],
+    ["TESTNET_MANUAL_INSTRUMENTS", "BTC-USDT,btcusdt"],
+    ["TESTNET_MANUAL_INSTRUMENTS", "BTC-USDT,BTCUSDT"],
     ["TESTNET_MANUAL_ALLOCATION_USDT", ""],
     ["TESTNET_MANUAL_ALLOCATION_USDT", "0"],
     ["TESTNET_MARKET_MAX_SLIPPAGE_PERCENT", "6"],
@@ -498,4 +499,55 @@ test("a triggered stop-limit entry is claimed once, checked again and sent as a 
   assert.equal(refused?.status, "rejected");
   assert.equal(other.calls.place, 0);
   assert.equal(intents.intents.get("ct_stop_over")?.status, "rejected");
+});
+
+test("a market outside the account's allowed instruments is refused, whatever the worker trades", async () => {
+  const intents = new MemoryOrderIntents();
+  const f = deskFixture({
+    intents,
+    scope,
+    env: { TESTNET_MANUAL_INSTRUMENTS: "BTC-USDT,ETH-USDT,SOL-USDT" },
+    // The customer allows BTC-USDT only, narrower than the worker.
+    risk: new MemoryRiskLimits({
+      limits: TEST_RISK_LIMITS,
+      instruments: ["BTC-USDT"],
+    }),
+  });
+  const ticket = await f.desk.ticket();
+  assert.deepEqual(ticket.policy.allowedInstruments, ["BTC-USDT"]);
+  assert.deepEqual(
+    ticket.markets.map((entry) => entry.rules.instrument),
+    ["BTC-USDT"],
+  );
+  for (const instrument of ["ETH-USDT", "SOL-USDT"]) {
+    const outcome = await f.desk.place(
+      limit(`ct_out_${instrument.slice(0, 3)}`, {
+        instrument,
+        quantity: "0.01",
+        price: "3000",
+        takeProfitPrice: "3100",
+        stopLossPrice: "2900",
+      }),
+    );
+    assert.equal(outcome.status, "rejected", instrument);
+    const limits = outcome.checks?.find((check) => check.name === "limits");
+    assert.equal(limits?.passed, false);
+    assert.match(limits!.detail, /outside the strategy's allowed instruments/);
+  }
+  assert.equal(f.calls.place, 0);
+  assert.equal((await f.desk.place(limit("ct_in_btc"))).status, "working");
+
+  // An account that allows none of the worker's markets takes no orders.
+  const closed = deskFixture({
+    intents: new MemoryOrderIntents(),
+    scope,
+    risk: new MemoryRiskLimits({
+      limits: TEST_RISK_LIMITS,
+      instruments: ["SOL-USDT"],
+    }),
+  });
+  const refused = await closed.desk.place(limit("ct_none"));
+  assert.equal(refused.status, "rejected");
+  assert.match(refused.message, /allows none of the markets/);
+  assert.equal(closed.calls.place, 0);
 });

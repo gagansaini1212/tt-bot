@@ -3,6 +3,7 @@ import {
   rejectProposalRequestSchema,
   type BinanceSpotTestnet,
 } from "@crypto-trading/exchanges";
+import { instrumentLabel, type Instrument } from "@crypto-trading/domain";
 import { z } from "zod";
 import type { AccountScope } from "../accounts";
 import { accountHandler, handler, RequestError } from "../http";
@@ -25,8 +26,11 @@ export function decisions({
   deskFor,
   disabledMessage,
   strategies,
+  instruments,
 }: {
   proposals: TradeProposalStore;
+  // The instruments an account allows. A decision about any other is refused.
+  instruments: (scope: AccountScope) => Promise<Instrument[]>;
   now: () => number;
   deskFor: (exchange: BinanceSpotTestnet) => ManualOrderDesk | undefined;
   disabledMessage: string;
@@ -57,6 +61,17 @@ export function decisions({
           Date.parse(request.proposal.entryExpiresAt) <= now()
         )
           throw invalidDecision("The entry expiry must be in the future.");
+        const instrument =
+          request.kind === "trade_proposal"
+            ? request.proposal.instrument
+            : request.instrument;
+        if (instrument) {
+          const allowed = await instruments(account);
+          if (!allowed.includes(instrument))
+            throw invalidDecision(
+              `${instrumentLabel(instrument)} is not among this exchange account's allowed instruments: ${allowed.map(instrumentLabel).join(", ") || "none"}.`,
+            );
+        }
         return {
           status: "connected",
           decision: await proposals.record(account, request, clock()),

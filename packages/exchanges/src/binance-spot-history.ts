@@ -1,19 +1,18 @@
+import { instrumentSchema, type Instrument } from "@crypto-trading/domain";
 import { z } from "zod";
 import {
   binanceKlineSchema,
+  binanceMarketRules,
   exchangeInfoSchema,
-  klineIntervalSchema,
-  MAX_KLINE_LIMIT,
-  symbolRules,
-  type KlineInterval,
-  type TestnetKline,
 } from "./binance-spot-testnet";
 import {
-  binanceSymbol,
-  testnetInstrumentSchema,
-  type SymbolRules,
-  type TestnetInstrument,
-} from "./order-rules";
+  klineIntervalSchema,
+  MAX_KLINE_LIMIT,
+  type Kline,
+  type KlineInterval,
+} from "./contract";
+import type { MarketRules } from "./market-catalogue";
+import { binanceVenueSymbols } from "./venues";
 
 /**
  * Binance's market-data-only host. It serves public market data from the live
@@ -45,7 +44,7 @@ export class BinanceHistoryError extends Error {
 
 /** A market's filters, and the most stop orders an account may hold on it. */
 export type HistoricalSymbolFilters = {
-  rules: SymbolRules;
+  rules: MarketRules;
   maxStopOrders: number;
 };
 
@@ -119,17 +118,19 @@ export class BinanceSpotHistory {
    * covered. The latest candle may still be open: compare its close time.
    */
   async getKlines(
-    instrument: TestnetInstrument,
+    instrument: Instrument,
     interval: KlineInterval,
     startTime: number,
     endTime: number,
-  ): Promise<TestnetKline[]> {
-    const symbol = binanceSymbol(testnetInstrumentSchema.parse(instrument));
+  ): Promise<Kline[]> {
+    const symbol = binanceVenueSymbols.toVenueSymbol(
+      instrumentSchema.parse(instrument),
+    );
     const step = INTERVAL_MS[klineIntervalSchema.parse(interval)];
     if (!step) throw new RangeError(`History is not kept for ${interval}.`);
     z.int().nonnegative().parse(startTime);
     z.int().nonnegative().parse(endTime);
-    const klines: TestnetKline[] = [];
+    const klines: Kline[] = [];
     // Enough pages for the range, with one to spare, so a misbehaving
     // response cannot loop forever.
     const pages = Math.ceil((endTime - startTime) / step / MAX_KLINE_LIMIT) + 1;
@@ -158,9 +159,11 @@ export class BinanceSpotHistory {
 
   /** The market's current filters, from its exchange information. */
   async getSymbolFilters(
-    instrument: TestnetInstrument,
+    instrument: Instrument,
   ): Promise<HistoricalSymbolFilters> {
-    const symbol = binanceSymbol(testnetInstrumentSchema.parse(instrument));
+    const symbol = binanceVenueSymbols.toVenueSymbol(
+      instrumentSchema.parse(instrument),
+    );
     const { symbols } = await this.#get(
       "/api/v3/exchangeInfo",
       { symbol },
@@ -171,12 +174,14 @@ export class BinanceSpotHistory {
       .map((filter) => algoOrderFilterSchema.safeParse(filter))
       .find((filter) => filter.success);
     if (!info || !algo?.success) throw new BinanceHistoryError("unavailable");
-    let rules: SymbolRules;
+    let rules: MarketRules;
     try {
-      rules = symbolRules(instrument, info);
+      rules = binanceMarketRules(info);
     } catch {
       throw new BinanceHistoryError("unavailable");
     }
+    if (rules.instrument !== instrument)
+      throw new BinanceHistoryError("unavailable");
     return { rules, maxStopOrders: algo.data.maxNumAlgoOrders };
   }
 }

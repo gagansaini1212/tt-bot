@@ -3,13 +3,13 @@ import { z } from "zod";
 
 import { customerIdFrom } from "../lib/customer-principal";
 import { recordDecision } from "../lib/decisions";
+import { instrument } from "../lib/instrument";
 
 export default defineTool({
   description:
     "Record a decision not to trade, with its rationale, when your analysis of whether to trade concludes that no trade is warranted. It is shown on the Activity page.",
   inputSchema: z.object({
-    instrument: z
-      .enum(["BTC-USDT", "ETH-USDT"])
+    instrument: instrument
       .optional()
       .describe("The instrument you decided not to trade, if one."),
     sourceSnapshotId: z

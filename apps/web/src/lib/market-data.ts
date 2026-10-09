@@ -1,14 +1,14 @@
 import "server-only";
+import { type Instrument } from "@crypto-trading/domain";
 import {
   depthSchema,
   klineSchema,
   MAX_TICKER_FILTER,
   tickerSchema,
   type KlineInterval,
-  type TestnetDepth,
-  type TestnetInstrument,
-  type TestnetKline,
-  type TestnetTicker,
+  type Depth,
+  type Kline,
+  type Ticker,
 } from "@crypto-trading/exchanges";
 import { z } from "zod";
 import {
@@ -37,7 +37,7 @@ async function read<T extends object>(
  */
 export async function getMarketTickers(
   symbols?: readonly string[],
-): Promise<WorkerState<{ tickers: TestnetTicker[] }>> {
+): Promise<WorkerState<{ tickers: Ticker[] }>> {
   if (symbols?.length === 0) return { status: "connected", tickers: [] };
   // Longer lists exceed the worker's filter, so filter every ticker here.
   const filtered = symbols && symbols.length <= MAX_TICKER_FILTER;
@@ -59,10 +59,10 @@ export async function getMarketTickers(
  * for up to 5 seconds. The last candle is still open.
  */
 export async function getMarketKlines(
-  instrument: TestnetInstrument,
+  instrument: Instrument,
   interval: KlineInterval,
   limit?: number,
-): Promise<WorkerState<{ klines: TestnetKline[] }>> {
+): Promise<WorkerState<{ klines: Kline[] }>> {
   return read({
     path: "/market/klines",
     query: { instrument, interval, limit },
@@ -72,9 +72,9 @@ export async function getMarketKlines(
 
 /** The best `limit` bids and asks (1 to 100, default 100), cached for up to 1 second. */
 export async function getMarketDepth(
-  instrument: TestnetInstrument,
+  instrument: Instrument,
   limit?: number,
-): Promise<WorkerState<{ depth: TestnetDepth }>> {
+): Promise<WorkerState<{ depth: Depth }>> {
   return read({
     path: "/market/depth",
     query: { instrument, limit },

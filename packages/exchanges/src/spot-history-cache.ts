@@ -1,23 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import type { Instrument } from "@crypto-trading/domain";
 import { z } from "zod";
 import {
   BinanceSpotHistory,
   type HistoricalSymbolFilters,
 } from "./binance-spot-history";
-import { klineSchema, type TestnetKline } from "./binance-spot-testnet";
-import {
-  binanceSymbol,
-  symbolRulesSchema,
-  type TestnetInstrument,
-} from "./order-rules";
+import { klineSchema, type Kline } from "./contract";
+import { marketRulesSchema } from "./market-catalogue";
+import { binanceVenueSymbols } from "./venues";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
 const filtersSchema = z.object({
-  rules: symbolRulesSchema,
+  rules: marketRulesSchema,
   maxStopOrders: z.int().positive(),
 });
 
@@ -51,10 +49,10 @@ export class SpotHistoryCache {
     this.#now = options.now ?? Date.now;
   }
 
-  #path(instrument: TestnetInstrument, kind: "1h" | "filters", day: number) {
+  #path(instrument: Instrument, kind: "1h" | "filters", day: number) {
     return resolve(
       this.directory,
-      binanceSymbol(instrument),
+      binanceVenueSymbols.toVenueSymbol(instrument),
       kind,
       `${utcDate(day)}.json`,
     );
@@ -88,10 +86,10 @@ export class SpotHistoryCache {
    * of requests per gap.
    */
   async hourlyKlines(
-    instrument: TestnetInstrument,
+    instrument: Instrument,
     start: number,
     end: number,
-  ): Promise<TestnetKline[]> {
+  ): Promise<Kline[]> {
     const now = this.#now();
     const days: number[] = [];
     for (
@@ -100,7 +98,7 @@ export class SpotHistoryCache {
       day += DAY_MS
     )
       days.push(day);
-    const byDay = new Map<number, TestnetKline[]>();
+    const byDay = new Map<number, Kline[]>();
     for (const day of days) {
       const cached = await this.#read(
         this.#path(instrument, "1h", day),
@@ -144,7 +142,7 @@ export class SpotHistoryCache {
 
   /** The market's filters, read at most once a UTC day. */
   async symbolFilters(
-    instrument: TestnetInstrument,
+    instrument: Instrument,
   ): Promise<HistoricalSymbolFilters> {
     const path = this.#path(instrument, "filters", this.#now());
     const cached = await this.#read(path, filtersSchema);
@@ -156,7 +154,7 @@ export class SpotHistoryCache {
 }
 
 /** All 24 hourly candles of the day starting at `day`, in order. */
-function isWholeDay(klines: readonly TestnetKline[], day: number) {
+function isWholeDay(klines: readonly Kline[], day: number) {
   return (
     klines.length === 24 &&
     klines.every((kline, hour) => kline.openTime === day + hour * HOUR_MS)

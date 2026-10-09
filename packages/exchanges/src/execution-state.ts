@@ -1,10 +1,7 @@
 // Browser-safe: what the execution worker's loop reports to the dashboard.
+import { instrumentSchema } from "@crypto-trading/domain";
 import { z } from "zod";
-import {
-  listClientOrderIdSchema,
-  positiveDecimal,
-  testnetInstrumentSchema,
-} from "./order-rules";
+import { listClientOrderIdSchema, positiveDecimal } from "./order-rules";
 
 const decimal = z.string().regex(/^\d+(\.\d+)?$/);
 
@@ -26,7 +23,7 @@ export const exitReasonSchema = z.string().regex(/^[a-z_]{1,40}$/);
 /** A protected entry that holds quantity the worker is selling, or must. */
 export const entryAlertSchema = z.object({
   listClientOrderId: listClientOrderIdSchema,
-  instrument: testnetInstrumentSchema,
+  instrument: instrumentSchema,
   state: z.enum(["unprotected", "exiting", "protected", "partly_filled"]),
   heldQuantity: decimal,
   exitReason: exitReasonSchema.nullable(),
@@ -42,7 +39,7 @@ export type EntryAlert = z.infer<typeof entryAlertSchema>;
 /** A stop-limit entry the worker holds until its stop price trades. */
 export const stopTriggerSchema = z.object({
   listClientOrderId: listClientOrderIdSchema,
-  instrument: testnetInstrumentSchema,
+  instrument: instrumentSchema,
   stopPrice: positiveDecimal,
   price: positiveDecimal,
   quantity: positiveDecimal,

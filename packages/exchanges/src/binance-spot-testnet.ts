@@ -1,33 +1,58 @@
 import { createHmac, createPrivateKey, sign } from "node:crypto";
+import { instrumentFor, type Instrument } from "@crypto-trading/domain";
 import { z } from "zod";
 import {
-  binanceSymbol,
-  instrumentForSymbol,
+  ExchangeError,
+  klineIntervalSchema,
+  limitOrderSchema,
+  marketSellSchema,
+  MAX_DEPTH_LIMIT,
+  MAX_KLINE_LIMIT,
+  MAX_TICKER_SYMBOLS,
+  tickerSchema,
+  tickerSymbolSchema,
+  type ExchangeFill,
+  type ExchangeOrder,
+  type ExchangeOrderList,
+  type ExchangeOrderListReport,
+  type AccountSnapshot,
+  type KlineInterval,
+  type LimitOrderRequest,
+  type MarketSellRequest,
+  type TradingAdapter,
+} from "./contract";
+import {
+  MarketCatalogue,
+  marketRulesSchema,
+  type MarketRules,
+} from "./market-catalogue";
+import {
   positiveDecimal,
   protectedEntrySchema,
   protectedLegIds,
-  symbolRulesSchema,
-  testnetInstrumentSchema,
   type ProtectedEntry,
-  type SymbolRules,
-  type TestnetInstrument,
 } from "./order-rules";
+import { binanceClientOrderIds, binanceVenueSymbols } from "./venues";
 
 // Deliberately fixed: this adapter cannot be configured to send real orders.
 export const BINANCE_SPOT_TESTNET_URL = "https://testnet.binance.vision";
+const VENUE = "binance-spot-testnet";
 const decimal = z.string().regex(/^\d+(\.\d+)?$/);
+// Binance's IDs are JSON numbers. Larger ones would lose digits.
 const id = z.number().int().nonnegative().refine(Number.isSafeInteger);
 
-export const balanceSchema = z.object({
+// Binance's own response shapes. Only this module sees them: the adapter
+// returns the normalized shapes of ./contract.
+const binanceBalanceSchema = z.object({
   asset: z.string(),
   free: decimal,
   locked: decimal,
 });
 const accountSchema = z.object({
   canTrade: z.boolean(),
-  balances: z.array(balanceSchema),
+  balances: z.array(binanceBalanceSchema),
 });
-export const orderSchema = z.object({
+const binanceOrderSchema = z.object({
   symbol: z.string(),
   orderId: id,
   clientOrderId: z.string(),
@@ -46,10 +71,10 @@ export const orderSchema = z.object({
     .min(-1)
     .refine(Number.isSafeInteger)
     .default(-1),
-  // Set for stop-loss and take-profit orders, which trigger at this price.
   stopPrice: decimal.optional(),
 });
-export const orderListSchema = z.object({
+type BinanceOrder = z.infer<typeof binanceOrderSchema>;
+const binanceOrderListSchema = z.object({
   orderListId: id,
   contingencyType: z.string(),
   listStatusType: z.string(),
@@ -60,10 +85,11 @@ export const orderListSchema = z.object({
     z.object({ symbol: z.string(), orderId: id, clientOrderId: z.string() }),
   ),
 });
-const orderListReportSchema = orderListSchema.extend({
-  orderReports: z.array(orderSchema),
+type BinanceOrderList = z.infer<typeof binanceOrderListSchema>;
+const binanceOrderListReportSchema = binanceOrderListSchema.extend({
+  orderReports: z.array(binanceOrderSchema),
 });
-export const fillSchema = z.object({
+const binanceFillSchema = z.object({
   symbol: z.string(),
   id,
   orderId: id,
@@ -75,110 +101,8 @@ export const fillSchema = z.object({
   time: id,
   isBuyer: z.boolean(),
 });
-export const limitOrderSchema = z.object({
-  instrument: testnetInstrumentSchema,
-  side: z.enum(["BUY", "SELL"]),
-  quantity: positiveDecimal,
-  price: positiveDecimal,
-  // A caller-supplied identifier is needed to reconcile unknown outcomes.
-  clientOrderId: z.string().regex(/^ct_[A-Za-z0-9_-]{1,33}$/),
-});
-export type TestnetLimitOrder = z.infer<typeof limitOrderSchema>;
-/**
- * A market sell the worker sends to close a protected entry's quantity, such
- * as one whose exits Binance dropped, or one past its holding deadline.
- */
-export const marketSellSchema = z.object({
-  instrument: testnetInstrumentSchema,
-  quantity: positiveDecimal,
-  clientOrderId: z.string().regex(/^ct_[A-Za-z0-9_-]{1,33}$/),
-});
-export type TestnetMarketSell = z.infer<typeof marketSellSchema>;
-export type TestnetOrder = z.infer<typeof orderSchema>;
-export type TestnetOrderList = z.infer<typeof orderListSchema>;
-export type TestnetOrderListReport = z.infer<typeof orderListReportSchema>;
-export type TestnetFill = z.infer<typeof fillSchema>;
-export const testnetSnapshotSchema = z.object({
-  provider: z.literal("binance-spot-testnet"),
-  capturedAt: z.iso.datetime(),
-  canTrade: z.boolean(),
-  balances: z.array(balanceSchema),
-  orders: z.array(orderSchema),
-  // Open order lists on BTC/USDT and ETH/USDT, and the legs Binance holds
-  // back until the list's entry fills, which may be missing from `orders`.
-  orderLists: z.array(orderListSchema).default([]),
-  pendingOrders: z.array(orderSchema).default([]),
-  fills: z.array(fillSchema),
-});
-export type TestnetSnapshot = z.infer<typeof testnetSnapshotSchema>;
+type BinanceFill = z.infer<typeof binanceFillSchema>;
 
-// Public market data. Prices and quantities stay decimal strings.
-const signedDecimal = z.string().regex(/^-?\d+(\.\d+)?$/);
-// Binance lists some symbols in non-Latin scripts. This still rejects
-// lowercase, separators and anything that needs escaping.
-export const tickerSymbolSchema = z
-  .string()
-  .regex(/^[\p{Lu}\p{Lo}\p{Nd}]{2,20}$/u);
-export const MAX_TICKER_SYMBOLS = 100;
-// Symbols per worker /market/tickers request, which filters its list of all
-// tickers. Shared here so the web client can stay under it.
-export const MAX_TICKER_FILTER = 500;
-export const klineIntervalSchema = z.enum([
-  "1m",
-  "3m",
-  "5m",
-  "15m",
-  "30m",
-  "1h",
-  "2h",
-  "4h",
-  "6h",
-  "8h",
-  "12h",
-  "1d",
-  "3d",
-  "1w",
-  "1M",
-]);
-export type KlineInterval = z.infer<typeof klineIntervalSchema>;
-export const MAX_KLINE_LIMIT = 1000;
-// Depth limits up to 100 cost Binance's lowest request weight.
-export const MAX_DEPTH_LIMIT = 100;
-export const tickerSchema = z.object({
-  symbol: z.string(),
-  lastPrice: decimal,
-  openPrice: decimal,
-  highPrice: decimal,
-  lowPrice: decimal,
-  priceChange: signedDecimal,
-  priceChangePercent: signedDecimal,
-  // Base-asset volume; quoteVolume is in the quote asset, e.g. USDT.
-  volume: decimal,
-  quoteVolume: decimal,
-  openTime: id,
-  closeTime: id,
-});
-export type TestnetTicker = z.infer<typeof tickerSchema>;
-export const klineSchema = z.object({
-  openTime: id,
-  open: decimal,
-  high: decimal,
-  low: decimal,
-  close: decimal,
-  volume: decimal,
-  closeTime: id,
-  quoteVolume: decimal,
-  trades: id,
-});
-export type TestnetKline = z.infer<typeof klineSchema>;
-const depthLevelSchema = z.object({ price: decimal, quantity: decimal });
-export const depthSchema = z.object({
-  lastUpdateId: id,
-  // Best price first on both sides.
-  bids: z.array(depthLevelSchema),
-  asks: z.array(depthLevelSchema),
-});
-export type TestnetDepth = z.infer<typeof depthSchema>;
 // Binance sends klines and depth levels as positional arrays.
 export const binanceKlineSchema = z
   .tuple(
@@ -219,30 +143,71 @@ const binanceDepthSchema = z.object({
   asks: binanceLevelsSchema,
 });
 
-export interface SpotTestnetExchange {
-  getAccount(): Promise<z.infer<typeof accountSchema>>;
-  getOpenOrders(instrument: TestnetInstrument): Promise<TestnetOrder[]>;
-  getFills(instrument: TestnetInstrument): Promise<TestnetFill[]>;
-  getOrder(
-    instrument: TestnetInstrument,
-    clientOrderId: string,
-  ): Promise<TestnetOrder>;
-  testLimitOrder(order: TestnetLimitOrder): Promise<void>;
-  placeLimitOrder(order: TestnetLimitOrder): Promise<TestnetOrder>;
-  cancelOrder(
-    instrument: TestnetInstrument,
-    clientOrderId: string,
-  ): Promise<TestnetOrder>;
-  getTickers(symbols?: readonly string[]): Promise<TestnetTicker[]>;
-  getKlines(
-    instrument: TestnetInstrument,
-    interval: KlineInterval,
-    limit?: number,
-  ): Promise<TestnetKline[]>;
-  getDepth(
-    instrument: TestnetInstrument,
-    limit?: number,
-  ): Promise<TestnetDepth>;
+// The application's IDs for orders and lists it placed; the venue's own for
+// any other.
+const appId = (venueClientOrderId: string) =>
+  binanceClientOrderIds.fromVenue(venueClientOrderId) ?? venueClientOrderId;
+
+function toOrder(raw: BinanceOrder, instrument: Instrument): ExchangeOrder {
+  return {
+    instrument,
+    orderId: String(raw.orderId),
+    clientOrderId: appId(raw.clientOrderId),
+    price: raw.price,
+    origQty: raw.origQty,
+    executedQty: raw.executedQty,
+    cumulativeQuoteQty: raw.cummulativeQuoteQty,
+    status: raw.status,
+    type: raw.type,
+    side: raw.side,
+    orderListId: raw.orderListId < 0 ? null : String(raw.orderListId),
+    ...(raw.stopPrice === undefined ? {} : { stopPrice: raw.stopPrice }),
+  };
+}
+
+function toOrderList(
+  raw: BinanceOrderList,
+  instrument: Instrument,
+): ExchangeOrderList {
+  return {
+    instrument,
+    orderListId: String(raw.orderListId),
+    contingencyType: raw.contingencyType,
+    listStatusType: raw.listStatusType,
+    listOrderStatus: raw.listOrderStatus,
+    listClientOrderId: appId(raw.listClientOrderId),
+    // A list holds orders on one symbol.
+    orders: raw.orders.map((leg) => ({
+      instrument,
+      orderId: String(leg.orderId),
+      clientOrderId: appId(leg.clientOrderId),
+    })),
+  };
+}
+
+function toOrderListReport(
+  raw: z.infer<typeof binanceOrderListReportSchema>,
+  instrument: Instrument,
+): ExchangeOrderListReport {
+  return {
+    ...toOrderList(raw, instrument),
+    orderReports: raw.orderReports.map((order) => toOrder(order, instrument)),
+  };
+}
+
+function toFill(raw: BinanceFill, instrument: Instrument): ExchangeFill {
+  return {
+    instrument,
+    id: String(raw.id),
+    orderId: String(raw.orderId),
+    price: raw.price,
+    qty: raw.qty,
+    quoteQty: raw.quoteQty,
+    commission: raw.commission,
+    commissionAsset: raw.commissionAsset,
+    time: raw.time,
+    isBuyer: raw.isBuyer,
+  };
 }
 
 // Rejection reasons from Binance's error documentation. Other messages are
@@ -267,24 +232,37 @@ function documentedRejection(message: unknown) {
     : undefined;
 }
 
-export class BinanceTestnetError extends Error {
+// Binance's "Order does not exist."
+const NO_SUCH_ORDER = -2013;
+
+/** An ExchangeError from Binance Spot Testnet, with Binance's numeric code. */
+export class BinanceTestnetError extends ExchangeError {
+  declare readonly code?: number;
+
   constructor(
-    public readonly kind:
-      "rejected" | "unavailable" | "rate_limited" | "unknown_outcome",
-    public readonly code?: number,
-    public readonly retryAfterSeconds?: number,
-    public readonly reason?: string,
+    kind: ExchangeError["kind"],
+    code?: number,
+    retryAfterSeconds?: number,
+    reason?: string,
   ) {
-    super(
-      kind === "unknown_outcome"
-        ? "Binance testnet outcome is unknown. Query the client order ID before taking further action."
-        : `Binance testnet request ${kind}${code === undefined ? "" : ` (code ${code})`}.${reason ? ` ${reason}` : ""}`,
-    );
+    super(kind, {
+      venue: VENUE,
+      code,
+      retryAfterSeconds,
+      reason,
+      orderNotFound: kind === "rejected" && code === NO_SUCH_ORDER,
+      message:
+        kind === "unknown_outcome"
+          ? "Binance testnet outcome is unknown. Query the client order ID before taking further action."
+          : `Binance testnet request ${kind}${code === undefined ? "" : ` (code ${code})`}.${reason ? ` ${reason}` : ""}`,
+    });
     this.name = "BinanceTestnetError";
   }
 }
 
-export class BinanceSpotTestnet implements SpotTestnetExchange {
+export class BinanceSpotTestnet implements TradingAdapter {
+  readonly venue = VENUE;
+  readonly markets: MarketCatalogue;
   // Unset on a public market data client.
   readonly #apiKey?: string;
   readonly #signPayload?: (payload: string) => string;
@@ -301,10 +279,25 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
       // Public market data needs no key. Signed requests then throw before
       // anything is sent.
       | { publicData: true }
-    ) & { fetch?: typeof fetch; now?: () => number },
+    ) & {
+      fetch?: typeof fetch;
+      now?: () => number;
+      // The venue's catalogue, shared with its other clients. Without one,
+      // this client keeps its own.
+      markets?: MarketCatalogue;
+    },
   ) {
     this.#fetch = options.fetch ?? fetch;
     this.#now = options.now ?? Date.now;
+    this.markets =
+      options.markets ??
+      new MarketCatalogue({
+        venue: VENUE,
+        load: () => this.loadMarkets(),
+        now: this.#now,
+      });
+    if (this.markets.venue !== VENUE)
+      throw new Error("The market catalogue belongs to another venue.");
     if ("publicData" in options) return;
     if (
       !options.apiKey.trim() ||
@@ -465,6 +458,13 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
     return parsed.data;
   }
 
+  /** The instrument a Binance symbol names, from the catalogue. */
+  async #instrumentFor(symbol: string) {
+    const instrument = await this.markets.instrumentForVenueSymbol(symbol);
+    if (!instrument) throw new BinanceTestnetError("unavailable");
+    return instrument;
+  }
+
   getAccount() {
     return this.#request(
       "GET",
@@ -473,31 +473,36 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
       accountSchema,
     );
   }
-  getOpenOrders(instrument: TestnetInstrument) {
-    return this.#request(
+  async getOpenOrders(instrument: Instrument) {
+    const orders = await this.#request(
       "GET",
       "/api/v3/openOrders",
       { symbol: symbol(instrument) },
-      z.array(orderSchema),
+      z.array(binanceOrderSchema),
     );
+    return orders.map((order) => toOrder(order, instrument));
   }
-  getFills(instrument: TestnetInstrument) {
-    return this.#request(
+  async getFills(instrument: Instrument) {
+    const fills = await this.#request(
       "GET",
       "/api/v3/myTrades",
       { symbol: symbol(instrument), limit: "50" },
-      z.array(fillSchema),
+      z.array(binanceFillSchema),
+    );
+    return fills.map((fill) => toFill(fill, instrument));
+  }
+  async getOrder(instrument: Instrument, clientOrderId: string) {
+    return toOrder(
+      await this.#request(
+        "GET",
+        "/api/v3/order",
+        orderIdentifier(instrument, clientOrderId),
+        binanceOrderSchema,
+      ),
+      instrument,
     );
   }
-  getOrder(instrument: TestnetInstrument, clientOrderId: string) {
-    return this.#request(
-      "GET",
-      "/api/v3/order",
-      orderIdentifier(instrument, clientOrderId),
-      orderSchema,
-    );
-  }
-  async testLimitOrder(order: TestnetLimitOrder) {
+  async testLimitOrder(order: LimitOrderRequest) {
     await this.#request(
       "POST",
       "/api/v3/order/test",
@@ -505,20 +510,27 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
       z.object({}),
     );
   }
-  placeLimitOrder(order: TestnetLimitOrder) {
-    return this.#request(
-      "POST",
-      "/api/v3/order",
-      orderParameters(order),
-      orderSchema,
+  async placeLimitOrder(raw: LimitOrderRequest) {
+    const order = limitOrderSchema.parse(raw);
+    return toOrder(
+      await this.#request(
+        "POST",
+        "/api/v3/order",
+        orderParameters(order),
+        binanceOrderSchema,
+      ),
+      order.instrument,
     );
   }
-  cancelOrder(instrument: TestnetInstrument, clientOrderId: string) {
-    return this.#request(
-      "DELETE",
-      "/api/v3/order",
-      orderIdentifier(instrument, clientOrderId),
-      orderSchema,
+  async cancelOrder(instrument: Instrument, clientOrderId: string) {
+    return toOrder(
+      await this.#request(
+        "DELETE",
+        "/api/v3/order",
+        orderIdentifier(instrument, clientOrderId),
+        binanceOrderSchema,
+      ),
+      instrument,
     );
   }
   /** 24h statistics for every symbol, or for up to 100 listed symbols. */
@@ -535,11 +547,7 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
     );
   }
   /** The most recent candles, oldest first. */
-  getKlines(
-    instrument: TestnetInstrument,
-    interval: KlineInterval,
-    limit = 500,
-  ) {
+  getKlines(instrument: Instrument, interval: KlineInterval, limit = 500) {
     return this.#request(
       "GET",
       "/api/v3/klines",
@@ -552,7 +560,7 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
       false,
     );
   }
-  getDepth(instrument: TestnetInstrument, limit = MAX_DEPTH_LIMIT) {
+  getDepth(instrument: Instrument, limit = MAX_DEPTH_LIMIT) {
     return this.#request(
       "GET",
       "/api/v3/depth",
@@ -564,24 +572,30 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
       false,
     );
   }
-  async getOrderById(instrument: TestnetInstrument, orderId: number) {
-    return this.#request(
-      "GET",
-      "/api/v3/order",
-      { symbol: symbol(instrument), orderId: String(id.parse(orderId)) },
-      orderSchema,
+  async getOrderById(instrument: Instrument, orderId: string) {
+    return toOrder(
+      await this.#request(
+        "GET",
+        "/api/v3/order",
+        { symbol: symbol(instrument), orderId: binanceId(orderId) },
+        binanceOrderSchema,
+      ),
+      instrument,
     );
   }
-  async cancelOrderById(instrument: TestnetInstrument, orderId: number) {
-    return this.#request(
-      "DELETE",
-      "/api/v3/order",
-      { symbol: symbol(instrument), orderId: String(id.parse(orderId)) },
-      orderSchema,
+  async cancelOrderById(instrument: Instrument, orderId: string) {
+    return toOrder(
+      await this.#request(
+        "DELETE",
+        "/api/v3/order",
+        { symbol: symbol(instrument), orderId: binanceId(orderId) },
+        binanceOrderSchema,
+      ),
+      instrument,
     );
   }
   /** The latest traded price, which Binance also triggers stop orders on. */
-  async getLastPrice(instrument: TestnetInstrument) {
+  async getLastPrice(instrument: Instrument) {
     const { price } = await this.#request(
       "GET",
       "/api/v3/ticker/price",
@@ -592,36 +606,40 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
     return price;
   }
   /** Every fill of one order. */
-  getOrderFills(instrument: TestnetInstrument, orderId: number) {
-    return this.#request(
+  async getOrderFills(instrument: Instrument, orderId: string) {
+    const fills = await this.#request(
       "GET",
       "/api/v3/myTrades",
       {
         symbol: symbol(instrument),
-        orderId: String(id.parse(orderId)),
+        orderId: binanceId(orderId),
         limit: "1000",
       },
-      z.array(fillSchema),
+      z.array(binanceFillSchema),
     );
+    return fills.map((fill) => toFill(fill, instrument));
   }
   /**
    * Sells at market. It closes a position at whatever the book pays, so only
    * the worker's exits use it.
    */
-  async placeMarketSell(raw: TestnetMarketSell) {
+  async placeMarketSell(raw: MarketSellRequest) {
     const order = marketSellSchema.parse(raw);
-    return this.#request(
-      "POST",
-      "/api/v3/order",
-      {
-        symbol: symbol(order.instrument),
-        side: "SELL",
-        type: "MARKET",
-        quantity: order.quantity,
-        newClientOrderId: order.clientOrderId,
-        newOrderRespType: "RESULT",
-      },
-      orderSchema,
+    return toOrder(
+      await this.#request(
+        "POST",
+        "/api/v3/order",
+        {
+          symbol: symbol(order.instrument),
+          side: "SELL",
+          type: "MARKET",
+          quantity: order.quantity,
+          newClientOrderId: clientId(order.clientOrderId),
+          newOrderRespType: "RESULT",
+        },
+        binanceOrderSchema,
+      ),
+      order.instrument,
     );
   }
   /** Validates the entry leg without placing it. Binance has no test endpoint for order lists. */
@@ -637,7 +655,9 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
         timeInForce: order.timeInForce,
         quantity: order.quantity,
         price: order.price,
-        newClientOrderId: protectedLegIds(order.listClientOrderId).entry,
+        newClientOrderId: clientId(
+          protectedLegIds(order.listClientOrderId).entry,
+        ),
       },
       z.object({}),
     );
@@ -650,139 +670,176 @@ export class BinanceSpotTestnet implements SpotTestnetExchange {
   async placeProtectedEntry(entry: ProtectedEntry) {
     const order = protectedEntrySchema.parse(entry);
     const legs = protectedLegIds(order.listClientOrderId);
-    return this.#request(
+    const report = await this.#request(
       "POST",
       "/api/v3/orderList/opoco",
       {
         symbol: symbol(order.instrument),
-        listClientOrderId: order.listClientOrderId,
+        listClientOrderId: clientId(order.listClientOrderId),
         newOrderRespType: "RESULT",
         workingType: "LIMIT",
         workingSide: "BUY",
-        workingClientOrderId: legs.entry,
+        workingClientOrderId: clientId(legs.entry),
         workingPrice: order.price,
         workingQuantity: order.quantity,
         workingTimeInForce: order.timeInForce,
         pendingSide: "SELL",
         pendingAboveType: "LIMIT_MAKER",
-        pendingAboveClientOrderId: legs.takeProfit,
+        pendingAboveClientOrderId: clientId(legs.takeProfit),
         pendingAbovePrice: order.takeProfitPrice,
         // A stop-market exit still sells if the price gaps through the stop.
         pendingBelowType: "STOP_LOSS",
-        pendingBelowClientOrderId: legs.stopLoss,
+        pendingBelowClientOrderId: clientId(legs.stopLoss),
         pendingBelowStopPrice: order.stopLossPrice,
       },
-      orderListReportSchema,
+      binanceOrderListReportSchema,
     );
+    return toOrderListReport(report, order.instrument);
   }
   async getOrderList(listClientOrderId: string) {
-    return this.#request(
+    const list = await this.#request(
       "GET",
       "/api/v3/orderList",
-      {
-        origClientOrderId: z
-          .string()
-          .regex(/^ct_[A-Za-z0-9_-]{1,33}$/)
-          .parse(listClientOrderId),
-      },
-      orderListSchema,
+      { origClientOrderId: clientId(listClientOrderId) },
+      binanceOrderListSchema,
     );
+    return toOrderList(list, await this.#instrumentFor(list.symbol));
   }
-  getOpenOrderLists() {
+  #openOrderLists() {
     return this.#request(
       "GET",
       "/api/v3/openOrderList",
       {},
-      z.array(orderListSchema),
+      z.array(binanceOrderListSchema),
     );
+  }
+  /** Every open order list on the account, on markets the catalogue lists. */
+  async getOpenOrderLists() {
+    const lists = await this.#openOrderLists();
+    const normalized: ExchangeOrderList[] = [];
+    for (const list of lists) {
+      const instrument = await this.markets.instrumentForVenueSymbol(
+        list.symbol,
+      );
+      if (instrument) normalized.push(toOrderList(list, instrument));
+    }
+    return normalized;
   }
   /** Binance cancels every order in a list when any one of them is cancelled. */
-  async cancelOrderList(instrument: TestnetInstrument, orderListId: number) {
-    return this.#request(
-      "DELETE",
-      "/api/v3/orderList",
-      {
-        symbol: symbol(instrument),
-        orderListId: String(id.parse(orderListId)),
-      },
-      orderListReportSchema,
+  async cancelOrderList(instrument: Instrument, orderListId: string) {
+    return toOrderListReport(
+      await this.#request(
+        "DELETE",
+        "/api/v3/orderList",
+        { symbol: symbol(instrument), orderListId: binanceId(orderListId) },
+        binanceOrderListReportSchema,
+      ),
+      instrument,
     );
   }
-  async getSymbolRules(): Promise<SymbolRules[]> {
+  /**
+   * Every market Binance lists, from exchangeInfo without parameters. A
+   * symbol whose entry this adapter cannot read is left out, so one odd
+   * listing cannot hide the rest.
+   */
+  async loadMarkets(): Promise<MarketRules[]> {
     const { symbols } = await this.#request(
       "GET",
       "/api/v3/exchangeInfo",
-      { symbols: JSON.stringify(testnetInstrumentSchema.options.map(symbol)) },
-      exchangeInfoSchema,
+      {},
+      z.object({ symbols: z.array(z.unknown()) }),
       false,
     );
-    return testnetInstrumentSchema.options.map((instrument) => {
-      const info = symbols.find((entry) => entry.symbol === symbol(instrument));
-      if (!info) throw new BinanceTestnetError("unavailable");
-      return symbolRules(instrument, info);
+    return symbols.flatMap((entry) => {
+      const info = binanceSymbolInfoSchema.safeParse(entry);
+      if (!info.success) return [];
+      try {
+        return [binanceMarketRules(info.data)];
+      } catch {
+        return [];
+      }
     });
   }
-  async getSnapshot(): Promise<TestnetSnapshot> {
-    const [account, btcOrders, ethOrders, btcFills, ethFills, lists] =
-      await Promise.all([
-        this.getAccount(),
-        this.getOpenOrders("BTC-USDT"),
-        this.getOpenOrders("ETH-USDT"),
-        this.getFills("BTC-USDT"),
-        this.getFills("ETH-USDT"),
-        this.getOpenOrderLists(),
-      ]);
-    const orders = [...btcOrders, ...ethOrders];
-    const orderLists = lists.filter((list) => instrumentForSymbol(list.symbol));
+  /** The instrument's market from the catalogue. */
+  getMarketRules(instrument: Instrument) {
+    return this.markets.rules(instrument);
+  }
+  async getSnapshot(
+    instruments: readonly Instrument[],
+  ): Promise<AccountSnapshot> {
+    const wanted = [...new Set(instruments)];
+    const [account, orderLists, fillLists, lists] = await Promise.all([
+      this.getAccount(),
+      Promise.all(wanted.map((instrument) => this.getOpenOrders(instrument))),
+      Promise.all(wanted.map((instrument) => this.getFills(instrument))),
+      this.#openOrderLists(),
+    ]);
+    const orders = orderLists.flat();
+    const bySymbol = new Map(
+      wanted.map((instrument) => [symbol(instrument), instrument]),
+    );
+    const openLists = lists.flatMap((list) => {
+      const instrument = bySymbol.get(list.symbol);
+      return instrument ? [toOrderList(list, instrument)] : [];
+    });
     // Binance documents no rule for whether openOrders includes the legs it
     // holds back until an entry fills, so look up any that are missing.
     const open = new Set(
-      orders.map((order) => `${order.symbol}:${order.orderId}`),
+      orders.map((order) => `${order.instrument}:${order.orderId}`),
     );
     const pendingOrders = (
       await Promise.all(
-        orderLists.flatMap((list) =>
+        openLists.flatMap((list) =>
           list.orders
-            .filter((leg) => !open.has(`${leg.symbol}:${leg.orderId}`))
-            .map((leg) =>
-              this.getOrderById(instrumentForSymbol(list.symbol)!, leg.orderId),
-            ),
+            .filter((leg) => !open.has(`${leg.instrument}:${leg.orderId}`))
+            .map((leg) => this.getOrderById(leg.instrument, leg.orderId)),
         ),
       )
     ).filter((order) => order.status === "PENDING_NEW");
     return {
-      provider: "binance-spot-testnet",
+      venue: VENUE,
       capturedAt: new Date(this.#now()).toISOString(),
       canTrade: account.canTrade,
       balances: account.balances,
       orders,
-      orderLists,
+      orderLists: openLists,
       pendingOrders,
-      fills: [...btcFills, ...ethFills]
+      fills: fillLists
+        .flat()
         .sort((a, b) => b.time - a.time)
         .slice(0, 50),
     };
   }
 }
 
-export const exchangeInfoSchema = z.object({
-  symbols: z.array(
-    z.object({
-      symbol: z.string(),
-      status: z.string(),
-      orderTypes: z.array(z.string()),
-      ocoAllowed: z.boolean(),
-      otoAllowed: z.boolean(),
-      opoAllowed: z.boolean().default(false),
-      filters: z.array(z.looseObject({ filterType: z.string() })),
-    }),
-  ),
+const binanceSymbolInfoSchema = z.object({
+  symbol: z.string(),
+  status: z.string(),
+  baseAsset: z.string(),
+  quoteAsset: z.string(),
+  orderTypes: z.array(z.string()),
+  ocoAllowed: z.boolean(),
+  otoAllowed: z.boolean(),
+  opoAllowed: z.boolean().default(false),
+  filters: z.array(z.looseObject({ filterType: z.string() })),
 });
+export const exchangeInfoSchema = z.object({
+  symbols: z.array(binanceSymbolInfoSchema),
+});
+export type BinanceSymbolInfo = z.infer<typeof binanceSymbolInfoSchema>;
 
-export function symbolRules(
-  instrument: TestnetInstrument,
-  info: z.infer<typeof exchangeInfoSchema>["symbols"][number],
-): SymbolRules {
+/**
+ * A Binance exchangeInfo symbol as a catalogue market. The instrument comes
+ * from the symbol's base and quote assets, never from splitting its name.
+ * Throws if the symbol lacks its price or lot filter.
+ */
+export function binanceMarketRules(info: BinanceSymbolInfo): MarketRules {
+  const instrument = instrumentFor(
+    binanceVenueSymbols.assetCode(info.baseAsset),
+    binanceVenueSymbols.assetCode(info.quoteAsset),
+  );
+  if (!instrument)
+    throw new Error(`Binance's ${info.symbol} has unreadable asset codes.`);
   const filter = <T extends z.ZodType>(type: string, schema: T) => {
     const found = info.filters.find((entry) => entry.filterType === type);
     return found ? schema.parse(found) : undefined;
@@ -811,9 +868,10 @@ export function symbolRules(
     z.object({ maxNumAlgoOrders: z.int().positive() }),
   );
   if (!price || !lot) throw new BinanceTestnetError("unavailable");
-  return symbolRulesSchema.parse({
+  return marketRulesSchema.parse({
     instrument,
-    trading: info.status === "TRADING",
+    venueSymbol: info.symbol,
+    status: info.status === "TRADING" ? "trading" : "halted",
     protectedEntryAllowed:
       info.ocoAllowed &&
       info.otoAllowed &&
@@ -829,17 +887,27 @@ export function symbolRules(
   });
 }
 
-const symbol = binanceSymbol;
+const symbol = binanceVenueSymbols.toVenueSymbol;
+const clientId = binanceClientOrderIds.toVenue;
 function boundedLimit(max: number) {
   return z.number().int().min(1).max(max);
 }
-function orderIdentifier(instrument: TestnetInstrument, clientOrderId: string) {
-  z.string()
-    .regex(/^ct_[A-Za-z0-9_-]{1,33}$/)
-    .parse(clientOrderId);
-  return { symbol: symbol(instrument), origClientOrderId: clientOrderId };
+/** An order or list ID the adapter returned, as Binance takes it back. */
+function binanceId(value: string) {
+  if (
+    !/^(0|[1-9]\d{0,15})$/.test(value) ||
+    !Number.isSafeInteger(Number(value))
+  )
+    throw new Error("Binance order IDs are whole numbers.");
+  return value;
 }
-function orderParameters(raw: TestnetLimitOrder) {
+function orderIdentifier(instrument: Instrument, clientOrderId: string) {
+  return {
+    symbol: symbol(instrument),
+    origClientOrderId: clientId(clientOrderId),
+  };
+}
+function orderParameters(raw: LimitOrderRequest) {
   const order = limitOrderSchema.parse(raw);
   return {
     symbol: symbol(order.instrument),
@@ -848,7 +916,7 @@ function orderParameters(raw: TestnetLimitOrder) {
     timeInForce: "GTC",
     quantity: order.quantity,
     price: order.price,
-    newClientOrderId: order.clientOrderId,
+    newClientOrderId: clientId(order.clientOrderId),
     newOrderRespType: "RESULT",
   };
 }

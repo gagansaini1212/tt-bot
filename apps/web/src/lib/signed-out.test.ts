@@ -43,7 +43,7 @@ test("without a signed-in customer, nothing reaches the worker", async () => {
   assert.equal(order.status, "rejected");
   const cancel = await cancelOrder({
     instrument: "BTC-USDT",
-    orderId: 1,
+    orderId: "1",
     acceptUnprotected: false,
   });
   assert.equal(cancel.status, "rejected");

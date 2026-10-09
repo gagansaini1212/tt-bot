@@ -26,7 +26,7 @@ export default async function ActivityPage() {
     <>
       <PageHeader
         action={<AccountRefresh />}
-        description="The analysis assistant's decisions and what became of each proposal, and recent exchange fills for BTC/USDT and ETH/USDT, reported directly by Binance Spot Testnet."
+        description="The analysis assistant's decisions and what became of each proposal, and recent exchange fills on the markets your exchange account allows, reported directly by Binance Spot Testnet."
         title="Activity"
       />
       <Card className="mt-6">

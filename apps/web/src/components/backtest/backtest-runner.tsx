@@ -20,7 +20,11 @@ import {
   backtestPeriodSchema,
   RECORDED_PROPOSAL_FIXTURES,
 } from "@crypto-trading/backtest";
-import type { Instrument } from "@crypto-trading/domain";
+import {
+  DEFAULT_ALLOWED_INSTRUMENTS,
+  instrumentLabel,
+  type Instrument,
+} from "@crypto-trading/domain";
 
 import { BacktestResults } from "@/components/backtest/backtest-results";
 import {
@@ -48,10 +52,13 @@ import {
 } from "@/lib/backtest-form";
 import { cn } from "@/lib/utils";
 
-const PAIRS: { value: Instrument; label: string }[] = [
-  { value: "BTC-USDT", label: "BTC/USDT" },
-  { value: "ETH-USDT", label: "ETH/USDT" },
-];
+// The default allowed instruments, which Binance's live market lists, and
+// a strategy's own when it hands its rules over.
+const PAIRS: { value: Instrument; label: string }[] =
+  DEFAULT_ALLOWED_INSTRUMENTS.map((value) => ({
+    value,
+    label: instrumentLabel(value),
+  }));
 
 // The first day Binance lists BTCUSDT and ETHUSDT hourly candles.
 const FIRST_DAY = "2017-08-17";
@@ -158,7 +165,17 @@ export function BacktestRunner({
                 className="col-span-2 md:col-span-1"
                 label="Pair"
                 onChange={(instrument) => update({ instrument })}
-                options={PAIRS}
+                options={
+                  PAIRS.some((pair) => pair.value === form.instrument)
+                    ? PAIRS
+                    : [
+                        ...PAIRS,
+                        {
+                          value: form.instrument,
+                          label: instrumentLabel(form.instrument),
+                        },
+                      ]
+                }
                 value={form.instrument}
               />
               <Field

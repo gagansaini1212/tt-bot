@@ -2,7 +2,8 @@ import type { IncomingMessage, RequestListener } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import {
-  BinanceTestnetError,
+  ExchangeError,
+  UnlistedMarketError,
   type BinanceSpotTestnet,
 } from "@crypto-trading/exchanges";
 import type { AccountResolver, AccountScope } from "./accounts";
@@ -293,7 +294,8 @@ function bearer(token: string) {
 }
 
 export function safeError(error: unknown): string {
-  if (error instanceof BinanceTestnetError) return error.message;
+  if (error instanceof ExchangeError || error instanceof UnlistedMarketError)
+    return error.message;
   return "Execution service could not complete the request. Check the local configuration.";
 }
 

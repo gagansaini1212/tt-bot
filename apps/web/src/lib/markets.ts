@@ -1,22 +1,27 @@
-import type {
-  KlineInterval,
-  TestnetInstrument,
-} from "@crypto-trading/exchanges";
+import {
+  DEFAULT_ALLOWED_INSTRUMENTS,
+  instrumentAssets,
+  instrumentLabel,
+  type Instrument,
+} from "@crypto-trading/domain";
+import type { KlineInterval } from "@crypto-trading/exchanges";
 
 // Type-only imports from the exchange package: its adapter uses node:crypto,
 // so nothing here may pull it into a client bundle.
 
-export const markets = [
-  { instrument: "BTC-USDT", symbol: "BTCUSDT", label: "BTC/USDT", base: "BTC" },
-  { instrument: "ETH-USDT", symbol: "ETHUSDT", label: "ETH/USDT", base: "ETH" },
-] as const satisfies readonly {
-  instrument: TestnetInstrument;
-  symbol: string;
-  label: string;
-  base: string;
-}[];
+export type Market = { instrument: Instrument; label: string; base: string };
 
-export type Market = (typeof markets)[number];
+function market(instrument: Instrument): Market {
+  return {
+    instrument,
+    label: instrumentLabel(instrument),
+    base: instrumentAssets(instrument).base,
+  };
+}
+
+/** The markets the page offers: the default allowed instruments. */
+export const markets: readonly Market[] =
+  DEFAULT_ALLOWED_INSTRUMENTS.map(market);
 
 export const chartIntervals = [
   "15m",

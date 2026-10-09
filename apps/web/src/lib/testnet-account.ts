@@ -1,7 +1,7 @@
 import "server-only";
 import {
-  testnetSnapshotSchema,
-  type TestnetSnapshot,
+  accountSnapshotSchema,
+  type AccountSnapshot,
 } from "@crypto-trading/exchanges";
 import { z } from "zod";
 import {
@@ -10,7 +10,7 @@ import {
   type WorkerState,
 } from "./worker-client";
 
-export type TestnetAccountState = WorkerState<{ snapshot: TestnetSnapshot }>;
+export type TestnetAccountState = WorkerState<{ snapshot: AccountSnapshot }>;
 
 const MAX_SNAPSHOT_AGE_MS = 30_000;
 // Covers the Date header's one-second resolution and small clock adjustments.
@@ -51,7 +51,7 @@ export function snapshotFreshness(
 export async function getTestnetAccount(): Promise<TestnetAccountState> {
   const result = await callWorkerForCustomer({
     path: "/snapshot",
-    schema: z.object({ snapshot: testnetSnapshotSchema }),
+    schema: z.object({ snapshot: accountSnapshotSchema }),
   });
   if (result.status !== "connected")
     return {

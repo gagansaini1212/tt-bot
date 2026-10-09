@@ -107,7 +107,7 @@ test("an unconfirmed cancel asks for a refresh rather than claiming success", as
   respond(() => Promise.reject(new TypeError("fetch failed")));
   const outcome = await cancelOrder({
     instrument: "BTC-USDT",
-    orderId: 7,
+    orderId: "7",
     acceptUnprotected: false,
   });
   assert.equal(outcome.status, "unknown");

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import type { HistoricalSymbolFilters } from "./binance-spot-history.js";
-import type { KlineInterval, TestnetKline } from "./binance-spot-testnet.js";
+import type { KlineInterval, Kline } from "./contract.js";
 import { SpotHistoryCache } from "./spot-history-cache.js";
 
 const HOUR = 60 * 60 * 1000;
@@ -19,7 +19,7 @@ after(() =>
   ),
 );
 
-function kline(openTime: number): TestnetKline {
+function kline(openTime: number): Kline {
   return {
     openTime,
     open: "100",
@@ -36,7 +36,8 @@ function kline(openTime: number): TestnetKline {
 const filters: HistoricalSymbolFilters = {
   rules: {
     instrument: "BTC-USDT",
-    trading: true,
+    venueSymbol: "BTCUSDT",
+    status: "trading",
     protectedEntryAllowed: true,
     minPrice: "0.01",
     maxPrice: "1000000",
@@ -62,7 +63,7 @@ async function setup(now: number) {
       end: number,
     ) {
       requests.push([start, end]);
-      const klines: TestnetKline[] = [];
+      const klines: Kline[] = [];
       // Binance has candles up to the current hour, the last still open.
       for (let time = start; time < end && time <= now; time += HOUR)
         klines.push(kline(time));

@@ -3,17 +3,38 @@ import {
   MAX_DEPTH_LIMIT,
   MAX_KLINE_LIMIT,
   MAX_TICKER_FILTER,
-  testnetInstrumentSchema,
   tickerSymbolSchema,
-  type TestnetDepth,
-  type TestnetKline,
-  type TestnetTicker,
+  UnlistedMarketError,
+  type Depth,
+  type Kline,
+  type Ticker,
 } from "@crypto-trading/exchanges";
+import { instrumentSchema, type Instrument } from "@crypto-trading/domain";
 import { z } from "zod";
 import { createCache } from "../cache";
-import { publicHandler } from "../http";
+import { publicHandler, RequestError } from "../http";
 
 export const DEFAULT_KLINE_LIMIT = 500;
+
+/**
+ * Refuses an instrument the venue's catalogue does not list, before asking
+ * the venue for its market data.
+ */
+async function listed(
+  exchange: { getMarketRules(instrument: Instrument): Promise<unknown> },
+  instrument: Instrument,
+) {
+  try {
+    await exchange.getMarketRules(instrument);
+  } catch (error) {
+    if (error instanceof UnlistedMarketError)
+      throw new RequestError(404, {
+        status: "unknown_market",
+        message: error.message,
+      });
+    throw error;
+  }
+}
 
 function limit(max: number) {
   return z
@@ -29,7 +50,7 @@ function limit(max: number) {
  * comma-separated `symbols`. Symbols without a market are left out.
  */
 export function tickers(now: () => number) {
-  const cache = createCache<TestnetTicker[]>(5_000, now);
+  const cache = createCache<Ticker[]>(5_000, now);
   return publicHandler({
     query: z.strictObject({
       symbols: z
@@ -53,15 +74,16 @@ export function tickers(now: () => number) {
 
 /** The latest `limit` candles, oldest first, cached for up to 5 seconds. */
 export function klines(now: () => number) {
-  const cache = createCache<TestnetKline[]>(5_000, now);
+  const cache = createCache<Kline[]>(5_000, now);
   return publicHandler({
     query: z.strictObject({
-      instrument: testnetInstrumentSchema,
+      instrument: instrumentSchema,
       interval: klineIntervalSchema,
       limit: limit(MAX_KLINE_LIMIT),
     }),
     async handle({ exchange, query }) {
       const { instrument, interval, limit = DEFAULT_KLINE_LIMIT } = query;
+      await listed(exchange, instrument);
       // Binance charges the same weight for any limit, so fetch the maximum
       // and let every limit share one cache entry.
       const klines = await cache(`${instrument} ${interval}`, () =>
@@ -74,14 +96,15 @@ export function klines(now: () => number) {
 
 /** The best `limit` bids and asks, cached for up to 1 second. */
 export function depth(now: () => number) {
-  const cache = createCache<TestnetDepth>(1_000, now);
+  const cache = createCache<Depth>(1_000, now);
   return publicHandler({
     query: z.strictObject({
-      instrument: testnetInstrumentSchema,
+      instrument: instrumentSchema,
       limit: limit(MAX_DEPTH_LIMIT),
     }),
     async handle({ exchange, query }) {
       const { instrument, limit = MAX_DEPTH_LIMIT } = query;
+      await listed(exchange, instrument);
       const { lastUpdateId, bids, asks } = await cache(instrument, () =>
         exchange.getDepth(instrument, MAX_DEPTH_LIMIT),
       );

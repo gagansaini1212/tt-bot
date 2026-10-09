@@ -5,12 +5,12 @@ import Decimal from "decimal.js";
 import { z } from "zod";
 import {
   allocationIssues,
-  ruleLimits,
+  instrumentSchema,
   strategyRulesSchema,
   strategyStatusSchema,
   type StrategyRules,
 } from "@crypto-trading/domain";
-import { testnetInstrumentSchema } from "./order-rules";
+import { VENUES, type VenueId } from "./venues";
 
 const decimal = z
   .string()
@@ -60,25 +60,21 @@ const usdtAmount = z
   .regex(/^\d{1,12}(\.\d{1,8})?$/)
   .refine((value) => /[1-9]/.test(value), "Must be greater than zero");
 
-/** Problems a strategy's rules have on the Binance Spot Testnet account. */
-export function testnetRuleIssues(
+/**
+ * Problems a strategy's rules have on `venue`, from its capabilities. Whether
+ * the venue lists the rules' instruments, and whether the account allows
+ * them, the worker checks against the catalogue and the account.
+ */
+export function venueRuleIssues(
   rules: StrategyRules,
+  venue: VenueId = "binance-spot-testnet",
 ): { path: (string | number)[]; message: string }[] {
   const issues: { path: (string | number)[]; message: string }[] = [];
-  if (rules.marketKind !== "spot")
+  const { capabilities } = VENUES[venue];
+  if (!capabilities.marketKinds.includes(rules.marketKind))
     issues.push({
       path: ["marketKind"],
-      message: "This exchange account trades spot only.",
-    });
-  const instruments = ruleLimits(rules).allowedInstruments;
-  if (
-    !instruments.every(
-      (instrument) => testnetInstrumentSchema.safeParse(instrument).success,
-    )
-  )
-    issues.push({
-      path: [],
-      message: "This exchange account trades BTC/USDT and ETH/USDT only.",
+      message: `This exchange account trades ${capabilities.marketKinds.join(" and ")} only.`,
     });
   return issues;
 }
@@ -105,7 +101,7 @@ export const strategyDraftSchema = z
           path: ["ai"],
         });
       for (const issue of [
-        ...testnetRuleIssues(draft.rules),
+        ...venueRuleIssues(draft.rules),
         ...allocationIssues(draft.rules, draft.allocation),
       ])
         ctx.addIssue({
@@ -214,7 +210,7 @@ export type StrategyView = z.infer<typeof strategyViewSchema>;
 
 /** A market a strategy can trade, with Binance's rules and latest prices. */
 export const strategyMarketSchema = z.object({
-  instrument: testnetInstrumentSchema,
+  instrument: instrumentSchema,
   lastPrice: decimal.nullable(),
   bestAsk: decimal.nullable(),
   tickSize: decimal,

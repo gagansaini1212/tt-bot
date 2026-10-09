@@ -248,7 +248,7 @@ export function planProposalOrder(
           label: "Account limits",
           passed: false,
           detail:
-            "This account takes long spot entries in BTC/USDT and ETH/USDT only, with the stop loss below the entry price and the take profit above it.",
+            "This account takes long spot entries in BASE-QUOTE markets only, with the stop loss below the entry price and the take profit above it.",
         },
       ],
     };

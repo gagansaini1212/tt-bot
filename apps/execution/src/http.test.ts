@@ -6,6 +6,7 @@ import { test, type TestContext } from "node:test";
 import { z } from "zod";
 import { BinanceSpotTestnet } from "@crypto-trading/exchanges";
 import type { AccountResolver } from "./accounts";
+import { binanceExchangeInfo } from "./fixtures/binance-exchange-info";
 import { fixedExchanges } from "./fixtures/fixed-exchanges";
 import { MemoryOrderIntents } from "./fixtures/memory-order-intents";
 import {
@@ -79,6 +80,8 @@ function binance(respond?: (url: URL) => Response) {
       switch (url.pathname) {
         case "/api/v3/time":
           return Response.json({ serverTime: Date.now() });
+        case "/api/v3/exchangeInfo":
+          return Response.json(binanceExchangeInfo());
         case "/api/v3/account":
           return Response.json({ canTrade: true, balances: [] });
         case "/api/v3/openOrders":
@@ -240,7 +243,7 @@ test("query parameters are validated strictly", async (t) => {
     "/market/tickers?symbol=BTCUSDT",
     "/market/klines?instrument=BTC-USDT",
     "/market/klines?interval=1m",
-    "/market/klines?instrument=SOL-USDT&interval=1m",
+    "/market/klines?instrument=btc-usdt&interval=1m",
     "/market/klines?instrument=BTCUSDT&interval=1m",
     "/market/klines?instrument=BTC-USDT&interval=1s",
     "/market/klines?instrument=BTC-USDT&interval=7m",
@@ -314,13 +317,32 @@ test("market routes filter and trim cached Binance data", async (t) => {
   assert.equal(fake.count("/api/v3/ticker/24hr"), 1);
   assert.equal(fake.count("/api/v3/klines"), 1);
   assert.equal(fake.count("/api/v3/depth"), 1);
-  const [tickers, klinesRequest, depthRequest] = fake.calls;
+  // The catalogue was read once, to check both markets are listed.
+  assert.equal(fake.count("/api/v3/exchangeInfo"), 1);
+  const [tickers, klinesRequest, depthRequest] = fake.calls.filter(
+    (url) => url.pathname !== "/api/v3/exchangeInfo",
+  );
   assert.equal(tickers.search, "");
   assert.equal(klinesRequest.searchParams.get("limit"), "1000");
   assert.equal(klinesRequest.searchParams.get("symbol"), "BTCUSDT");
   assert.equal(klinesRequest.searchParams.get("interval"), "1h");
   assert.equal(depthRequest.searchParams.get("limit"), "100");
   assert.equal(depthRequest.searchParams.get("symbol"), "ETHUSDT");
+});
+
+test("market routes refuse a market the venue does not list, without asking for its data", async (t) => {
+  const fake = binance();
+  const { call } = await serve(t, { exchange: fake.exchange });
+  for (const path of [
+    "/market/klines?instrument=SOL-USDT&interval=1h",
+    "/market/depth?instrument=ETH-BTC",
+  ]) {
+    const response = await call(path);
+    assert.equal(response.status, 404, path);
+    assert.equal((await response.json()).status, "unknown_market");
+  }
+  assert.equal(fake.count("/api/v3/klines"), 0);
+  assert.equal(fake.count("/api/v3/depth"), 0);
 });
 
 test("caches expire per route and coalesce concurrent requests", async (t) => {
@@ -538,9 +560,10 @@ test("order routes take validated POST bodies and refuse other methods", async (
     ["/orders", { ...order, stopLossPrice: undefined }],
     ["/orders", { ...order, type: "stop_limit" }],
     ["/orders", { ...order, listClientOrderId: "web_1" }],
+    // Order IDs are strings, as the snapshot reports them.
     [
       "/orders/cancel",
-      { instrument: "BTC-USDT", orderId: "7", acceptUnprotected: false },
+      { instrument: "BTC-USDT", orderId: 7, acceptUnprotected: false },
     ],
     ["/orders/cancel", { instrument: "SOL-USDT", orderId: 7 }],
   ] as const)
@@ -588,8 +611,10 @@ test("a placement runs the worker's checks, clears the snapshot cache and is nev
         });
       case "/api/v3/exchangeInfo":
         return Response.json({
-          symbols: ["BTCUSDT", "ETHUSDT"].map((symbol) => ({
-            symbol,
+          symbols: ["BTC", "ETH"].map((base) => ({
+            symbol: `${base}USDT`,
+            baseAsset: base,
+            quoteAsset: "USDT",
             status: "TRADING",
             orderTypes: ["LIMIT", "LIMIT_MAKER", "STOP_LOSS"],
             ocoAllowed: true,

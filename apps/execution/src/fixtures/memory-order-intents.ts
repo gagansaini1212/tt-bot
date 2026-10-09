@@ -1,5 +1,5 @@
 import Decimal from "decimal.js";
-import { protectedLeg, type TestnetOrder } from "@crypto-trading/exchanges";
+import { protectedLeg, type ExchangeOrder } from "@crypto-trading/exchanges";
 import type { AccountScope } from "../accounts";
 import {
   clientOrderIdOf,
@@ -16,8 +16,8 @@ import {
  */
 export class MemoryOrderIntents implements OrderIntentStore {
   readonly intents = new Map<string, OrderIntent & { scope: AccountScope }>();
-  readonly orders = new Map<string, TestnetOrder>();
-  readonly cancelled: TestnetOrder[] = [];
+  readonly orders = new Map<string, ExchangeOrder>();
+  readonly cancelled: ExchangeOrder[] = [];
   // What the customer accepted leaving without exits, by list client order ID.
   readonly customerCancels = new Map<string, string>();
 
@@ -116,7 +116,7 @@ export class MemoryOrderIntents implements OrderIntentStore {
 
   async recordOrders(
     scope: AccountScope,
-    orders: TestnetOrder[],
+    orders: ExchangeOrder[],
     event?: string,
   ) {
     for (const order of orders) {

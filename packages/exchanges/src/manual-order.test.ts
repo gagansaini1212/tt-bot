@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { TestnetOrder } from "./binance-spot-testnet.js";
+import type { ExchangeOrder } from "./contract.js";
+import type { MarketRules } from "./market-catalogue.js";
 import {
   cancelImpact,
   defaultStopLossPrice,
@@ -20,12 +21,12 @@ import {
   protectedLeg,
   protectedLegIds,
   STRATEGY_LIST_PREFIX,
-  type SymbolRules,
 } from "./order-rules.js";
 
-const rules: SymbolRules = {
+const rules: MarketRules = {
   instrument: "BTC-USDT",
-  trading: true,
+  venueSymbol: "BTCUSDT",
+  status: "trading",
   protectedEntryAllowed: true,
   minPrice: "0.01000000",
   maxPrice: "1000000.00000000",
@@ -313,49 +314,59 @@ test("requests accept only buys with both exits and a ct_ list ID", () => {
       false,
       JSON.stringify(invalid),
     );
-  assert.equal(
-    manualCancelRequestSchema.safeParse({
-      instrument: "BTC-USDT",
-      orderId: 1.5,
-      acceptUnprotected: false,
-    }).success,
-    false,
-  );
+  // Order IDs are the venue's, as strings, whatever form the venue uses.
+  for (const [orderId, valid] of [
+    ["12", true],
+    ["OU22CG-KLAF2-FWUDD7", true],
+    [12, false],
+    ["", false],
+    ["12 OR 1=1", false],
+    ["../12", false],
+  ] as const)
+    assert.equal(
+      manualCancelRequestSchema.safeParse({
+        instrument: "BTC-USDT",
+        orderId,
+        acceptUnprotected: false,
+      }).success,
+      valid,
+      String(orderId),
+    );
 });
 
-const order = (fields: Partial<TestnetOrder>): TestnetOrder => ({
-  symbol: "BTCUSDT",
-  orderId: 1,
+const order = (fields: Partial<ExchangeOrder>): ExchangeOrder => ({
+  instrument: "BTC-USDT",
+  orderId: "1",
   clientOrderId: "web_order",
   price: "60000",
   origQty: "0.001",
   executedQty: "0",
-  cummulativeQuoteQty: "0",
+  cumulativeQuoteQty: "0",
   status: "NEW",
   type: "LIMIT",
   side: "BUY",
-  orderListId: -1,
+  orderListId: null,
   ...fields,
 });
 const legs = protectedLegIds("ct_list_001");
 const entryLeg = order({
-  orderId: 21,
+  orderId: "21",
   clientOrderId: legs.entry,
-  orderListId: 7,
+  orderListId: "7",
 });
 const takeProfit = order({
-  orderId: 22,
+  orderId: "22",
   clientOrderId: legs.takeProfit,
-  orderListId: 7,
+  orderListId: "7",
   side: "SELL",
   type: "LIMIT_MAKER",
   price: "63000",
   status: "PENDING_NEW",
 });
 const stopLoss = order({
-  orderId: 23,
+  orderId: "23",
   clientOrderId: legs.stopLoss,
-  orderListId: 7,
+  orderListId: "7",
   side: "SELL",
   type: "STOP_LOSS",
   price: "0",
@@ -401,11 +412,11 @@ test("a strategy's entries count against its own allocation, not the dashboard's
   assert.deepEqual(
     manualExposure(
       [
-        { ...entryLeg, clientOrderId: strategy.entry, orderListId: 9 },
+        { ...entryLeg, clientOrderId: strategy.entry, orderListId: "9" },
         {
           ...stopLoss,
           clientOrderId: strategy.stopLoss,
-          orderListId: 9,
+          orderListId: "9",
           status: "NEW",
         },
       ],
@@ -448,7 +459,7 @@ test("cancelling any list leg cancels the list and reports what loses its exits"
     { ...stopLoss, status: "NEW", origQty: "0.00099" },
   ];
   assert.equal(cancelImpact(active[1], active).unprotectedQuantity, "0.00099");
-  const standalone = order({ orderId: 5 });
+  const standalone = order({ orderId: "5" });
   assert.deepEqual(cancelImpact(standalone, [standalone, ...active]), {
     cancels: [standalone],
     unprotectedQuantity: "0",

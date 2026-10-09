@@ -3,7 +3,8 @@
 import { Fragment, useState, useTransition } from "react";
 import Decimal from "decimal.js";
 import { AlertTriangle, LoaderCircle } from "lucide-react";
-import type { TestnetOrder, TestnetSnapshot } from "@crypto-trading/exchanges";
+import { instrumentLabel } from "@crypto-trading/domain";
+import type { ExchangeOrder, AccountSnapshot } from "@crypto-trading/exchanges";
 import type {
   ExecutionState,
   StopTrigger,
@@ -43,7 +44,6 @@ import {
 import {
   baseAsset,
   groupOpenOrders,
-  instrumentOf,
   orderListSummary,
   orderPriceLabel,
   orderQuantityLabel,
@@ -52,7 +52,7 @@ import {
   orderTypeLabel,
 } from "@/lib/order-display";
 
-type Snapshot = Pick<TestnetSnapshot, "orders" | "pendingOrders">;
+type Snapshot = Pick<AccountSnapshot, "orders" | "pendingOrders">;
 
 export function OpenOrders({
   snapshot,
@@ -66,7 +66,7 @@ export function OpenOrders({
   const all = groups.flatMap((group) => group.orders);
   const alerts = execution?.alerts ?? [];
   const triggers = execution?.triggers ?? [];
-  const [target, setTarget] = useState<TestnetOrder>();
+  const [target, setTarget] = useState<ExchangeOrder>();
   const [trigger, setTrigger] = useState<StopTrigger>();
   const [outcome, setOutcome] = useState<ManualOrderOutcome>();
   return (
@@ -122,7 +122,7 @@ export function OpenOrders({
                 <span className="flex items-center gap-1.5">
                   <Badge variant="outline">Entry</Badge>
                   <span className="font-medium">
-                    {held.instrument.replace("-", "")}
+                    {instrumentLabel(held.instrument)}
                   </span>
                 </span>
                 <span className="mt-1 block text-xs text-muted-foreground">
@@ -163,7 +163,7 @@ export function OpenOrders({
                 />
               ) : null}
               {group.orders.map((order) => (
-                <TableRow key={`${order.symbol}-${order.orderId}`}>
+                <TableRow key={`${order.instrument}-${order.orderId}`}>
                   <TableCell
                     className={
                       group.orderListId !== undefined
@@ -175,7 +175,9 @@ export function OpenOrders({
                       {orderRole(order) ? (
                         <Badge variant="outline">{orderRole(order)}</Badge>
                       ) : null}
-                      <span className="font-medium">{order.symbol}</span>
+                      <span className="font-medium">
+                        {instrumentLabel(order.instrument)}
+                      </span>
                     </span>
                     <span className="mt-1 block text-xs text-muted-foreground">
                       {orderTypeLabel(order)}
@@ -191,7 +193,6 @@ export function OpenOrders({
                   <TableCell className="text-right">
                     <Button
                       aria-label={`Cancel ${describe(order)}`}
-                      disabled={!instrumentOf(order.symbol)}
                       onClick={() => setTarget(order)}
                       size="sm"
                       variant="destructive"
@@ -212,7 +213,7 @@ export function OpenOrders({
       </Table>
       {target ? (
         <CancelDialog
-          key={`${target.symbol}-${target.orderId}`}
+          key={`${target.instrument}-${target.orderId}`}
           onClose={() => setTarget(undefined)}
           onDone={(result) => {
             setOutcome(result);
@@ -283,8 +284,8 @@ function ListHeader({
   orderListId,
   orders,
 }: {
-  orderListId: number;
-  orders: TestnetOrder[];
+  orderListId: string;
+  orders: ExchangeOrder[];
 }) {
   const summary = orderListSummary(orders);
   return (
@@ -313,8 +314,8 @@ function CancelDialog({
   onClose,
   onDone,
 }: {
-  target: TestnetOrder;
-  orders: TestnetOrder[];
+  target: ExchangeOrder;
+  orders: ExchangeOrder[];
   onClose: () => void;
   onDone: (outcome: ManualOrderOutcome) => void;
 }) {
@@ -324,12 +325,11 @@ function CancelDialog({
   const [unprotected, setUnprotected] = useState(impact.unprotectedQuantity);
   const [message, setMessage] = useState<string>();
   const exposed = new Decimal(unprotected).greaterThan(0);
-  const list = target.orderListId >= 0;
-  const asset = baseAsset(target.symbol);
-  const instrument = instrumentOf(target.symbol);
+  const list = target.orderListId !== null;
+  const asset = baseAsset(target.instrument);
+  const { instrument } = target;
 
   const confirm = () =>
-    instrument &&
     startTransition(async () => {
       const outcome = await cancelOpenOrder({
         instrument,
@@ -411,6 +411,6 @@ function plain(value: string) {
   return new Decimal(value).toFixed();
 }
 
-function describe(order: TestnetOrder) {
-  return `${orderTypeLabel(order)} ${baseAsset(order.symbol)}, ${orderPriceLabel(order)}`;
+function describe(order: ExchangeOrder) {
+  return `${orderTypeLabel(order)} ${baseAsset(order.instrument)}, ${orderPriceLabel(order)}`;
 }

@@ -1,22 +1,9 @@
 // Browser-safe: the dashboard runs these checks for its preview, and the
 // worker runs them again before it submits.
+import { instrumentSchema } from "@crypto-trading/domain";
 import Decimal from "decimal.js";
 import { z } from "zod";
-
-export const testnetInstrumentSchema = z.enum(["BTC-USDT", "ETH-USDT"]);
-export type TestnetInstrument = z.infer<typeof testnetInstrumentSchema>;
-
-/** BTC-USDT → BTCUSDT */
-export function binanceSymbol(instrument: TestnetInstrument) {
-  return testnetInstrumentSchema.parse(instrument).replace("-", "");
-}
-
-/** BTCUSDT → BTC-USDT, or undefined for other markets. */
-export function instrumentForSymbol(symbol: string) {
-  return testnetInstrumentSchema.options.find(
-    (instrument) => binanceSymbol(instrument) === symbol,
-  );
-}
+import type { MarketRules } from "./market-catalogue";
 
 const decimal = z.string().regex(/^\d+(\.\d+)?$/);
 export const positiveDecimal = decimal.refine((value) => /[1-9]/.test(value));
@@ -80,7 +67,7 @@ export function protectedLeg(
  */
 export const protectedEntrySchema = z
   .object({
-    instrument: testnetInstrumentSchema,
+    instrument: instrumentSchema,
     quantity: positiveDecimal,
     price: positiveDecimal,
     // FOK fills completely or not at all, so a marketable entry never leaves
@@ -97,27 +84,6 @@ export const protectedEntrySchema = z
     "Spot entries are long only: the stop loss must be below the entry price and the take profit above it.",
   );
 export type ProtectedEntry = z.infer<typeof protectedEntrySchema>;
-
-/** The parts of Binance's exchangeInfo that decide whether an entry is valid. */
-export const symbolRulesSchema = z.object({
-  instrument: testnetInstrumentSchema,
-  trading: z.boolean(),
-  // Needs OTO, OCO and OPO, plus the LIMIT, LIMIT_MAKER and STOP_LOSS types.
-  protectedEntryAllowed: z.boolean(),
-  minPrice: decimal,
-  maxPrice: decimal,
-  tickSize: decimal,
-  minQty: decimal,
-  maxQty: decimal,
-  stepSize: decimal,
-  minNotional: decimal,
-  maxNotional: decimal,
-  // Binance's MAX_NUM_ALGO_ORDERS: the open stop orders an account may hold
-  // on the symbol. Each protected entry's stop loss is one. Unset when
-  // Binance does not report it.
-  maxStopOrders: z.int().positive().optional(),
-});
-export type SymbolRules = z.infer<typeof symbolRulesSchema>;
 
 /**
  * Binance sizes the exits from what the entry received after fees, rounded
@@ -139,10 +105,11 @@ export function protectedEntryFilterIssues(
     ProtectedEntry,
     "quantity" | "price" | "takeProfitPrice" | "stopLossPrice"
   >,
-  rules: SymbolRules,
+  rules: MarketRules,
 ): string[] {
   const issues: string[] = [];
-  if (!rules.trading) issues.push("Binance is not trading this market now.");
+  if (rules.status !== "trading")
+    issues.push("Binance is not trading this market now.");
   if (!rules.protectedEntryAllowed)
     issues.push(
       "Binance does not accept entries with attached exits on this market.",

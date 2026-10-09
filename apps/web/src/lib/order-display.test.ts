@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { TestnetOrder } from "@crypto-trading/exchanges";
+import type { ExchangeOrder } from "@crypto-trading/exchanges";
 import {
   groupOpenOrders,
   newListClientOrderId,
@@ -13,18 +13,18 @@ import {
 } from "./order-display";
 import { listClientOrderIdSchema } from "@crypto-trading/exchanges/order-rules";
 
-const order = (fields: Partial<TestnetOrder>): TestnetOrder => ({
-  symbol: "BTCUSDT",
-  orderId: 1,
+const order = (fields: Partial<ExchangeOrder>): ExchangeOrder => ({
+  instrument: "BTC-USDT",
+  orderId: "1",
   clientOrderId: "web_order",
   price: "60000.00000000",
   origQty: "0.00100000",
   executedQty: "0.00000000",
-  cummulativeQuoteQty: "0",
+  cumulativeQuoteQty: "0",
   status: "NEW",
   type: "LIMIT",
   side: "BUY",
-  orderListId: -1,
+  orderListId: null,
   ...fields,
 });
 
@@ -44,13 +44,13 @@ test("percentage buttons spend a share of free USDT, rounded down to the lot ste
 
 test("order lists are grouped with entry, take profit and stop loss in order", () => {
   const entry = order({
-    orderId: 21,
-    orderListId: 7,
+    orderId: "21",
+    orderListId: "7",
     clientOrderId: "ct_list_en",
   });
   const stop = order({
-    orderId: 23,
-    orderListId: 7,
+    orderId: "23",
+    orderListId: "7",
     clientOrderId: "ct_list_sl",
     side: "SELL",
     type: "STOP_LOSS",
@@ -60,8 +60,8 @@ test("order lists are grouped with entry, take profit and stop loss in order", (
     status: "PENDING_NEW",
   });
   const target = order({
-    orderId: 22,
-    orderListId: 7,
+    orderId: "22",
+    orderListId: "7",
     clientOrderId: "ct_list_tp",
     side: "SELL",
     type: "LIMIT_MAKER",
@@ -69,7 +69,7 @@ test("order lists are grouped with entry, take profit and stop loss in order", (
     origQty: "0.00000000",
     status: "PENDING_NEW",
   });
-  const standalone = order({ orderId: 5 });
+  const standalone = order({ orderId: "5" });
   const groups = groupOpenOrders({
     orders: [standalone, entry],
     // A leg listed twice is shown once.
@@ -82,7 +82,7 @@ test("order lists are grouped with entry, take profit and stop loss in order", (
     ]),
     [
       [undefined, ["single"]],
-      [7, ["Entry", "Take profit", "Stop loss"]],
+      ["7", ["Entry", "Take profit", "Stop loss"]],
     ],
   );
   assert.equal(orderPriceLabel(stop), "Stop 58000");
@@ -93,20 +93,22 @@ test("order lists are grouped with entry, take profit and stop loss in order", (
 
 test("legs of lists placed elsewhere are labelled from their type", () => {
   assert.equal(
-    orderRole(order({ orderListId: 3, side: "SELL", type: "STOP_LOSS_LIMIT" })),
+    orderRole(
+      order({ orderListId: "3", side: "SELL", type: "STOP_LOSS_LIMIT" }),
+    ),
     "Stop loss",
   );
   assert.equal(
-    orderRole(order({ orderListId: 3, side: "SELL", type: "LIMIT_MAKER" })),
+    orderRole(order({ orderListId: "3", side: "SELL", type: "LIMIT_MAKER" })),
     "Take profit",
   );
   assert.equal(orderRole(order({})), undefined);
 });
 
 test("list summaries flag a partly filled entry whose fill has no exits", () => {
-  const entry = order({ orderListId: 7, clientOrderId: "ct_list_en" });
-  const exit = (fields: Partial<TestnetOrder>) =>
-    order({ orderListId: 7, side: "SELL", type: "LIMIT_MAKER", ...fields });
+  const entry = order({ orderListId: "7", clientOrderId: "ct_list_en" });
+  const exit = (fields: Partial<ExchangeOrder>) =>
+    order({ orderListId: "7", side: "SELL", type: "LIMIT_MAKER", ...fields });
   const pending = [
     exit({ status: "PENDING_NEW", origQty: "0" }),
     exit({ status: "PENDING_NEW", origQty: "0", type: "STOP_LOSS" }),

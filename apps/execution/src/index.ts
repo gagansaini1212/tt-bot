@@ -8,12 +8,18 @@ import {
 } from "@crypto-trading/database";
 import {
   BinanceSpotTestnet,
-  BinanceTestnetError,
+  ExchangeError,
   limitOrderSchema,
-  testnetInstrumentSchema,
-  type TestnetOrder,
+  MarketCatalogue,
+  VENUE_IDS,
+  venueIdSchema,
+  type ExchangeOrder,
 } from "@crypto-trading/exchanges";
-import { authorizeTradeProposal, utcDayStart } from "@crypto-trading/domain";
+import {
+  authorizeTradeProposal,
+  utcDayStart,
+  instrumentSchema,
+} from "@crypto-trading/domain";
 import { accountResolver } from "./accounts";
 import {
   ExchangeCredentialStore,
@@ -78,10 +84,11 @@ async function main() {
       "Live trading cannot start until deployment prerequisites and account eligibility checks are implemented.",
     );
   }
+  // The venue the worker trades on, by its venue ID.
   const provider = process.env.EXCHANGE_PROVIDER ?? "fixture";
-  if (!["fixture", "binance-spot-testnet"].includes(provider)) {
+  if (provider !== "fixture" && !venueIdSchema.safeParse(provider).success) {
     throw new Error(
-      "EXCHANGE_PROVIDER must be fixture or binance-spot-testnet.",
+      `EXCHANGE_PROVIDER must be fixture or a venue ID: ${VENUE_IDS.join(", ")}.`,
     );
   }
   const [command = "serve", ...args] = process.argv.slice(2);
@@ -107,6 +114,16 @@ async function main() {
       );
     }
   }
+  // One catalogue of the venue's markets, shared by every client, read
+  // through a client that holds no keys.
+  const markets: MarketCatalogue = new MarketCatalogue({
+    venue: "binance-spot-testnet",
+    load: () => publicClient.loadMarkets(),
+  });
+  const publicClient: BinanceSpotTestnet = new BinanceSpotTestnet({
+    publicData: true,
+    markets,
+  });
   // The worker's own keys, from its .env file. They serve the dev customer's
   // testnet account until keys are saved for it in Settings.
   const environment =
@@ -117,6 +134,7 @@ async function main() {
           apiKey: process.env.BINANCE_TESTNET_API_KEY,
           apiSecret: process.env.BINANCE_TESTNET_API_SECRET,
           privateKey,
+          markets,
         })
       : undefined;
   // Throws now if the master key is set but malformed.
@@ -128,9 +146,8 @@ async function main() {
       // Market data is public, so it needs no keys.
       market:
         environment ??
-        (provider === "binance-spot-testnet"
-          ? new BinanceSpotTestnet({ publicData: true })
-          : undefined),
+        (provider === "binance-spot-testnet" ? publicClient : undefined),
+      create: (keys) => new BinanceSpotTestnet({ ...keys, markets }),
     });
   if (process.env.TESTNET_MAX_ORDER_NOTIONAL_USDT)
     console.warn(
@@ -309,16 +326,21 @@ async function main() {
       result = await exchange.getAccount();
       break;
     case "orders":
-      result = (await exchange.getSnapshot()).orders;
+    case "fills": {
+      const instruments = await new PostgresRiskLimits(
+        openDatabase(),
+      ).allowedInstruments(scope);
+      const snapshot = await exchange.getSnapshot(instruments);
+      result = command === "orders" ? snapshot.orders : snapshot.fills;
       break;
-    case "fills":
-      result = (await exchange.getSnapshot()).fills;
-      break;
+    }
     case "order":
     case "cancel": {
       if (args.length !== 2)
-        throw new Error("Usage: order|cancel <BTC-USDT|ETH-USDT> <client-id>");
-      const instrument = testnetInstrumentSchema.parse(args[0]);
+        throw new Error(
+          "Usage: order|cancel <BASE-QUOTE, such as BTC-USDT> <client-id>",
+        );
+      const instrument = instrumentSchema.parse(args[0]);
       result =
         command === "order"
           ? await exchange.getOrder(instrument, args[1])
@@ -329,7 +351,7 @@ async function main() {
     case "place-order": {
       if (args.length !== 5)
         throw new Error(
-          "Usage: test-order|place-order <BTC-USDT|ETH-USDT> <BUY|SELL> <quantity> <price> <ct_client-id>",
+          "Usage: test-order|place-order <BASE-QUOTE, such as BTC-USDT> <BUY|SELL> <quantity> <price> <ct_client-id>",
         );
       const order = limitOrderSchema.parse({
         instrument: args[0],
@@ -340,6 +362,11 @@ async function main() {
       });
       // The customer's current limits, read before every order.
       const risk = new PostgresRiskLimits(openDatabase());
+      const allowed = await risk.allowedInstruments(scope);
+      if (!allowed.includes(order.instrument))
+        throw new Error(
+          `${order.instrument} is not among this exchange account's allowed instruments: ${allowed.join(", ") || "none"}.`,
+        );
       const limits = await risk.current(scope);
       if (!limits)
         throw new Error(
@@ -387,12 +414,12 @@ async function main() {
           .catch(() =>
             console.error(`Could not record Binance's answer for ${id}.`),
           );
-      let placed: TestnetOrder;
+      let placed: ExchangeOrder;
       try {
         placed = await exchange.placeLimitOrder(order);
       } catch (error) {
         const refused =
-          error instanceof BinanceTestnetError &&
+          error instanceof ExchangeError &&
           (error.kind === "rejected" || error.kind === "rate_limited");
         await settle(
           refused

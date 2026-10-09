@@ -13,7 +13,7 @@ import {
   positiveDecimal,
   protectedEntrySchema,
   protectedLeg,
-  type TestnetOrder,
+  type ExchangeOrder,
 } from "@crypto-trading/exchanges";
 import type { AccountScope } from "./accounts";
 
@@ -78,7 +78,7 @@ export type OrderIntent = {
 };
 
 export type Settlement =
-  | { status: "acknowledged"; orderListId?: number; orders?: TestnetOrder[] }
+  | { status: "acknowledged"; orderListId?: string; orders?: ExchangeOrder[] }
   | { status: "rejected" | "unknown"; reason?: string };
 
 export type IntentSource =
@@ -177,7 +177,7 @@ export interface OrderIntentStore {
    */
   recordOrders(
     scope: AccountScope,
-    orders: TestnetOrder[],
+    orders: ExchangeOrder[],
     event?: "order.cancelled",
   ): Promise<void>;
 }
@@ -447,18 +447,18 @@ export class PostgresOrderIntents implements OrderIntentStore {
 
   recordOrders(
     scope: AccountScope,
-    orders: TestnetOrder[],
+    orders: ExchangeOrder[],
     event?: "order.cancelled",
   ) {
     return this.#scoped(scope, async (tx) => {
       await upsertOrders(tx, scope, orders);
       if (event)
         for (const order of orders)
-          await audit(tx, scope, String(order.orderId), event, {
+          await audit(tx, scope, order.orderId, event, {
             actor: "customer",
             subjectType: "exchange_order",
             payload: {
-              symbol: order.symbol,
+              instrument: order.instrument,
               clientOrderId: order.clientOrderId,
               orderListId: order.orderListId,
               status: order.status,
@@ -553,7 +553,7 @@ function actorFor(source: IntentSource) {
 export async function upsertOrders(
   tx: Transaction,
   scope: AccountScope,
-  orders: TestnetOrder[],
+  orders: ExchangeOrder[],
 ) {
   for (const order of orders) {
     // Binance sizes a list's exits only once its entry fills.
@@ -561,7 +561,7 @@ export async function upsertOrders(
     const executed = new Decimal(order.executedQty);
     const averagePrice = executed.isZero()
       ? null
-      : new Decimal(order.cummulativeQuoteQty).dividedBy(executed).toFixed();
+      : new Decimal(order.cumulativeQuoteQty).dividedBy(executed).toFixed();
     const intent =
       protectedLeg(order.clientOrderId)?.listClientOrderId ??
       order.clientOrderId;
@@ -570,7 +570,7 @@ export async function upsertOrders(
         customer_id, order_intent_id, exchange_order_id, client_order_id, status,
         requested_quantity, filled_quantity, average_fill_price
       )
-      select ${scope.customerId}, id, ${String(order.orderId)}, ${order.clientOrderId},
+      select ${scope.customerId}, id, ${order.orderId}, ${order.clientOrderId},
         ${order.status}, ${order.origQty}::numeric, ${order.executedQty}::numeric,
         ${averagePrice}::numeric
       from order_intents where idempotency_key = ${intent}

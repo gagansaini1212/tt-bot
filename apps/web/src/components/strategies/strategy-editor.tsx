@@ -11,7 +11,11 @@ import {
   Save,
   Trash2,
 } from "lucide-react";
-import type { DcaInterval, Instrument } from "@crypto-trading/domain";
+import {
+  instrumentLabel,
+  type DcaInterval,
+  type Instrument,
+} from "@crypto-trading/domain";
 import {
   AI_ANALYSIS_INTERVALS,
   type AiSource,
@@ -57,10 +61,24 @@ const KINDS: { value: StrategyKindName; label: string }[] = [
   { value: "standing_price_instruction", label: "Standing price instruction" },
 ];
 
-const PAIRS: { value: Instrument; label: string }[] = [
-  { value: "BTC-USDT", label: "BTC/USDT" },
-  { value: "ETH-USDT", label: "ETH/USDT" },
-];
+type Pair = { value: Instrument; label: string };
+
+/**
+ * The markets a strategy can choose: the account's allowed instruments that
+ * the venue lists, as the worker reports them, and any the strategy being
+ * edited already trades.
+ */
+function pairOptions(markets: StrategyMarket[], form: StrategyForm): Pair[] {
+  const instruments = new Set<Instrument>([
+    ...markets.map((market) => market.instrument),
+    form.instrument,
+    ...form.ai.instruments,
+  ]);
+  return [...instruments].map((value) => ({
+    value,
+    label: instrumentLabel(value),
+  }));
+}
 
 const ANALYSIS_LABELS: Record<number, string> = {
   15: "15 minutes",
@@ -115,6 +133,7 @@ export function StrategyEditor({
     setForm((current) => ({ ...current, ...change }));
   const market = (instrument: Instrument) =>
     markets.find((entry) => entry.instrument === instrument);
+  const pairs = pairOptions(markets, form);
 
   const build = () => {
     const built = buildStrategyDraft(form);
@@ -219,7 +238,7 @@ export function StrategyEditor({
                   className="col-span-2 md:col-span-1"
                   label="Pair"
                   onChange={(instrument) => update({ instrument })}
-                  options={PAIRS}
+                  options={pairs}
                   value={form.instrument}
                 />
               )}
@@ -252,6 +271,7 @@ export function StrategyEditor({
               <AiFields
                 aiSource={aiSource}
                 form={form}
+                pairs={pairs}
                 onChange={(ai) => update({ ai: { ...form.ai, ...ai } })}
               />
             )}
@@ -675,18 +695,22 @@ function StandingFields({
 function AiFields({
   form,
   aiSource,
+  pairs,
   onChange,
 }: {
   form: StrategyForm;
   aiSource: AiSource;
+  pairs: Pair[];
   onChange: (change: Partial<StrategyForm["ai"]>) => void;
 }) {
   const { ai } = form;
   const toggle = (instrument: Instrument, on: boolean) =>
     onChange({
-      instruments: PAIRS.map((pair) => pair.value).filter((value) =>
-        value === instrument ? on : ai.instruments.includes(value),
-      ),
+      instruments: pairs
+        .map((pair) => pair.value)
+        .filter((value) =>
+          value === instrument ? on : ai.instruments.includes(value),
+        ),
     });
   return (
     <fieldset className="space-y-4">
@@ -700,7 +724,7 @@ function AiFields({
       <fieldset>
         <legend className="mb-1.5 text-sm font-medium">Markets</legend>
         <div className="flex flex-wrap gap-4">
-          {PAIRS.map((pair) => (
+          {pairs.map((pair) => (
             <label className="flex items-center gap-2 text-sm" key={pair.value}>
               <input
                 checked={ai.instruments.includes(pair.value)}

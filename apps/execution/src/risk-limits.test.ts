@@ -7,7 +7,7 @@ import {
   databaseTestsSkipped,
   type MigratedTestDatabase,
 } from "@crypto-trading/database/testing";
-import type { TestnetOrder } from "@crypto-trading/exchanges";
+import type { ExchangeOrder } from "@crypto-trading/exchanges";
 import type { AccountScope } from "./accounts";
 import { PostgresOrderIntents, type ManualOrder } from "./order-intents";
 import {
@@ -222,18 +222,18 @@ describe("risk limits in PostgreSQL", { skip: databaseTestsSkipped }, () => {
     );
     const leg = (clientOrderId: string, status: string, executedQty: string) =>
       ({
-        symbol: "BTCUSDT",
-        orderId: 70,
-        orderListId: 7,
+        instrument: "BTC-USDT",
+        orderId: "70",
+        orderListId: "7",
         clientOrderId,
         price: "60000",
         origQty: "0.01",
         executedQty,
-        cummulativeQuoteQty: "0",
+        cumulativeQuoteQty: "0",
         status,
         type: "LIMIT",
         side: "BUY",
-      }) satisfies TestnetOrder;
+      }) satisfies ExchangeOrder;
     await intents.recordOrders(mine, [leg("ct_r_cancel_en", "CANCELED", "0")]);
     // Cancelled after a partial fill: counts in full.
     await intents.record(
@@ -281,7 +281,7 @@ describe("risk limits in PostgreSQL", { skip: databaseTestsSkipped }, () => {
     assert.equal(await store.dailyRiskUsed(mine, today), "604.5");
     // Cancelled before it filled, the CLI buy no longer counts.
     await intents.recordOrders(mine, [
-      { ...leg("ct_r_cli", "CANCELED", "0"), orderListId: -1 },
+      { ...leg("ct_r_cli", "CANCELED", "0"), orderListId: null },
     ]);
     assert.equal(await store.dailyRiskUsed(mine, today), "4.5");
     const theirs = await customer();

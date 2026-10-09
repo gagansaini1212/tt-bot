@@ -9,7 +9,7 @@ import {
 } from "@crypto-trading/database/testing";
 import type {
   AiDecisionRequest,
-  TestnetOrder,
+  ExchangeOrder,
 } from "@crypto-trading/exchanges";
 import type { AccountScope } from "./accounts";
 import { deskFixture } from "./fixtures/fake-exchange";
@@ -49,21 +49,21 @@ function proposal(
   };
 }
 
-const leg = (clientOrderId: string, fields: Partial<TestnetOrder> = {}) =>
+const leg = (clientOrderId: string, fields: Partial<ExchangeOrder> = {}) =>
   ({
-    symbol: "BTCUSDT",
-    orderId: 51,
+    instrument: "BTC-USDT",
+    orderId: "51",
     clientOrderId,
     price: "59900.5",
     origQty: "0.001",
     executedQty: "0",
-    cummulativeQuoteQty: "0",
+    cumulativeQuoteQty: "0",
     status: "NEW",
     type: "LIMIT",
     side: "BUY",
-    orderListId: 7,
+    orderListId: "7",
     ...fields,
-  }) satisfies TestnetOrder;
+  }) satisfies ExchangeOrder;
 
 describe("AI decisions in PostgreSQL", { skip: databaseTestsSkipped }, () => {
   let database: MigratedTestDatabase;
@@ -306,7 +306,7 @@ describe("AI decisions in PostgreSQL", { skip: databaseTestsSkipped }, () => {
     const listId = proposalClientOrderId(id);
     await intents.settle(mine, listId, {
       status: "acknowledged",
-      orderListId: 7,
+      orderListId: "7",
       orders: [leg(`${listId}_en`)],
     });
     assert.equal(
@@ -317,10 +317,10 @@ describe("AI decisions in PostgreSQL", { skip: databaseTestsSkipped }, () => {
       leg(`${listId}_en`, {
         status: "FILLED",
         executedQty: "0.001",
-        cummulativeQuoteQty: "59.9005",
+        cumulativeQuoteQty: "59.9005",
       }),
       leg(`${listId}_tp`, {
-        orderId: 52,
+        orderId: "52",
         side: "SELL",
         price: "63000",
         origQty: "0.00099",

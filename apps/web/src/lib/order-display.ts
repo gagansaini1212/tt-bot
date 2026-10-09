@@ -1,9 +1,9 @@
 // Client-safe helpers for the order drawer and the Open orders table.
 import Decimal from "decimal.js";
-import type { TestnetOrder, TestnetSnapshot } from "@crypto-trading/exchanges";
+import { instrumentAssets, type Instrument } from "@crypto-trading/domain";
+import type { AccountSnapshot, ExchangeOrder } from "@crypto-trading/exchanges";
 import {
   floorToStep,
-  instrumentForSymbol,
   isStrategyListId,
   protectedLeg,
 } from "@crypto-trading/exchanges/order-rules";
@@ -38,21 +38,20 @@ export function quantityForShare(
   return quantity.greaterThan(0) ? quantity.toFixed() : undefined;
 }
 
-export const instrumentOf = instrumentForSymbol;
-
-export function baseAsset(symbol: string) {
-  return instrumentOf(symbol)?.split("-")[0] ?? symbol;
+/** BTC-USDT → "BTC". */
+export function baseAsset(instrument: Instrument) {
+  return instrumentAssets(instrument).base;
 }
 
 export type OrderRole = "Entry" | "Take profit" | "Stop loss";
 
-export function orderRole(order: TestnetOrder): OrderRole | undefined {
+export function orderRole(order: ExchangeOrder): OrderRole | undefined {
   const leg = protectedLeg(order.clientOrderId)?.leg;
   if (leg)
     return { entry: "Entry", takeProfit: "Take profit", stopLoss: "Stop loss" }[
       leg
     ] as OrderRole;
-  if (order.orderListId < 0) return undefined;
+  if (order.orderListId === null) return undefined;
   if (order.type.startsWith("STOP_LOSS")) return "Stop loss";
   if (order.side === "SELL") return "Take profit";
   return "Entry";
@@ -67,26 +66,28 @@ const ROLE_ORDER: (OrderRole | undefined)[] = [
 
 export type OrderGroup = {
   key: string;
-  /** Set for orders that Binance cancels together. */
-  orderListId?: number;
-  orders: TestnetOrder[];
+  /** Set for orders that the venue cancels together. */
+  orderListId?: string;
+  orders: ExchangeOrder[];
 };
 
 /** Standalone orders, and each order list's legs together: entry, take profit, stop loss. */
 export function groupOpenOrders(
-  snapshot: Pick<TestnetSnapshot, "orders" | "pendingOrders">,
+  snapshot: Pick<AccountSnapshot, "orders" | "pendingOrders">,
 ): OrderGroup[] {
   const groups = new Map<string, OrderGroup>();
   const seen = new Set<string>();
   for (const order of [...snapshot.orders, ...snapshot.pendingOrders]) {
-    const id = `${order.symbol}:${order.orderId}`;
+    const id = `${order.instrument}:${order.orderId}`;
     if (seen.has(id)) continue;
     seen.add(id);
     const key =
-      order.orderListId < 0 ? id : `${order.symbol}:list:${order.orderListId}`;
-    const group = groups.get(key) ?? {
+      order.orderListId === null
+        ? id
+        : `${order.instrument}:list:${order.orderListId}`;
+    const group: OrderGroup = groups.get(key) ?? {
       key,
-      ...(order.orderListId < 0 ? {} : { orderListId: order.orderListId }),
+      ...(order.orderListId === null ? {} : { orderListId: order.orderListId }),
       orders: [],
     };
     group.orders.push(order);
@@ -110,11 +111,11 @@ const TYPE_LABELS: Record<string, string> = {
   TAKE_PROFIT_LIMIT: "Take-profit limit",
 };
 
-export function orderTypeLabel(order: TestnetOrder) {
+export function orderTypeLabel(order: ExchangeOrder) {
   return `${TYPE_LABELS[order.type] ?? order.type} ${order.side.toLowerCase()}`;
 }
 
-export function orderPriceLabel(order: TestnetOrder) {
+export function orderPriceLabel(order: ExchangeOrder) {
   const price = new Decimal(order.price);
   const stop = order.stopPrice ? new Decimal(order.stopPrice) : undefined;
   if (stop && !stop.isZero())
@@ -124,14 +125,14 @@ export function orderPriceLabel(order: TestnetOrder) {
   return price.toFixed();
 }
 
-export function orderQuantityLabel(order: TestnetOrder) {
+export function orderQuantityLabel(order: ExchangeOrder) {
   // Binance sizes held-back exits from the entry's fill.
   if (order.status === "PENDING_NEW" && new Decimal(order.origQty).isZero())
     return "Set on fill";
   return `${new Decimal(order.executedQty).toFixed()} / ${new Decimal(order.origQty).toFixed()}`;
 }
 
-export function orderStatusLabel(order: TestnetOrder) {
+export function orderStatusLabel(order: ExchangeOrder) {
   return (
     {
       NEW: "Open",
@@ -142,11 +143,11 @@ export function orderStatusLabel(order: TestnetOrder) {
 }
 
 /** How an order list protects its position, for the row above its legs. */
-export function orderListSummary(orders: TestnetOrder[]): {
+export function orderListSummary(orders: ExchangeOrder[]): {
   text: string;
   warning: boolean;
 } {
-  const asset = baseAsset(orders[0]?.symbol ?? "");
+  const asset = orders[0] ? baseAsset(orders[0].instrument) : "";
   const entry = orders.find((order) => orderRole(order) === "Entry");
   const together = `Binance cancels these ${orders.length} orders together.`;
   if (entry?.status === "PARTIALLY_FILLED")

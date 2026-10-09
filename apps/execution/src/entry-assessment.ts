@@ -7,9 +7,10 @@ import type { OrderIntentStatus } from "./order-intents";
 /** What the worker knows about one order on Binance. */
 export type LegState = {
   clientOrderId: string;
-  orderId: number | null;
-  // Known for orders read from Binance in this pass.
-  orderListId?: number;
+  orderId: string | null;
+  // Known for orders read from the venue in this pass: null for an order in
+  // no list.
+  orderListId?: string | null;
   status: string;
   origQty: string;
   executedQty: string;

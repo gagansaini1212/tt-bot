@@ -1,4 +1,5 @@
 import "server-only";
+import { type Instrument, instrumentSchema } from "@crypto-trading/domain";
 import {
   backtestPeriodSchema,
   backtestRequestSchema,
@@ -10,12 +11,7 @@ import {
   type BacktestResult,
 } from "@crypto-trading/backtest";
 import { SpotHistoryCache } from "@crypto-trading/exchanges/spot-history-cache";
-import {
-  BinanceHistoryError,
-  testnetInstrumentSchema,
-  type TestnetInstrument,
-  type TestnetKline,
-} from "@crypto-trading/exchanges";
+import { BinanceHistoryError, type Kline } from "@crypto-trading/exchanges";
 import Decimal from "decimal.js";
 import { z } from "zod";
 
@@ -28,7 +24,7 @@ export type BacktestOutcome =
 
 /** The market over a period: what a customer could see before choosing prices. */
 export type PeriodSummary = {
-  instrument: TestnetInstrument;
+  instrument: Instrument;
   firstOpen: string;
   low: string;
   high: string;
@@ -62,7 +58,7 @@ const UNAVAILABLE =
 /** The closed candles of the hours from `start` to `end`, or why there are none. */
 async function closedCandles(
   history: HistorySource,
-  instrument: TestnetInstrument,
+  instrument: Instrument,
   start: number,
   end: number,
   now: number,
@@ -74,11 +70,7 @@ async function closedCandles(
       status: "invalid" as const,
       message: "Choose a period that has already started.",
     };
-  const klines: TestnetKline[] = await history.hourlyKlines(
-    instrument,
-    start,
-    until,
-  );
+  const klines: Kline[] = await history.hourlyKlines(instrument, start, until);
   if (klines.length === 0)
     return {
       status: "unavailable" as const,
@@ -152,7 +144,7 @@ export async function runBacktestRequest(
 }
 
 const summaryRequestSchema = z.strictObject({
-  instrument: testnetInstrumentSchema,
+  instrument: instrumentSchema,
   period: backtestPeriodSchema,
 });
 

@@ -76,4 +76,49 @@ describe("schema", { skip: databaseTestsSkipped }, () => {
       /holding_deadlines_order_intent_id_key/,
     );
   });
+
+  test("exchange accounts allow BTC-USDT and ETH-USDT until their customer widens the list", async () => {
+    const customerId = randomUUID();
+    const accountId = randomUUID();
+    await withCustomerScope(database.app, customerId, async (tx) => {
+      await tx`insert into customers (id, display_name) values (${customerId}, 'Test')`;
+      // Inserted as accounts were before the column existed.
+      await tx`
+        insert into exchange_accounts
+          (id, customer_id, exchange, label, mode, accounting_currency, status)
+        values (${accountId}, ${customerId}, 'binance-spot-testnet', 'Testnet',
+          'simulation', 'USDT', 'connected')
+      `;
+    });
+    const allowed = () =>
+      withCustomerScope(database.app, customerId, async (tx) => {
+        const [row] = await tx<{ allowed_instruments: string[] }[]>`
+          select allowed_instruments from exchange_accounts where id = ${accountId}
+        `;
+        return row.allowed_instruments;
+      });
+    assert.deepEqual(await allowed(), ["BTC-USDT", "ETH-USDT"]);
+    await withCustomerScope(
+      database.app,
+      customerId,
+      (tx) => tx`
+        update exchange_accounts
+        set allowed_instruments = ${["BTC-USDT", "ETH-USDT", "SOL-USDT"]}
+        where id = ${accountId}
+      `,
+    );
+    assert.deepEqual(await allowed(), ["BTC-USDT", "ETH-USDT", "SOL-USDT"]);
+    // An account always allows something, or it could hold nothing.
+    await assert.rejects(
+      withCustomerScope(
+        database.app,
+        customerId,
+        (tx) => tx`
+          update exchange_accounts set allowed_instruments = ${[]}::text[]
+          where id = ${accountId}
+        `,
+      ),
+      /exchange_accounts_allowed_instruments_size/,
+    );
+  });
 });

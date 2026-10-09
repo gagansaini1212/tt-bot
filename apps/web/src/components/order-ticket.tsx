@@ -7,6 +7,7 @@ import {
   useTransition,
   type ReactNode,
 } from "react";
+import { type Instrument } from "@crypto-trading/domain";
 import Decimal from "decimal.js";
 import {
   AlertTriangle,
@@ -24,10 +25,7 @@ import {
   type ManualOrderOutcome,
   type ManualOrderTicket,
 } from "@crypto-trading/exchanges/manual-order";
-import {
-  binanceSymbol,
-  type TestnetInstrument,
-} from "@crypto-trading/exchanges/order-rules";
+import {} from "@crypto-trading/exchanges/order-rules";
 
 import {
   checkOrderStatus,
@@ -57,7 +55,7 @@ import { cn } from "@/lib/utils";
 
 type OrderType = "limit" | "market" | "stop_limit";
 type Draft = {
-  instrument?: TestnetInstrument;
+  instrument?: Instrument;
   type: OrderType;
   stopPrice: string;
   price: string;
@@ -223,7 +221,7 @@ function orderForm(draft: Draft, ticket: ManualOrderTicket) {
   const market = ticket.markets.find(
     (entry) => entry.rules.instrument === instrument,
   );
-  const base = baseAsset(binanceSymbol(instrument));
+  const base = baseAsset(instrument);
   const marketPrice =
     market?.bestAsk && ticket.marketSlippage !== null
       ? marketEntryPrice(

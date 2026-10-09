@@ -1,4 +1,5 @@
-import type { TestnetFill } from "@crypto-trading/exchanges";
+import { instrumentLabel } from "@crypto-trading/domain";
+import type { ExchangeFill } from "@crypto-trading/exchanges";
 
 import { Badge } from "@/components/ui/badge";
 import {
@@ -26,7 +27,7 @@ export function FillsTable({
   now,
   showFillId = false,
 }: {
-  fills: TestnetFill[];
+  fills: ExchangeFill[];
   now: string;
   showFillId?: boolean;
 }) {
@@ -57,7 +58,7 @@ export function FillsTable({
             const utc = formatUtc(fill.time);
             const total = fillTotal(fill);
             return (
-              <TableRow key={`${fill.symbol}-${fill.id}`}>
+              <TableRow key={`${fill.instrument}-${fill.id}`}>
                 <TableCell className="whitespace-nowrap text-xs">
                   <time
                     dateTime={new Date(fill.time).toISOString()}
@@ -68,7 +69,9 @@ export function FillsTable({
                   <span className="sr-only">, {utc}</span>
                 </TableCell>
                 <TableCell className="whitespace-nowrap">
-                  <span className="font-medium">{fill.symbol}</span>
+                  <span className="font-medium">
+                    {instrumentLabel(fill.instrument)}
+                  </span>
                   <Badge
                     className="ml-2"
                     variant={fill.isBuyer ? "secondary" : "outline"}

@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { customerIdFrom } from "../lib/customer-principal";
 import { recordDecision } from "../lib/decisions";
+import { instrument } from "../lib/instrument";
 
 const positiveDecimalString = z
   .string()
@@ -14,7 +15,7 @@ export default defineTool({
   description:
     "Draft a trade proposal for the customer to approve or reject. It is saved as a draft and shown on the Activity page. This does not place an order or reserve funds: the execution worker checks it again, with current account data and the customer's limits, only if the customer approves it.",
   inputSchema: z.object({
-    instrument: z.enum(["BTC-USDT", "ETH-USDT"]),
+    instrument,
     // Binance Spot Testnet takes long, unleveraged spot entries only.
     marketKind: z.literal("spot").default("spot"),
     direction: z.literal("long").default("long"),

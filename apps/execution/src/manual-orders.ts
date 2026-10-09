@@ -1,8 +1,7 @@
 import { randomUUID } from "node:crypto";
 import Decimal from "decimal.js";
 import {
-  binanceSymbol,
-  BinanceTestnetError,
+  ExchangeError,
   cancelImpact,
   listClientOrderIdSchema,
   manualCancelRequestSchema,
@@ -14,19 +13,22 @@ import {
   protectedEntrySchema,
   protectedLeg,
   protectedLegIds,
-  testnetInstrumentSchema,
-  type BinanceSpotTestnet,
+  UnlistedMarketError,
   type ManualOrderOutcome,
   type ManualOrderTicket,
   type ManualTradingConfig,
   type ProtectedEntry,
-  type SymbolRules,
-  type TestnetInstrument,
-  type TestnetOrder,
-  type TestnetOrderList,
-  type TestnetOrderListReport,
+  type ExchangeOrder,
+  type ExchangeOrderList,
+  type ExchangeOrderListReport,
+  type TradingAdapter,
 } from "@crypto-trading/exchanges";
-import { utcDayStart } from "@crypto-trading/domain";
+import {
+  instrumentLabel,
+  instrumentSchema,
+  utcDayStart,
+  type Instrument,
+} from "@crypto-trading/domain";
 import type { AccountScope } from "./accounts";
 import {
   UNCONFIRMED_GRACE_MS,
@@ -42,13 +44,13 @@ import {
 } from "./trade-proposals";
 
 export type ManualOrderExchange = Pick<
-  BinanceSpotTestnet,
+  TradingAdapter,
   | "getAccount"
   | "getOpenOrders"
   | "getOpenOrderLists"
   | "getOrder"
   | "getOrderList"
-  | "getSymbolRules"
+  | "getMarketRules"
   | "getDepth"
   | "testProtectedEntry"
   | "placeProtectedEntry"
@@ -85,9 +87,7 @@ export function loadManualTradingConfig(
     .filter(Boolean);
   if (
     !instruments.length ||
-    !instruments.every(
-      (value) => testnetInstrumentSchema.safeParse(value).success,
-    )
+    !instruments.every((value) => instrumentSchema.safeParse(value).success)
   )
     return off(
       "Set TESTNET_MANUAL_INSTRUMENTS to BTC-USDT, ETH-USDT or both in the execution worker to place orders from the dashboard.",
@@ -119,8 +119,16 @@ export function loadManualTradingConfig(
   };
 }
 
+/** Thrown by a ticket for an account that cannot place dashboard orders now. */
+export class ManualOrdersOff extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ManualOrdersOff";
+  }
+}
+
 /** Thrown by a ticket for an account whose customer has set no risk limits. */
-export class RiskLimitsNotSet extends Error {
+export class RiskLimitsNotSet extends ManualOrdersOff {
   constructor() {
     super(
       "Set your risk limits in Settings → Risk limits to place orders from the dashboard.",
@@ -149,10 +157,6 @@ const DECIDED: Record<Exclude<SavedProposalStatus, "draft">, string> = {
   expired: "This proposal expired before it was approved, so nothing was sent.",
 };
 
-// Binance's code for an order or order list that does not exist.
-const NO_SUCH_ORDER = -2013;
-const RULES_TTL_MS = 5 * 60_000;
-
 /**
  * Places, looks up and cancels dashboard orders. The browser's preview is
  * advisory: every placement re-runs the account limits, the per-order cap and
@@ -167,12 +171,14 @@ export class ManualOrderDesk {
   readonly #config: ManualTradingEnvironment;
   readonly #intents: OrderIntentStore;
   readonly #proposals?: TradeProposalStore;
-  readonly #risk: Pick<RiskLimitStore, "current" | "dailyRiskUsed">;
+  readonly #risk: Pick<
+    RiskLimitStore,
+    "current" | "dailyRiskUsed" | "allowedInstruments"
+  >;
   readonly #now: () => Date;
   readonly #onChange: () => void;
   readonly #exclusive: Serializer;
   readonly #sender: ProtectedEntrySender;
-  #rules?: { fetchedAt: number; value: SymbolRules[] };
 
   constructor(options: {
     exchange: ManualOrderExchange;
@@ -180,7 +186,10 @@ export class ManualOrderDesk {
     intents: OrderIntentStore;
     // AI proposals the customer can approve.
     proposals?: TradeProposalStore;
-    risk: Pick<RiskLimitStore, "current" | "dailyRiskUsed">;
+    risk: Pick<
+      RiskLimitStore,
+      "current" | "dailyRiskUsed" | "allowedInstruments"
+    >;
     now?: () => Date;
     // Called after anything that may have changed the account.
     onChange?: () => void;
@@ -203,19 +212,11 @@ export class ManualOrderDesk {
     });
   }
 
-  async #symbolRules() {
-    const now = this.#now().getTime();
-    if (!this.#rules || now - this.#rules.fetchedAt > RULES_TTL_MS)
-      this.#rules = {
-        fetchedAt: now,
-        value: await this.#exchange.getSymbolRules(),
-      };
-    return this.#rules.value;
-  }
-
   /**
    * Fresh account limits, risk limits, balances and market rules for an
-   * order. Throws RiskLimitsNotSet if the customer has set no risk limits.
+   * order. Throws RiskLimitsNotSet if the customer has set no risk limits,
+   * and ManualOrdersOff if the account allows none of the worker's
+   * instruments.
    */
   async ticket(
     scope: AccountScope,
@@ -224,24 +225,44 @@ export class ManualOrderDesk {
     { sending }: { sending?: string } = {},
   ): Promise<ManualOrderTicket> {
     const now = this.#now();
-    const [stored, dailyRiskUsed] = await Promise.all([
+    const [stored, dailyRiskUsed, accountInstruments] = await Promise.all([
       this.#risk.current(scope),
       this.#risk.dailyRiskUsed(scope, utcDayStart(now), sending),
+      this.#risk.allowedInstruments(scope),
     ]);
     if (!stored) throw new RiskLimitsNotSet();
     const limits = withinPlatformMaximums(stored);
+    // The worker's manual instruments that the account allows.
+    const allowedInstruments = this.#config.allowedInstruments.filter(
+      (instrument) => accountInstruments.includes(instrument),
+    );
+    if (!allowedInstruments.length)
+      throw new ManualOrdersOff(
+        "This exchange account allows none of the markets the worker trades from the dashboard (TESTNET_MANUAL_INSTRUMENTS).",
+      );
     const config = {
       ...this.#config,
+      allowedInstruments,
       maxOrderNotional: limits.maxOrderNotional,
     };
+    // Dashboard orders on any of the account's markets use the allocation.
+    const watched = [
+      ...new Set([...accountInstruments, ...this.#config.allowedInstruments]),
+    ];
     const [account, orders, rules, asks] = await Promise.all([
       this.#exchange.getAccount(),
       Promise.all(
-        testnetInstrumentSchema.options.map((instrument) =>
-          this.#exchange.getOpenOrders(instrument),
-        ),
+        watched.map((instrument) => this.#exchange.getOpenOrders(instrument)),
       ).then((lists) => lists.flat()),
-      this.#symbolRules(),
+      // A market the venue no longer lists has no rules, so no order passes.
+      Promise.all(
+        allowedInstruments.map((instrument) =>
+          this.#exchange.getMarketRules(instrument).catch((error: unknown) => {
+            if (error instanceof UnlistedMarketError) return undefined;
+            throw error;
+          }),
+        ),
+      ).then((found) => found.filter((rule) => rule !== undefined)),
       Promise.all(
         config.allowedInstruments.map(
           async (instrument) =>
@@ -444,7 +465,7 @@ export class ManualOrderDesk {
           "Binance rejected the entry, so the proposal was not approved. Nothing was sent.",
         );
         // Only a refusal of the order itself decides the proposal.
-        if (error instanceof BinanceTestnetError && error.kind === "rejected")
+        if (error instanceof ExchangeError && error.kind === "rejected")
           await refuse(outcome.message);
         return outcome;
       }
@@ -488,10 +509,10 @@ export class ManualOrderDesk {
     try {
       return { ticket: await this.ticket(scope) };
     } catch (error) {
-      if (error instanceof RiskLimitsNotSet)
+      if (error instanceof ManualOrdersOff)
         return { outcome: { status: "rejected", message: error.message } };
       // Such as the database failing while it reads entry prices.
-      if (!(error instanceof BinanceTestnetError))
+      if (!(error instanceof ExchangeError))
         return {
           outcome: {
             status: "rejected",
@@ -655,7 +676,7 @@ export class ManualOrderDesk {
         message:
           "The stop-limit entry was cancelled before its stop price traded, so nothing was sent.",
       };
-    let list: TestnetOrderList | undefined;
+    let list: ExchangeOrderList | undefined;
     try {
       list = await this.#sender.find(listClientOrderId);
     } catch {
@@ -741,10 +762,10 @@ export class ManualOrderDesk {
           listClientOrderId,
           unprotectedQuantity,
         );
-      let cancelled: TestnetOrder[];
+      let cancelled: ExchangeOrder[];
       try {
         cancelled =
-          target.orderListId >= 0
+          target.orderListId !== null
             ? (
                 await this.#exchange.cancelOrderList(
                   request.instrument,
@@ -761,7 +782,7 @@ export class ManualOrderDesk {
         this.#onChange();
         if (
           listClientOrderId &&
-          error instanceof BinanceTestnetError &&
+          error instanceof ExchangeError &&
           error.kind !== "unknown_outcome"
         )
           await this.#intents
@@ -779,7 +800,7 @@ export class ManualOrderDesk {
         status: "cancelled",
         unprotectedQuantity,
         message:
-          target.orderListId >= 0
+          target.orderListId !== null
             ? new Decimal(unprotectedQuantity).gt(0)
               ? `Cancelled the order list. ${unprotectedQuantity} is held without exits.`
               : "Cancelled every order in the list."
@@ -823,13 +844,13 @@ export class ProtectedEntrySender {
     entry: ProtectedEntry,
   ): Promise<ManualOrderOutcome> {
     const id = entry.listClientOrderId;
-    let list: TestnetOrderList | TestnetOrderListReport | undefined;
+    let list: ExchangeOrderList | ExchangeOrderListReport | undefined;
     try {
       list = await this.#exchange.placeProtectedEntry(entry);
     } catch (error) {
       // Binance refused the request outright, so nothing was placed.
       if (
-        error instanceof BinanceTestnetError &&
+        error instanceof ExchangeError &&
         (error.kind === "rejected" || error.kind === "rate_limited")
       ) {
         await this.settle(scope, id, {
@@ -841,7 +862,7 @@ export class ProtectedEntrySender {
           "Binance rejected the order. Nothing was placed.",
         );
       }
-      if (!(error instanceof BinanceTestnetError)) {
+      if (!(error instanceof ExchangeError)) {
         await this.settle(scope, id, { status: "unknown" });
         throw error;
       }
@@ -888,7 +909,7 @@ export class ProtectedEntrySender {
   /** Keeps Binance's report of each order. A failure leaves only a log line. */
   async recordOrders(
     scope: AccountScope,
-    orders: TestnetOrder[],
+    orders: ExchangeOrder[],
     event?: "order.cancelled",
   ) {
     try {
@@ -908,9 +929,9 @@ export class ProtectedEntrySender {
       // Only "does not exist" proves Binance has no such list. Any other
       // rejection, such as a signature or clock error, leaves it unknown.
       if (
-        error instanceof BinanceTestnetError &&
+        error instanceof ExchangeError &&
         error.kind === "rejected" &&
-        error.code === NO_SUCH_ORDER
+        error.orderNotFound
       )
         return undefined;
       throw error;
@@ -1028,22 +1049,22 @@ function heldOutcome(
   return {
     status: "held",
     listClientOrderId: entry.listClientOrderId,
-    message: `The worker holds this stop-limit entry. When ${entry.instrument.replace("-", "/")} trades at or above ${new Decimal(stopPrice).toFixed()}, it checks the order again and sends a limit buy at ${new Decimal(entry.price).toFixed()} with its take profit and stop loss.`,
+    message: `The worker holds this stop-limit entry. When ${instrumentLabel(entry.instrument)} trades at or above ${new Decimal(stopPrice).toFixed()}, it checks the order again and sends a limit buy at ${new Decimal(entry.price).toFixed()} with its take profit and stop loss.`,
   };
 }
 
 function resolveTarget(
-  instrument: TestnetInstrument,
-  orderId: number,
-  open: TestnetOrder[],
-  lists: TestnetOrderList[],
+  instrument: Instrument,
+  orderId: string,
+  open: ExchangeOrder[],
+  lists: ExchangeOrderList[],
 ) {
   const order = open.find((entry) => entry.orderId === orderId);
   if (order) return order;
   // A leg Binance holds back until the entry fills may not be listed as open.
   const list = lists.find(
     (entry) =>
-      entry.symbol === binanceSymbol(instrument) &&
+      entry.instrument === instrument &&
       entry.orders.some((leg) => leg.orderId === orderId),
   );
   return list && open.find((entry) => entry.orderListId === list.orderListId);
@@ -1054,7 +1075,7 @@ function failure(
   rejected: string,
   unknown = "Binance did not confirm the request. Refresh before trying again.",
 ): ManualOrderOutcome {
-  if (!(error instanceof BinanceTestnetError)) throw error;
+  if (!(error instanceof ExchangeError)) throw error;
   switch (error.kind) {
     case "rejected":
       return {

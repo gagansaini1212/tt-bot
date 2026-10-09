@@ -1,4 +1,4 @@
-import type { TestnetDepth, TestnetKline } from "@crypto-trading/exchanges";
+import type { Depth, Kline } from "@crypto-trading/exchanges";
 
 import { CandlestickChart } from "@/components/candlestick-chart";
 import { DepthChart } from "@/components/depth-chart";
@@ -45,8 +45,8 @@ export function MarketsView({
   account,
 }: {
   selection: MarketSelection;
-  klines: WorkerState<{ klines: TestnetKline[] }>;
-  depth: WorkerState<{ depth: TestnetDepth }>;
+  klines: WorkerState<{ klines: Kline[] }>;
+  depth: WorkerState<{ depth: Depth }>;
   account: TestnetAccountState;
 }) {
   const { market, interval } = selection;
@@ -129,7 +129,7 @@ function PriceCard({
   account,
 }: {
   selection: MarketSelection;
-  klines: WorkerState<{ klines: TestnetKline[] }>;
+  klines: WorkerState<{ klines: Kline[] }>;
   account: TestnetAccountState;
 }) {
   const { market, interval } = selection;
@@ -180,16 +180,20 @@ function Candles({
   account,
 }: {
   selection: MarketSelection;
-  klines: TestnetKline[];
+  klines: Kline[];
   account: TestnetAccountState;
 }) {
   const priceDigits = candlePriceDigits(klines);
   const connected = account.status === "connected";
   const fills = connected
-    ? account.snapshot.fills.filter(({ symbol }) => symbol === market.symbol)
+    ? account.snapshot.fills.filter(
+        ({ instrument }) => instrument === market.instrument,
+      )
     : [];
   const { markers, outside } = fillMarkers(fills, klines);
-  const groups = connected ? orderLines(account.snapshot, market.symbol) : [];
+  const groups = connected
+    ? orderLines(account.snapshot, market.instrument)
+    : [];
   const orders = groups.flatMap(({ lines }) => lines);
   const price = (value: string) =>
     formatDecimal(value, Math.max(priceDigits, fractionDigits([value])));

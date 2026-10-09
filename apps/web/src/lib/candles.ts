@@ -1,9 +1,10 @@
+import type { Instrument } from "@crypto-trading/domain";
 import Decimal from "decimal.js";
 import type {
-  TestnetFill,
-  TestnetKline,
-  TestnetOrder,
-  TestnetSnapshot,
+  ExchangeFill,
+  Kline,
+  ExchangeOrder,
+  AccountSnapshot,
 } from "@crypto-trading/exchanges";
 
 import { fractionDigits } from "./decimals";
@@ -23,7 +24,7 @@ export type FillMarker = { time: number; side: "BUY" | "SELL"; count: number };
 
 /** An open order's level on the chart. */
 export type OrderLine = {
-  side: TestnetOrder["side"];
+  side: ExchangeOrder["side"];
   /** The leg's role, as the Open orders table badges it, or the side of a standalone order. */
   label: OrderRole | "Buy" | "Sell";
   /** Where the order acts: a stop order's trigger, otherwise its limit price. */
@@ -39,11 +40,11 @@ export type OrderLine = {
 export type OrderLineGroup = {
   /** Unique per group, from groupOpenOrders. */
   key: string;
-  orderListId?: number;
+  orderListId?: string;
   lines: OrderLine[];
 };
 
-export function toCandles(klines: readonly TestnetKline[]): Candle[] {
+export function toCandles(klines: readonly Kline[]): Candle[] {
   return klines.map((kline) => ({
     time: Math.floor(kline.openTime / 1000),
     open: Number(kline.open),
@@ -54,14 +55,14 @@ export function toCandles(klines: readonly TestnetKline[]): Candle[] {
 }
 
 /** Decimal places the candles' prices use, such as 2 for "82384.01000000". */
-export function candlePriceDigits(klines: readonly TestnetKline[]): number {
+export function candlePriceDigits(klines: readonly Kline[]): number {
   return fractionDigits(
     klines.flatMap(({ open, high, low, close }) => [open, high, low, close]),
   );
 }
 
 // Klines are oldest first and do not overlap.
-function candleAt(klines: readonly TestnetKline[], time: number) {
+function candleAt(klines: readonly Kline[], time: number) {
   let low = 0;
   let high = klines.length - 1;
   while (low <= high) {
@@ -80,8 +81,8 @@ function candleAt(klines: readonly TestnetKline[], time: number) {
  * time range are counted in `outside`.
  */
 export function fillMarkers(
-  fills: readonly TestnetFill[],
-  klines: readonly TestnetKline[],
+  fills: readonly ExchangeFill[],
+  klines: readonly Kline[],
 ): { markers: FillMarker[]; outside: number } {
   const groups = new Map<string, FillMarker>();
   let outside = 0;
@@ -114,11 +115,11 @@ export function fillMarkers(
  * stop nor a limit price are left out.
  */
 export function orderLines(
-  snapshot: Pick<TestnetSnapshot, "orders" | "pendingOrders">,
-  symbol: string,
+  snapshot: Pick<AccountSnapshot, "orders" | "pendingOrders">,
+  instrument: Instrument,
 ): OrderLineGroup[] {
   return groupOpenOrders(snapshot)
-    .filter(({ orders }) => orders[0]?.symbol === symbol)
+    .filter(({ orders }) => orders[0]?.instrument === instrument)
     .map(({ key, orderListId, orders }) => ({
       key,
       orderListId,
@@ -127,7 +128,7 @@ export function orderLines(
     .filter(({ lines }) => lines.length > 0);
 }
 
-function orderLine(order: TestnetOrder): OrderLine | undefined {
+function orderLine(order: ExchangeOrder): OrderLine | undefined {
   // A stop-market order's price is 0; it acts at its stopPrice.
   const stop =
     order.stopPrice !== undefined && new Decimal(order.stopPrice).gt(0);

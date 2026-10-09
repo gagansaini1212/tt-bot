@@ -4,7 +4,7 @@ import { DEFAULT_ASSUMPTIONS } from "@crypto-trading/backtest";
 import {
   BinanceHistoryError,
   type HistoricalSymbolFilters,
-  type TestnetKline,
+  type Kline,
 } from "@crypto-trading/exchanges";
 
 import type * as Backtest from "./backtest";
@@ -24,7 +24,8 @@ const SEPT_1 = Date.UTC(2026, 8, 1);
 const filters: HistoricalSymbolFilters = {
   rules: {
     instrument: "BTC-USDT",
-    trading: true,
+    venueSymbol: "BTCUSDT",
+    status: "trading",
     protectedEntryAllowed: true,
     minPrice: "0.01000000",
     maxPrice: "1000000.00000000",
@@ -38,7 +39,7 @@ const filters: HistoricalSymbolFilters = {
   maxStopOrders: 5,
 };
 
-function kline(openTime: number, price: number): TestnetKline {
+function kline(openTime: number, price: number): Kline {
   const text = (value: number) => value.toFixed(2);
   return {
     openTime,
@@ -60,7 +61,7 @@ function history(fail?: Error) {
     async hourlyKlines(instrument: string, start: number, end: number) {
       calls.push([instrument, start, end]);
       if (fail) throw fail;
-      const klines: TestnetKline[] = [];
+      const klines: Kline[] = [];
       for (let time = start; time < end; time += HOUR)
         klines.push(kline(time, 80_000 + ((time - start) / HOUR) * 10));
       return klines;

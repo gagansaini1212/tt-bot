@@ -1,5 +1,5 @@
 import Decimal from "decimal.js";
-import type { TestnetDepth } from "@crypto-trading/exchanges";
+import type { Depth } from "@crypto-trading/exchanges";
 
 import { fractionDigits, formatDecimal } from "./decimals";
 import type { DepthCurve } from "./depth-chart";
@@ -23,12 +23,12 @@ export type OrderBookView = {
  * Formats the order book with exact cumulative totals. Prices and quantities
  * keep the most decimal places their column uses, so the columns line up.
  */
-export function orderBook({ bids, asks }: TestnetDepth): OrderBookView {
+export function orderBook({ bids, asks }: Depth): OrderBookView {
   const all = [...bids, ...asks];
   const priceDigits = fractionDigits(all.map(({ price }) => price));
   const quantityDigits = fractionDigits(all.map(({ quantity }) => quantity));
 
-  function cumulate(levels: TestnetDepth["bids"]) {
+  function cumulate(levels: Depth["bids"]) {
     let total = new Decimal(0);
     return levels.map(({ price, quantity }) => {
       total = total.plus(quantity);

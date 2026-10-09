@@ -15,8 +15,8 @@ const leg = (
   executedQty = "0",
 ): LegState => ({
   clientOrderId: `ct_a_${suffix}`,
-  orderId: 1,
-  orderListId: 7,
+  orderId: "1",
+  orderListId: "7",
   status,
   origQty,
   executedQty,

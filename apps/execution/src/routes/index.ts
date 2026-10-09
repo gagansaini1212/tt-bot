@@ -36,7 +36,10 @@ export function createWorker({
 }: {
   intents: OrderIntentStore;
   proposals?: TradeProposalStore;
-  risk: Pick<RiskLimitStore, "current" | "dailyRiskUsed">;
+  risk: Pick<
+    RiskLimitStore,
+    "current" | "dailyRiskUsed" | "allowedInstruments"
+  >;
   reader?: ExecutionReader;
   settings?: SettingsDependencies;
   strategies?: Pick<
@@ -59,7 +62,11 @@ export function createWorker({
   });
   const desk = orders(desks);
   const routes: Route[] = [
-    route("GET", "/snapshot", snapshot(account)),
+    route(
+      "GET",
+      "/snapshot",
+      snapshot(account, (scope) => risk.allowedInstruments(scope)),
+    ),
     route("GET", "/execution", execution(reader)),
     route("GET", "/market/tickers", tickers(now)),
     route("GET", "/market/klines", klines(now)),
@@ -71,7 +78,13 @@ export function createWorker({
     route("POST", "/orders/triggers/cancel", desk.cancelTrigger),
   ];
   if (proposals) {
-    const ai = decisions({ proposals, now, ...desks, strategies });
+    const ai = decisions({
+      proposals,
+      now,
+      ...desks,
+      strategies,
+      instruments: (scope) => risk.allowedInstruments(scope),
+    });
     routes.push(
       route("POST", "/decisions", ai.record),
       route("GET", "/decisions", ai.list),

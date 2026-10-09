@@ -4,12 +4,16 @@ import { test } from "node:test";
 import {
   BinanceSpotTestnet,
   BinanceTestnetError,
-  type KlineInterval,
-  type TestnetLimitOrder,
 } from "./binance-spot-testnet.js";
+import {
+  ExchangeError,
+  type KlineInterval,
+  type LimitOrderRequest,
+} from "./contract.js";
+import { UnlistedMarketError } from "./market-catalogue.js";
 import type { ProtectedEntry } from "./order-rules.js";
 
-const order: TestnetLimitOrder = {
+const order: LimitOrderRequest = {
   instrument: "BTC-USDT",
   side: "BUY",
   quantity: "0.001",
@@ -28,8 +32,56 @@ const orderResponse = {
   type: "LIMIT",
   side: "BUY",
 };
+const exchangeInfo = (overrides: Record<string, unknown> = {}) => ({
+  symbols: ["BTC", "ETH"].map((base) => ({
+    symbol: `${base}USDT`,
+    status: "TRADING",
+    baseAsset: base,
+    quoteAsset: "USDT",
+    orderTypes: [
+      "LIMIT",
+      "LIMIT_MAKER",
+      "MARKET",
+      "STOP_LOSS",
+      "STOP_LOSS_LIMIT",
+    ],
+    ocoAllowed: true,
+    otoAllowed: true,
+    opoAllowed: true,
+    filters: [
+      {
+        filterType: "PRICE_FILTER",
+        minPrice: "0.01000000",
+        maxPrice: "1000000.00000000",
+        tickSize: "0.01000000",
+      },
+      {
+        filterType: "LOT_SIZE",
+        minQty: "0.00001000",
+        maxQty: "9000.00000000",
+        stepSize: "0.00001000",
+      },
+      {
+        filterType: "NOTIONAL",
+        minNotional: "5.00000000",
+        applyMinToMarket: true,
+        maxNotional: "9000000.00000000",
+        applyMaxToMarket: false,
+        avgPriceMins: 5,
+      },
+    ],
+    ...overrides,
+  })),
+});
+
+/**
+ * A client whose fetch `handler` answers. Unless `markets` is false, the
+ * catalogue's exchangeInfo request is answered with BTCUSDT and ETHUSDT and
+ * left out of `requests`.
+ */
 function setup(
   handler: (url: URL, init: RequestInit) => Response | Promise<Response>,
+  { markets = true }: { markets?: boolean } = {},
 ) {
   const requests: { url: URL; init: RequestInit }[] = [];
   let now = 1_800_000_000_000;
@@ -41,6 +93,8 @@ function setup(
       const url = new URL(String(input));
       assert.equal(url.origin, "https://testnet.binance.vision");
       assert.equal(init.redirect, "error");
+      if (markets && url.pathname === "/api/v3/exchangeInfo")
+        return Response.json(exchangeInfo());
       requests.push({ url, init });
       if (url.pathname === "/api/v3/time")
         return Response.json({ serverTime: now + 2000 });
@@ -124,7 +178,7 @@ test("Ed25519 and RSA requests use percent-encoded base64 signatures verifiable 
       }) as typeof fetch,
     });
     assert.equal((await exchange.getAccount()).canTrade, true);
-    assert.equal((await exchange.placeLimitOrder(order)).orderId, 12);
+    assert.equal((await exchange.placeLimitOrder(order)).orderId, "12");
   }
 });
 
@@ -215,12 +269,17 @@ test("validation uses the non-submitting endpoint and rejects invalid inputs bef
   await exchange.testLimitOrder(order);
   assert.equal(requests[1].url.pathname, "/api/v3/order/test");
   assert.equal(requests[1].init.method, "POST");
-  assert.throws(() =>
+  // Not a BASE-QUOTE instrument.
+  await assert.rejects(
     exchange.placeLimitOrder({
       ...order,
-      instrument: "SOL-USDT" as TestnetLimitOrder["instrument"],
+      instrument: "BTCUSDT" as LimitOrderRequest["instrument"],
     }),
   );
+  await assert.rejects(
+    exchange.placeLimitOrder({ ...order, clientOrderId: "web_123" }),
+  );
+  assert.equal(requests.length, 2);
 });
 
 test("transport failures and server errors leave mutation outcomes unknown without retries or secret leakage", async () => {
@@ -298,8 +357,10 @@ test("rejections and unsafe numeric IDs fail explicitly", async () => {
     rejected.exchange.getOrder("BTC-USDT", "ct_unknown"),
     (error: unknown) =>
       error instanceof BinanceTestnetError &&
+      error instanceof ExchangeError &&
       error.kind === "rejected" &&
-      error.code === -2013,
+      error.code === -2013 &&
+      error.orderNotFound,
   );
   const unsafe = setup(() =>
     Response.json({ ...orderResponse, orderId: Number.MAX_SAFE_INTEGER + 1 }),
@@ -335,10 +396,13 @@ test("snapshot combines both supported instruments, shares clock sync and retain
       },
     ]);
   });
-  const snapshot = await exchange.getSnapshot();
-  assert.equal(snapshot.provider, "binance-spot-testnet");
+  const snapshot = await exchange.getSnapshot(["BTC-USDT", "ETH-USDT"]);
+  assert.equal(snapshot.venue, "binance-spot-testnet");
   assert.equal(snapshot.fills.length, 2);
-  assert.equal(snapshot.fills[0].symbol, "BTCUSDT");
+  assert.equal(snapshot.fills[0].instrument, "BTC-USDT");
+  // Binance's numeric IDs are normalized to strings.
+  assert.equal(snapshot.fills[0].id, "1");
+  assert.equal(snapshot.fills[0].orderId, "12");
   assert.equal(snapshot.fills[0].commission, "0.0000005");
   assert.equal(
     requests.filter(({ url }) => url.pathname === "/api/v3/time").length,
@@ -454,7 +518,7 @@ test("market data rejects invalid inputs before network access", async () => {
   );
   assert.throws(() => exchange.getDepth("BTC-USDT", 101));
   assert.throws(() =>
-    exchange.getDepth("SOL-USDT" as TestnetLimitOrder["instrument"]),
+    exchange.getDepth("btc-usdt" as LimitOrderRequest["instrument"]),
   );
   assert.equal(requests.length, 0);
   // Binance lists some symbols in other scripts.
@@ -625,7 +689,7 @@ test("order lists are looked up by client ID and cancelled by list ID", async ()
     requests[1].url.searchParams.get("origClientOrderId"),
     "ct_list_001",
   );
-  const cancelled = await exchange.cancelOrderList("BTC-USDT", 7);
+  const cancelled = await exchange.cancelOrderList("BTC-USDT", "7");
   assert.ok(
     cancelled.orderReports.every((report) => report.status === "CANCELED"),
   );
@@ -633,13 +697,14 @@ test("order lists are looked up by client ID and cancelled by list ID", async ()
   assert.equal(requests[2].init.method, "DELETE");
   assert.equal(listCancel.get("orderListId"), "7");
   assert.equal(listCancel.get("symbol"), "BTCUSDT");
-  await exchange.cancelOrderById("ETH-USDT", 12);
+  await exchange.cancelOrderById("ETH-USDT", "12");
   const orderCancel = new URLSearchParams(String(requests[3].init.body));
   assert.equal(requests[3].url.pathname, "/api/v3/order");
   assert.equal(orderCancel.get("orderId"), "12");
   assert.equal(orderCancel.get("symbol"), "ETHUSDT");
   await assert.rejects(exchange.getOrderList("not-ours"));
-  await assert.rejects(exchange.cancelOrderList("BTC-USDT", -1));
+  await assert.rejects(exchange.cancelOrderList("BTC-USDT", "-1"));
+  await assert.rejects(exchange.cancelOrderById("BTC-USDT", "OU22CG-KLAF2"));
 });
 
 test("snapshot groups order lists and looks up legs Binance holds back", async () => {
@@ -664,11 +729,13 @@ test("snapshot groups order lists and looks up legs Binance holds back", async (
       );
     return Response.json([]);
   });
-  const snapshot = await exchange.getSnapshot();
-  assert.equal(snapshot.orders[0].orderListId, 7);
+  const snapshot = await exchange.getSnapshot(["BTC-USDT", "ETH-USDT"]);
+  assert.equal(snapshot.orders[0].orderListId, "7");
+  assert.equal(snapshot.orders[0].instrument, "BTC-USDT");
+  // BNBUSDT is not one of the snapshot's instruments.
   assert.deepEqual(
     snapshot.orderLists.map((list) => list.orderListId),
-    [7],
+    ["7"],
   );
   assert.deepEqual(
     snapshot.pendingOrders.map((order) => order.clientOrderId),
@@ -682,78 +749,141 @@ test("snapshot groups order lists and looks up legs Binance holds back", async (
   );
 });
 
-const exchangeInfo = (overrides: Record<string, unknown> = {}) => ({
-  symbols: ["BTCUSDT", "ETHUSDT"].map((symbol) => ({
-    symbol,
-    status: "TRADING",
-    orderTypes: [
-      "LIMIT",
-      "LIMIT_MAKER",
-      "MARKET",
-      "STOP_LOSS",
-      "STOP_LOSS_LIMIT",
-    ],
-    ocoAllowed: true,
-    otoAllowed: true,
-    opoAllowed: true,
-    filters: [
-      {
-        filterType: "PRICE_FILTER",
-        minPrice: "0.01000000",
-        maxPrice: "1000000.00000000",
-        tickSize: "0.01000000",
-      },
-      {
-        filterType: "LOT_SIZE",
-        minQty: "0.00001000",
-        maxQty: "9000.00000000",
-        stepSize: "0.00001000",
-      },
-      {
-        filterType: "NOTIONAL",
-        minNotional: "5.00000000",
-        applyMinToMarket: true,
-        maxNotional: "9000000.00000000",
-        applyMaxToMarket: false,
-        avgPriceMins: 5,
-      },
-    ],
-    ...overrides,
-  })),
-});
-
-test("symbol rules come from exchangeInfo without signing", async () => {
-  const { exchange, requests } = setup(() => Response.json(exchangeInfo()));
-  const [btc, eth] = await exchange.getSymbolRules();
+test("the market catalogue comes from exchangeInfo without signing", async () => {
+  const { exchange, requests } = setup(() => Response.json(exchangeInfo()), {
+    markets: false,
+  });
+  const btc = await exchange.getMarketRules("BTC-USDT");
+  const eth = await exchange.getMarketRules("ETH-USDT");
   assert.equal(btc.instrument, "BTC-USDT");
-  assert.equal(eth.instrument, "ETH-USDT");
+  assert.equal(btc.venueSymbol, "BTCUSDT");
+  assert.equal(btc.status, "trading");
+  assert.equal(eth.venueSymbol, "ETHUSDT");
   assert.equal(btc.protectedEntryAllowed, true);
   assert.equal(btc.tickSize, "0.01000000");
   assert.equal(btc.minNotional, "5.00000000");
+  // One request for every market, cached for both lookups.
+  assert.equal(requests.length, 1);
   const { url, init } = requests[0];
   assert.equal(url.pathname, "/api/v3/exchangeInfo");
-  assert.equal(url.searchParams.get("symbols"), '["BTCUSDT","ETHUSDT"]');
-  assert.equal(url.searchParams.get("signature"), null);
+  assert.equal(url.search, "");
   assert.deepEqual(init.headers, {});
-  const withoutOpo = setup(() =>
-    Response.json(exchangeInfo({ opoAllowed: false })),
+  await assert.rejects(
+    exchange.getMarketRules("SOL-USDT"),
+    (error: unknown) =>
+      error instanceof UnlistedMarketError &&
+      error.message === "Binance Spot Testnet does not list SOL-USDT.",
   );
-  const [restricted] = await withoutOpo.exchange.getSymbolRules();
+  const withoutOpo = setup(
+    () => Response.json(exchangeInfo({ opoAllowed: false })),
+    { markets: false },
+  );
+  const restricted = await withoutOpo.exchange.getMarketRules("BTC-USDT");
   assert.equal(restricted.protectedEntryAllowed, false);
   // Without MAX_NUM_ALGO_ORDERS, the stop-order limit is unknown.
   assert.equal(btc.maxStopOrders, undefined);
-  const withAlgo = setup(() =>
-    Response.json(
-      exchangeInfo({
-        filters: [
-          ...exchangeInfo().symbols[0].filters,
-          { filterType: "MAX_NUM_ALGO_ORDERS", maxNumAlgoOrders: 5 },
+  const withAlgo = setup(
+    () =>
+      Response.json(
+        exchangeInfo({
+          filters: [
+            ...exchangeInfo().symbols[0].filters,
+            { filterType: "MAX_NUM_ALGO_ORDERS", maxNumAlgoOrders: 5 },
+          ],
+        }),
+      ),
+    { markets: false },
+  );
+  const limited = await withAlgo.exchange.getMarketRules("BTC-USDT");
+  assert.equal(limited.maxStopOrders, 5);
+});
+
+test("the catalogue normalizes every listed market and leaves out what it cannot read", async () => {
+  const listing = exchangeInfo();
+  const [btc] = listing.symbols;
+  const { exchange } = setup(
+    () =>
+      Response.json({
+        symbols: [
+          ...listing.symbols,
+          // A crypto quote, and a halted market.
+          { ...btc, symbol: "ETHBTC", baseAsset: "ETH", quoteAsset: "BTC" },
+          {
+            ...btc,
+            symbol: "BNBUSDT",
+            baseAsset: "BNB",
+            status: "BREAK",
+          },
+          // Unreadable: no LOT_SIZE, a lowercase asset, a malformed entry.
+          {
+            ...btc,
+            symbol: "XRPUSDT",
+            baseAsset: "XRP",
+            filters: btc.filters.filter(
+              (filter) => filter.filterType !== "LOT_SIZE",
+            ),
+          },
+          { ...btc, symbol: "abcUSDT", baseAsset: "abc" },
+          { symbol: "BROKEN" },
         ],
       }),
-    ),
+    { markets: false },
   );
-  const [limited] = await withAlgo.exchange.getSymbolRules();
-  assert.equal(limited.maxStopOrders, 5);
+  const markets = await exchange.markets.markets();
+  assert.deepEqual(
+    markets.map(({ instrument, venueSymbol, status }) => [
+      instrument,
+      venueSymbol,
+      status,
+    ]),
+    [
+      ["BTC-USDT", "BTCUSDT", "trading"],
+      ["ETH-USDT", "ETHUSDT", "trading"],
+      ["ETH-BTC", "ETHBTC", "trading"],
+      ["BNB-USDT", "BNBUSDT", "halted"],
+    ],
+  );
+  // Both ways: the venue's symbol to the instrument and back.
+  assert.equal(
+    await exchange.markets.instrumentForVenueSymbol("ETHBTC"),
+    "ETH-BTC",
+  );
+  assert.equal(
+    await exchange.markets.instrumentForVenueSymbol("XRPUSDT"),
+    undefined,
+  );
+  assert.equal(
+    (await exchange.getMarketRules("ETH-BTC")).venueSymbol,
+    "ETHBTC",
+  );
+});
+
+test("a shared catalogue serves every client of the venue, and a failed load is retried", async () => {
+  let loads = 0;
+  const shared = setup(
+    () => {
+      loads += 1;
+      return loads === 1
+        ? new Response("busy", { status: 503 })
+        : Response.json(exchangeInfo());
+    },
+    { markets: false },
+  );
+  await assert.rejects(
+    shared.exchange.getMarketRules("BTC-USDT"),
+    (error: unknown) =>
+      error instanceof ExchangeError && error.kind === "unavailable",
+  );
+  const other = new BinanceSpotTestnet({
+    publicData: true,
+    markets: shared.exchange.markets,
+    fetch: (() => {
+      throw new Error("The shared catalogue loads through its own client.");
+    }) as typeof fetch,
+  });
+  assert.equal((await other.getMarketRules("ETH-USDT")).venueSymbol, "ETHUSDT");
+  await shared.exchange.getMarketRules("BTC-USDT");
+  assert.equal(loads, 2);
 });
 
 test("rejections carry Binance's reason only when it is a documented message", async () => {
@@ -814,7 +944,7 @@ test("the loop's price, fills and market sell map to Binance's contract", async 
   // Public: neither signed nor sent with the API key.
   assert.equal(requests[0].url.searchParams.get("signature"), null);
 
-  const [fill] = await exchange.getOrderFills("BTC-USDT", 12);
+  const [fill] = await exchange.getOrderFills("BTC-USDT", "12");
   assert.equal(fill.commission, "0.00000100");
   const trades = requests.find(
     (request) => request.url.pathname === "/api/v3/myTrades",

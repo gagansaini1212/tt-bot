@@ -10,7 +10,12 @@ import {
   type ManualRiskLimits,
   type RiskLimitsState,
 } from "@crypto-trading/exchanges";
+import type { Instrument } from "@crypto-trading/domain";
 import type { AccountScope } from "./accounts";
+import {
+  selectAccountInstruments,
+  tradableInstruments,
+} from "./instrument-access";
 import type { ManualOrder } from "./order-intents";
 
 /**
@@ -65,6 +70,12 @@ export interface RiskLimitStore {
     since: Date,
     excluding?: string,
   ): Promise<string>;
+  /**
+   * The instruments the account can trade: those its customer allows that
+   * are quoted in its accounting currency. Manual orders and the assistant's
+   * proposals trade only these, and the snapshot covers them.
+   */
+  allowedInstruments(scope: AccountScope): Promise<Instrument[]>;
 }
 
 /**
@@ -260,6 +271,12 @@ export class PostgresRiskLimits implements RiskLimitStore {
       if ((error as { code?: string }).code !== UNIQUE_VIOLATION) throw error;
       return { status: "conflict", current: await this.current(scope) };
     }
+  }
+
+  allowedInstruments(scope: AccountScope) {
+    return withCustomerScope(this.#database, scope.customerId, async (tx) =>
+      tradableInstruments(await selectAccountInstruments(tx, scope)),
+    );
   }
 
   async dailyRiskUsed(scope: AccountScope, since: Date, excluding?: string) {

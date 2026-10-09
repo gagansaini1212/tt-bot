@@ -1,19 +1,17 @@
-import type {
-  BinanceSpotTestnet,
-  TestnetInstrument,
-  TestnetOrder,
-} from "@crypto-trading/exchanges";
+import type { Instrument } from "@crypto-trading/domain";
+import type { ExchangeOrder, TradingAdapter } from "@crypto-trading/exchanges";
 
-/** What the loop and the strategies it runs ask Binance. */
+/** What the loop and the strategies it runs ask the venue. */
 export type ExecutionExchange = Pick<
-  BinanceSpotTestnet,
+  TradingAdapter,
+  | "venue"
   | "getAccount"
   | "getOpenOrders"
   | "getOrder"
   | "getOrderList"
   | "getOrderFills"
   | "getLastPrice"
-  | "getSymbolRules"
+  | "getMarketRules"
   | "getDepth"
   | "getKlines"
   | "cancelOrderList"
@@ -26,19 +24,16 @@ export type ExecutionExchange = Pick<
 export class PassReads {
   // The client for the account this pass is checking.
   readonly exchange: ExecutionExchange;
-  readonly #open = new Map<
-    TestnetInstrument,
-    Promise<Map<string, TestnetOrder>>
-  >();
-  readonly #prices = new Map<TestnetInstrument, Promise<string>>();
-  readonly #asks = new Map<TestnetInstrument, Promise<string | undefined>>();
+  readonly #open = new Map<Instrument, Promise<Map<string, ExchangeOrder>>>();
+  readonly #prices = new Map<Instrument, Promise<string>>();
+  readonly #asks = new Map<Instrument, Promise<string | undefined>>();
   #account?: ReturnType<ExecutionExchange["getAccount"]>;
 
   constructor(exchange: ExecutionExchange) {
     this.exchange = exchange;
   }
 
-  openOrders(instrument: TestnetInstrument) {
+  openOrders(instrument: Instrument) {
     let orders = this.#open.get(instrument);
     if (!orders) {
       orders = this.exchange
@@ -51,7 +46,7 @@ export class PassReads {
     return orders;
   }
 
-  lastPrice(instrument: TestnetInstrument) {
+  lastPrice(instrument: Instrument) {
     let price = this.#prices.get(instrument);
     if (!price) {
       price = this.exchange.getLastPrice(instrument);
@@ -61,7 +56,7 @@ export class PassReads {
   }
 
   /** The best ask, or undefined if the book has none. */
-  bestAsk(instrument: TestnetInstrument) {
+  bestAsk(instrument: Instrument) {
     let ask = this.#asks.get(instrument);
     if (!ask) {
       ask = this.exchange
@@ -88,7 +83,7 @@ export class PassReads {
     this.#account = undefined;
   }
 
-  forgetOpenOrders(instrument: TestnetInstrument) {
+  forgetOpenOrders(instrument: Instrument) {
     this.#open.delete(instrument);
   }
 }

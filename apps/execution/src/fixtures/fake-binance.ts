@@ -3,18 +3,18 @@
 // quantity until the entry fills completely, then sized from what the entry
 // received after fees, one cancelling the other.
 import Decimal from "decimal.js";
+import { instrumentAssets, type Instrument } from "@crypto-trading/domain";
 import {
   BinanceTestnetError,
-  binanceSymbol,
   floorToStep,
   protectedLegIds,
+  UnlistedMarketError,
   type ProtectedEntry,
-  type TestnetFill,
-  type TestnetInstrument,
-  type TestnetMarketSell,
-  type TestnetOrder,
-  type TestnetOrderList,
-  type TestnetOrderListReport,
+  type ExchangeFill,
+  type MarketSellRequest,
+  type ExchangeOrder,
+  type ExchangeOrderList,
+  type ExchangeOrderListReport,
 } from "@crypto-trading/exchanges";
 import type { ExecutionExchange } from "../execution-loop";
 import type { ManualOrderExchange } from "../manual-orders";
@@ -29,10 +29,11 @@ type Failure = BinanceTestnetError | Error;
 type Method = keyof (ExecutionExchange & ManualOrderExchange);
 
 export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
-  readonly orders = new Map<string, TestnetOrder>();
-  readonly lists = new Map<string, TestnetOrderList>();
-  readonly fills = new Map<number, TestnetFill[]>();
-  readonly prices = new Map<TestnetInstrument, string>([
+  readonly venue = "binance-spot-testnet";
+  readonly orders = new Map<string, ExchangeOrder>();
+  readonly lists = new Map<string, ExchangeOrderList>();
+  readonly fills = new Map<string, ExchangeFill[]>();
+  readonly prices = new Map<Instrument, string>([
     ["BTC-USDT", "60000"],
     ["ETH-USDT", "3000"],
   ]);
@@ -90,22 +91,22 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
     };
   }
 
-  #set(order: TestnetOrder) {
+  #set(order: ExchangeOrder) {
     this.orders.set(order.clientOrderId, { ...order });
   }
 
-  #fill(order: TestnetOrder, quantity: Decimal, price: string, fee: string) {
+  #fill(order: ExchangeOrder, quantity: Decimal, price: string, fee: string) {
     const fills = this.fills.get(order.orderId) ?? [];
     fills.push({
-      symbol: order.symbol,
-      id: this.#nextFill++,
+      instrument: order.instrument,
+      id: String(this.#nextFill++),
       orderId: order.orderId,
       price,
       qty: quantity.toFixed(),
       quoteQty: quantity.times(price).toFixed(),
       commission: fee,
       commissionAsset:
-        order.side === "BUY" ? order.symbol.replace(/USDT$/, "") : "USDT",
+        order.side === "BUY" ? instrumentAssets(order.instrument).base : "USDT",
       time: this.#clock().getTime(),
       isBuyer: order.side === "BUY",
     });
@@ -114,7 +115,7 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
     return {
       ...order,
       executedQty: executed.toFixed(),
-      cummulativeQuoteQty: new Decimal(order.cummulativeQuoteQty)
+      cumulativeQuoteQty: new Decimal(order.cumulativeQuoteQty)
         .plus(quantity.times(price))
         .toFixed(),
       status: executed.gte(order.origQty) ? "FILLED" : "PARTIALLY_FILLED",
@@ -123,12 +124,12 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
 
   // Simulation controls.
 
-  setPrice(instrument: TestnetInstrument, price: string) {
+  setPrice(instrument: Instrument, price: string) {
     this.prices.set(instrument, price);
   }
 
   /** Sets the open of the hourly candle starting at `at`. */
-  setHourOpen(instrument: TestnetInstrument, at: Date, price: string) {
+  setHourOpen(instrument: Instrument, at: Date, price: string) {
     this.hourOpens.set(`${instrument}@${at.getTime()}`, price);
   }
 
@@ -153,7 +154,7 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
     const fee = amount.times(FEE_RATE);
     const filled = this.#fill(entry, amount, entry.price, fee.toFixed());
     this.#set(filled);
-    const base = this.#balance(entry.symbol.replace(/USDT$/, ""));
+    const base = this.#balance(instrumentAssets(entry.instrument).base);
     base.free = base.free.plus(amount.minus(fee));
     const usdt = this.#balance("USDT");
     usdt.locked = usdt.locked.minus(amount.times(entry.price));
@@ -192,7 +193,7 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
     this.#set(this.#fill(exit, new Decimal(exit.origQty), price, "0"));
     this.#set({ ...other, status: "EXPIRED" });
     this.lists.get(listClientOrderId)!.listOrderStatus = "ALL_DONE";
-    const base = this.#balance(exit.symbol.replace(/USDT$/, ""));
+    const base = this.#balance(instrumentAssets(exit.instrument).base);
     base.locked = base.locked.minus(exit.origQty);
   }
 
@@ -208,13 +209,13 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
     this.lists.clear();
   }
 
-  #cancel(list: TestnetOrderList) {
+  #cancel(list: ExchangeOrderList) {
     list.listOrderStatus = "ALL_DONE";
     for (const { clientOrderId } of list.orders) {
       const order = this.orders.get(clientOrderId)!;
       if (!OPEN.has(order.status)) continue;
       if (order.side === "SELL" && order.status !== "PENDING_NEW") {
-        const base = this.#balance(order.symbol.replace(/USDT$/, ""));
+        const base = this.#balance(instrumentAssets(order.instrument).base);
         const left = new Decimal(order.origQty).minus(order.executedQty);
         base.locked = base.locked.minus(left);
         base.free = base.free.plus(left);
@@ -248,12 +249,12 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
     };
   };
 
-  getOpenOrders = async (instrument: TestnetInstrument) => {
+  getOpenOrders = async (instrument: Instrument) => {
     this.#call("getOpenOrders");
     return [...this.orders.values()]
       .filter(
         (order) =>
-          order.symbol === binanceSymbol(instrument) &&
+          order.instrument === instrument &&
           ["NEW", "PARTIALLY_FILLED"].includes(order.status),
       )
       .map((order) => ({ ...order }));
@@ -266,7 +267,7 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
     );
   };
 
-  getOrder = async (_instrument: TestnetInstrument, clientOrderId: string) => {
+  getOrder = async (_instrument: Instrument, clientOrderId: string) => {
     this.#call("getOrder");
     const order = this.orders.get(clientOrderId);
     if (!order) throw missing();
@@ -280,23 +281,26 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
     return structuredClone(list);
   };
 
-  getOrderFills = async (_instrument: TestnetInstrument, orderId: number) => {
+  getOrderFills = async (_instrument: Instrument, orderId: string) => {
     this.#call("getOrderFills");
     return structuredClone(this.fills.get(orderId) ?? []);
   };
 
-  getLastPrice = async (instrument: TestnetInstrument) => {
+  getLastPrice = async (instrument: Instrument) => {
     this.#call("getLastPrice");
     return this.prices.get(instrument)!;
   };
 
-  getSymbolRules = async () => {
-    this.#call("getSymbolRules");
-    return [rules("BTC-USDT"), rules("ETH-USDT")];
+  // Lists the markets it has a price for.
+  getMarketRules = async (instrument: Instrument) => {
+    this.#call("getMarketRules");
+    if (!this.prices.has(instrument))
+      throw new UnlistedMarketError(this.venue, instrument);
+    return rules(instrument);
   };
 
   getKlines = async (
-    instrument: TestnetInstrument,
+    instrument: Instrument,
     _interval: string,
     limit = 500,
   ) => {
@@ -322,7 +326,7 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
     });
   };
 
-  getDepth = async (instrument: TestnetInstrument) => {
+  getDepth = async (instrument: Instrument) => {
     this.#call("getDepth");
     const price = new Decimal(this.prices.get(instrument)!);
     return {
@@ -338,7 +342,7 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
 
   placeProtectedEntry = async (
     entry: ProtectedEntry,
-  ): Promise<TestnetOrderListReport> => {
+  ): Promise<ExchangeOrderListReport> => {
     this.#call("placeProtectedEntry");
     if (this.lists.has(entry.listClientOrderId))
       throw new BinanceTestnetError(
@@ -347,20 +351,20 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
         undefined,
         "Duplicate order sent.",
       );
-    const orderListId = this.#nextId++;
+    const orderListId = String(this.#nextId++);
     const ids = protectedLegIds(entry.listClientOrderId);
-    const symbol = binanceSymbol(entry.instrument);
+    const { instrument } = entry;
     const leg = (
       clientOrderId: string,
-      fields: Partial<TestnetOrder>,
-    ): TestnetOrder => ({
-      symbol,
-      orderId: this.#nextId++,
+      fields: Partial<ExchangeOrder>,
+    ): ExchangeOrder => ({
+      instrument,
+      orderId: String(this.#nextId++),
       clientOrderId,
       price: "0",
       origQty: "0",
       executedQty: "0",
-      cummulativeQuoteQty: "0",
+      cumulativeQuoteQty: "0",
       status: "PENDING_NEW",
       type: "LIMIT_MAKER",
       side: "SELL",
@@ -383,15 +387,15 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
     const cost = new Decimal(entry.quantity).times(entry.price);
     usdt.free = usdt.free.minus(cost);
     usdt.locked = usdt.locked.plus(cost);
-    const list: TestnetOrderList = {
+    const list: ExchangeOrderList = {
       orderListId,
       contingencyType: "OTO",
       listStatusType: "EXEC_STARTED",
       listOrderStatus: "EXECUTING",
       listClientOrderId: entry.listClientOrderId,
-      symbol,
-      orders: legs.map(({ symbol, orderId, clientOrderId }) => ({
-        symbol,
+      instrument,
+      orders: legs.map(({ orderId, clientOrderId }) => ({
+        instrument,
         orderId,
         clientOrderId,
       })),
@@ -412,9 +416,9 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
   };
 
   cancelOrderList = async (
-    _instrument: TestnetInstrument,
-    orderListId: number,
-  ): Promise<TestnetOrderListReport> => {
+    _instrument: Instrument,
+    orderListId: string,
+  ): Promise<ExchangeOrderListReport> => {
     this.#call("cancelOrderList");
     const list = [...this.lists.values()].find(
       (entry) => entry.orderListId === orderListId,
@@ -435,7 +439,7 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
     };
   };
 
-  cancelOrderById = async (_instrument: TestnetInstrument, orderId: number) => {
+  cancelOrderById = async (_instrument: Instrument, orderId: string) => {
     this.#call("cancelOrderById");
     const order = [...this.orders.values()].find(
       (entry) => entry.orderId === orderId,
@@ -445,7 +449,7 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
     return { ...this.orders.get(order.clientOrderId)! };
   };
 
-  placeMarketSell = async (sale: TestnetMarketSell) => {
+  placeMarketSell = async (sale: MarketSellRequest) => {
     this.#call("placeMarketSell");
     if (this.orders.has(sale.clientOrderId))
       throw new BinanceTestnetError(
@@ -463,20 +467,19 @@ export class FakeBinance implements ExecutionExchange, ManualOrderExchange {
         undefined,
         "Account has insufficient balance for requested action.",
       );
-    const symbol = binanceSymbol(sale.instrument);
-    const base = this.#balance(symbol.replace(/USDT$/, ""));
-    let order: TestnetOrder = {
-      symbol,
-      orderId: this.#nextId++,
+    const base = this.#balance(instrumentAssets(sale.instrument).base);
+    let order: ExchangeOrder = {
+      instrument: sale.instrument,
+      orderId: String(this.#nextId++),
       clientOrderId: sale.clientOrderId,
       price: "0",
       origQty: sale.quantity,
       executedQty: "0",
-      cummulativeQuoteQty: "0",
+      cumulativeQuoteQty: "0",
       status: "NEW",
       type: "MARKET",
       side: "SELL",
-      orderListId: -1,
+      orderListId: null,
     };
     if (this.sellBehaviour === "expire") order.status = "EXPIRED";
     else {

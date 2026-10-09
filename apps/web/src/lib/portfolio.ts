@@ -1,5 +1,5 @@
 import Decimal from "decimal.js";
-import type { TestnetTicker } from "@crypto-trading/exchanges";
+import type { Ticker } from "@crypto-trading/exchanges";
 
 // Enough significant digits that sums and products of Binance's decimal
 // strings stay exact. Only prices through an inverse market (1 ÷ rate) are
@@ -66,7 +66,7 @@ export type Portfolio = {
  */
 export function valuePortfolio(
   balances: readonly Balance[],
-  tickers: readonly TestnetTicker[],
+  tickers: readonly Ticker[],
 ): Portfolio {
   const markets = new Map<string, Rate>();
   for (const { symbol, lastPrice, openPrice } of tickers) {

@@ -77,7 +77,7 @@ function mockWorker({ skew = 0, age = 2_000 } = {}) {
       {
         status: "connected",
         snapshot: {
-          provider: "binance-spot-testnet",
+          venue: "binance-spot-testnet",
           capturedAt: new Date(workerNow - age).toISOString(),
           canTrade: true,
           balances: [],

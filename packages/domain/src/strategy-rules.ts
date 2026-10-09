@@ -22,6 +22,7 @@ export const RULE_BOUNDS = {
   maxStandingEntries: 10,
   maxPerpetualLeverage: 10,
   maxAiProtectedEntries: 10,
+  maxAiInstruments: 20,
   minGridLevels: 2,
   maxGridLevels: 100,
   maxDcaBuys: 1_000,
@@ -140,7 +141,10 @@ export const standingPriceInstructionRulesSchema = z
 export const aiManagedRulesSchema = z
   .strictObject({
     kind: z.literal("ai_managed"),
-    allowedInstruments: z.array(instrumentSchema).min(1),
+    allowedInstruments: z
+      .array(instrumentSchema)
+      .min(1)
+      .max(RULE_BOUNDS.maxAiInstruments),
     marketKind: marketKindSchema,
     allowShort: z.boolean(),
     maxLeverage: z.int().min(1).max(RULE_BOUNDS.maxPerpetualLeverage),

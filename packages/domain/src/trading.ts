@@ -2,14 +2,14 @@ import Decimal from "decimal.js";
 import { z } from "zod";
 
 import { decimalString, positiveDecimalString } from "./decimal";
+import { instrumentSchema } from "./instruments";
 import { protectionIsValid } from "./protection";
 
-export const instrumentSchema = z.enum(["BTC-USDT", "ETH-USDT"]);
+export { instrumentSchema, type Instrument } from "./instruments";
 export const marketKindSchema = z.enum(["spot", "perpetual"]);
 export const tradeDirectionSchema = z.enum(["long", "short"]);
 export const tradingModeSchema = z.enum(["simulation", "live"]);
 
-export type Instrument = z.infer<typeof instrumentSchema>;
 export type MarketKind = z.infer<typeof marketKindSchema>;
 export type TradeDirection = z.infer<typeof tradeDirectionSchema>;
 

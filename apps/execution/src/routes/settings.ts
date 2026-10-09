@@ -1,5 +1,5 @@
 import {
-  BinanceTestnetError,
+  ExchangeError,
   exchangeKeysRequestSchema,
   riskLimitsChangeRequestSchema,
   webhookRequestSchema,
@@ -281,14 +281,14 @@ export async function testConnection(
       source: lookup.source,
       message,
     });
-    if (!(error instanceof BinanceTestnetError))
+    if (!(error instanceof ExchangeError))
       return failed(
         "The connection test could not run. Check the execution worker's output.",
       );
     switch (error.kind) {
       case "rejected":
         return failed(
-          error.code !== undefined && REFUSED_KEYS.has(error.code)
+          typeof error.code === "number" && REFUSED_KEYS.has(error.code)
             ? `Binance refused these keys (code ${error.code}). Check the API key, the secret or private key, and that the key is a Spot Testnet key with account access.`
             : `Binance refused the request${error.code === undefined ? "" : ` (code ${error.code})`}.`,
         );

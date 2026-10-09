@@ -9,13 +9,13 @@ import {
   type LossLimitStatus,
   type OpenEntryValuation,
   type PnlBooking,
+  type Instrument,
 } from "@crypto-trading/domain";
-import type { TestnetInstrument } from "@crypto-trading/exchanges";
 
 /** One of a strategy's protected entries. */
 export type MeasuredEntry = {
   orderIntentId: string;
-  instrument: TestnetInstrument;
+  instrument: Instrument;
   // Whether the strategy still holds what the entry bought. An entry handed
   // over to the customer, or that Binance no longer knows, holds nothing
   // the strategy answers for.
@@ -58,7 +58,7 @@ export class UnmeasurableError extends Error {
 }
 
 /** BTC-USDT → ["BTC", "USDT"] */
-function assets(instrument: TestnetInstrument) {
+function assets(instrument: Instrument) {
   const [base, quote] = instrument.split("-");
   return { base, quote };
 }
@@ -85,8 +85,8 @@ export function strategyPnl(
     dayStartMarks,
   }: {
     now: Date;
-    marks: ReadonlyMap<TestnetInstrument, string>;
-    dayStartMarks: ReadonlyMap<TestnetInstrument, string>;
+    marks: ReadonlyMap<Instrument, string>;
+    dayStartMarks: ReadonlyMap<Instrument, string>;
   },
 ): StrategyPnl {
   const dayStart = utcDayStart(now).getTime();
@@ -199,9 +199,9 @@ export function dayStartInstruments(
   entries: MeasuredEntry[],
   fills: MeasuredFill[],
   now: Date,
-): Set<TestnetInstrument> {
+): Set<Instrument> {
   const dayStart = utcDayStart(now).getTime();
-  const needed = new Set<TestnetInstrument>();
+  const needed = new Set<Instrument>();
   for (const entry of entries) {
     const held = fills
       .filter(

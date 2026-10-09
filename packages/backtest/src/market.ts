@@ -2,7 +2,7 @@ import Decimal from "decimal.js";
 import { z } from "zod";
 
 import { decimalString } from "@crypto-trading/domain";
-import type { SymbolRules } from "@crypto-trading/exchanges/order-rules";
+import type { MarketRules } from "@crypto-trading/exchanges/market-catalogue";
 
 /**
  * The exchange's rules for the backtested market: its price, quantity and
@@ -11,7 +11,7 @@ import type { SymbolRules } from "@crypto-trading/exchanges/order-rules";
  * those orders, so the stop-order limit caps the entries held at once.
  */
 export type BacktestMarket = {
-  rules: SymbolRules;
+  rules: MarketRules;
   maxStopOrders: number;
 };
 

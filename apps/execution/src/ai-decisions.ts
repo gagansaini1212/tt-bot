@@ -10,20 +10,20 @@ import {
   protectionIsValid,
   quantityFor,
   type AiManagedRules,
+  type Instrument,
+  instrumentSchema,
 } from "@crypto-trading/domain";
 import {
   RECORDED_FIXTURE_MODEL,
-  testnetInstrumentSchema,
   tradeProposalDraftSchema,
   type AiDecisionRequest,
   type AiSource,
-  type TestnetInstrument,
 } from "@crypto-trading/exchanges";
 import recordedDecisions from "./recorded-decisions.json" with { type: "json" };
 
 /** A market an AI-managed strategy may trade, as the worker read it. */
 export type AnalysisMarket = {
-  instrument: TestnetInstrument;
+  instrument: Instrument;
   lastPrice: string;
   bestAsk: string | null;
   tickSize: string;
@@ -37,7 +37,7 @@ export type AnalysisRequest = {
   markets: AnalysisMarket[];
   // What the strategy holds now, pending or open.
   entries: {
-    instrument: TestnetInstrument;
+    instrument: Instrument;
     quantity: string;
     entryPrice: string;
   }[];
@@ -154,7 +154,7 @@ export class RecordedDecisionSource implements DecisionSource {
     };
     const noTrade = (why: string): AnalysisDecision => ({
       kind: "no_trade",
-      instrument: testnetInstrumentSchema.safeParse(instrument).data ?? null,
+      instrument: instrumentSchema.safeParse(instrument).data ?? null,
       ...common,
       rationale: `${FIXTURE_LABEL} ${why}`,
     });
@@ -221,7 +221,7 @@ export class RecordedDecisionSource implements DecisionSource {
 /** The structured answer the worker asks the assistant for. */
 const decisionOutputSchema = z.object({
   decision: z.enum(["trade", "no_trade"]),
-  instrument: testnetInstrumentSchema.nullable(),
+  instrument: instrumentSchema.nullable(),
   quantity: z.string().nullable(),
   entryPrice: z.string().nullable(),
   stopLossPrice: z.string().nullable(),
@@ -230,15 +230,16 @@ const decisionOutputSchema = z.object({
   rationale: z.string().trim().min(1).max(2_000),
 });
 
-// The same, as the JSON Schema eve hands the model.
-const DECISION_OUTPUT_JSON_SCHEMA = {
+// The same, as the JSON Schema eve hands the model, which may name only
+// the markets it is offered.
+const decisionOutputJsonSchema = (instruments: readonly Instrument[]) => ({
   type: "object",
   additionalProperties: false,
   properties: {
     decision: { type: "string", enum: ["trade", "no_trade"] },
     instrument: {
       type: ["string", "null"],
-      enum: ["BTC-USDT", "ETH-USDT", null],
+      enum: [...instruments, null],
     },
     quantity: { type: ["string", "null"] },
     entryPrice: { type: ["string", "null"] },
@@ -257,7 +258,7 @@ const DECISION_OUTPUT_JSON_SCHEMA = {
     "entryExpiresAt",
     "rationale",
   ],
-} as const;
+});
 
 /**
  * The version of the scheduled-analysis prompt below, recorded with every
@@ -363,10 +364,9 @@ export class EveDecisionSource implements DecisionSource {
           availableAllocation: request.availableAllocation,
           capturedAt: request.now.toISOString(),
         },
-        outputSchema: DECISION_OUTPUT_JSON_SCHEMA as unknown as Record<
-          string,
-          unknown
-        >,
+        outputSchema: decisionOutputJsonSchema(
+          request.markets.map((market) => market.instrument),
+        ),
       }),
     ]);
     if (answer.status !== "completed")
@@ -399,6 +399,9 @@ export class EveDecisionSource implements DecisionSource {
       !proposal.success ||
       !request.strategy.rules.allowedInstruments.includes(
         proposal.data.instrument,
+      ) ||
+      !request.markets.some(
+        (market) => market.instrument === proposal.data.instrument,
       )
     )
       throw new Error(
@@ -412,7 +415,7 @@ function analysisPrompt(request: AnalysisRequest) {
   const { rules } = request.strategy;
   return [
     `Scheduled analysis for the AI-managed strategy "${request.strategy.name}". Do not call any tool: answer with the structured decision only. The execution worker records it and checks it against the strategy's limits.`,
-    `Decide whether to open one long spot limit entry now in ${rules.allowedInstruments.join(" or ")}, or not to trade. A trade needs a quantity, an entry price, a stop loss below it, a take profit above it, and an entry expiry in the future (ISO 8601).`,
+    `Decide whether to open one long spot limit entry now in ${request.markets.map((market) => market.instrument).join(" or ")}, or not to trade. A trade needs a quantity, an entry price, a stop loss below it, a take profit above it, and an entry expiry in the future (ISO 8601).`,
     `Limits: positions up to ${rules.maxPositionNotional} USDT per instrument, at most ${rules.maxProtectedEntries} entries at once, ${request.availableAllocation} USDT of the allocation uncommitted, each entry held at most ${Math.round(rules.holdingPeriodSeconds / 60)} minutes. The market data and the strategy's entries are in the client context, captured at ${request.now.toISOString()}. A no-trade decision is valid.`,
   ].join("\n\n");
 }

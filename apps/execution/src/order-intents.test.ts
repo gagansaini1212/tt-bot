@@ -7,7 +7,7 @@ import {
   databaseTestsSkipped,
   type MigratedTestDatabase,
 } from "@crypto-trading/database/testing";
-import type { TestnetOrder } from "@crypto-trading/exchanges";
+import type { ExchangeOrder } from "@crypto-trading/exchanges";
 import type { AccountScope } from "./accounts";
 import { deskFixture, limit } from "./fixtures/fake-exchange";
 import {
@@ -29,21 +29,21 @@ const entry = (listClientOrderId: string): ManualOrder => ({
   },
 });
 
-const leg = (clientOrderId: string, fields: Partial<TestnetOrder> = {}) =>
+const leg = (clientOrderId: string, fields: Partial<ExchangeOrder> = {}) =>
   ({
-    symbol: "BTCUSDT",
-    orderId: 41,
+    instrument: "BTC-USDT",
+    orderId: "41",
     clientOrderId,
     price: "60000.5",
     origQty: "0.001",
     executedQty: "0",
-    cummulativeQuoteQty: "0",
+    cumulativeQuoteQty: "0",
     status: "NEW",
     type: "LIMIT",
     side: "BUY",
-    orderListId: 9,
+    orderListId: "9",
     ...fields,
-  }) satisfies TestnetOrder;
+  }) satisfies ExchangeOrder;
 
 describe("order intents in PostgreSQL", { skip: databaseTestsSkipped }, () => {
   let database: MigratedTestDatabase;
@@ -161,7 +161,7 @@ describe("order intents in PostgreSQL", { skip: databaseTestsSkipped }, () => {
 
     await intents.settle(mine, "ct_pg_unknown", {
       status: "acknowledged",
-      orderListId: 9,
+      orderListId: "9",
     });
     saved = await row("ct_pg_unknown");
     assert.equal(saved.status, "acknowledged");
@@ -179,13 +179,13 @@ describe("order intents in PostgreSQL", { skip: databaseTestsSkipped }, () => {
     await intents.record(mine, entry("ct_pg_legs"), "dashboard");
     await intents.settle(mine, "ct_pg_legs", {
       status: "acknowledged",
-      orderListId: 9,
+      orderListId: "9",
       orders: [
         leg("ct_pg_legs_en"),
         // Binance sizes the exits only once the entry fills.
-        leg("ct_pg_legs_tp", { orderId: 42, origQty: "0", side: "SELL" }),
+        leg("ct_pg_legs_tp", { orderId: "42", origQty: "0", side: "SELL" }),
         // Not this application's order.
-        leg("manual_web_order", { orderId: 43 }),
+        leg("manual_web_order", { orderId: "43" }),
       ],
     });
     await intents.recordOrders(
@@ -194,10 +194,10 @@ describe("order intents in PostgreSQL", { skip: databaseTestsSkipped }, () => {
         leg("ct_pg_legs_en", {
           status: "FILLED",
           executedQty: "0.001",
-          cummulativeQuoteQty: "60.0003",
+          cumulativeQuoteQty: "60.0003",
         }),
         leg("ct_pg_legs_tp", {
-          orderId: 42,
+          orderId: "42",
           origQty: "0.00099",
           side: "SELL",
         }),

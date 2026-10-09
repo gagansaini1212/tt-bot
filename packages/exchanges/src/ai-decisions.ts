@@ -3,16 +3,14 @@
 import Decimal from "decimal.js";
 import { z } from "zod";
 import {
+  instrumentSchema,
   marketKindSchema,
   protectionIsValid,
   tradeDirectionSchema,
 } from "@crypto-trading/domain";
 import { exitReasonSchema } from "./execution-state";
 import { manualOrderOutcomeSchema } from "./manual-order";
-import {
-  listClientOrderIdSchema,
-  testnetInstrumentSchema,
-} from "./order-rules";
+import { listClientOrderIdSchema } from "./order-rules";
 
 const decimal = z
   .string()
@@ -28,7 +26,7 @@ const timestamp = z.iso.datetime({ offset: true });
  */
 export const tradeProposalDraftSchema = z
   .strictObject({
-    instrument: testnetInstrumentSchema,
+    instrument: instrumentSchema,
     marketKind: z.literal("spot"),
     direction: z.literal("long"),
     quantity: amount,
@@ -72,7 +70,7 @@ export const aiDecisionRequestSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("no_trade"),
     // The instrument the assistant decided not to trade, if one.
-    instrument: testnetInstrumentSchema.nullable(),
+    instrument: instrumentSchema.nullable(),
     ...decisionFields,
   }),
 ]);

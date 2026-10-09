@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { TestnetTicker } from "@crypto-trading/exchanges";
+import type { Ticker } from "@crypto-trading/exchanges";
 import { assetMix, fillTotal, valuePortfolio } from "./portfolio";
 
 function ticker(
   symbol: string,
   lastPrice: string,
   openPrice = lastPrice,
-): TestnetTicker {
+): Ticker {
   return {
     symbol,
     lastPrice,

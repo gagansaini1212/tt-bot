@@ -2,6 +2,7 @@ export * from "./dca";
 export * from "./decimal";
 export * from "./entry-plans";
 export * from "./grid";
+export * from "./instruments";
 export * from "./loss-limits";
 export * from "./protection";
 export * from "./standing-instruction";

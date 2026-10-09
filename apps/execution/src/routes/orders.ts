@@ -38,7 +38,10 @@ export function deskProvider({
   onChange: () => void;
   intents: OrderIntentStore;
   proposals?: TradeProposalStore;
-  risk: Pick<RiskLimitStore, "current" | "dailyRiskUsed">;
+  risk: Pick<
+    RiskLimitStore,
+    "current" | "dailyRiskUsed" | "allowedInstruments"
+  >;
   // Shared with the strategy runner, so its placements wait for these.
   exclusive?: Serializer;
 }) {

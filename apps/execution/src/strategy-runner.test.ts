@@ -1313,12 +1313,89 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
       deskFor: () => w.desk,
       disabledMessage: "",
       strategies: w.runner,
+      instruments: async () => ["BTC-USDT", "ETH-USDT"],
     });
     const approved = (await call(approvals.approve, {
       proposalId: draftEntry.id,
     })) as { outcome: { status: string } };
     assert.equal(approved.outcome.status, "working");
     assert.equal((await entries(ai))[0].status, "approved");
+  });
+
+  test("a strategy trades only markets the venue lists and the account allows, quoted in its accounting currency", async () => {
+    const w = await world();
+    const routes = strategyRoutes(w.runner);
+    const create = async (value: StrategyDraft) =>
+      (
+        (await routes.create.handle({
+          exchange: w.fake,
+          account: w.scope,
+          query: {},
+          body: value,
+        } as never)) as { change: StrategyChange }
+      ).change;
+    const solGrid = (instrument: string) =>
+      grid(w.now(), {
+        instrument,
+        lowerPrice: "140",
+        upperPrice: "170",
+        rangeStopPrice: "130",
+      });
+    const allow = (instruments: string[]) =>
+      database.admin`
+        update exchange_accounts set allowed_instruments = ${instruments}
+        where id = ${w.scope.exchangeAccountId}
+      `;
+    // The venue does not list it.
+    const unlisted = await create(solGrid("SOL-USDT"));
+    assert.equal(unlisted.result, "refused");
+    assert.equal(
+      unlisted.message,
+      "Binance Spot Testnet does not list SOL-USDT.",
+    );
+    // Listed, but outside the account's default allowed instruments.
+    w.fake.setPrice("SOL-USDT", "160");
+    const outside = await create(solGrid("SOL-USDT"));
+    assert.equal(outside.result, "refused");
+    assert.match(
+      outside.message,
+      /SOL\/USDT is not among this exchange account's allowed instruments: BTC\/USDT, ETH\/USDT/,
+    );
+    // Allowed, but quoted in BTC, not the account's USDT (ADR 0009).
+    w.fake.setPrice("ETH-BTC", "0.05");
+    await allow(["BTC-USDT", "ETH-USDT", "SOL-USDT", "ETH-BTC"]);
+    const quoted = await create(
+      grid(w.now(), {
+        instrument: "ETH-BTC",
+        lowerPrice: "0.04",
+        upperPrice: "0.07",
+        rangeStopPrice: "0.03",
+      }),
+    );
+    assert.equal(quoted.result, "refused");
+    assert.match(quoted.message, /quoted in BTC, not in .* USDT/);
+    // Once the customer widens the list, the strategy starts and trades.
+    const saved = await create(solGrid("SOL-USDT"));
+    assert.equal(saved.result, "saved", saved.message);
+    const state = await w.state();
+    assert.deepEqual(
+      state.markets.map((market) => market.instrument),
+      ["BTC-USDT", "ETH-USDT", "SOL-USDT"],
+    );
+    await w.pass();
+    assert.ok((await entries(saved.strategy!.id)).length > 0);
+    // Narrowed again: the strategy opens nothing more in that market.
+    await allow(["BTC-USDT"]);
+    const placed = await entries(saved.strategy!.id);
+    // Frees a level, which the grid would otherwise buy again.
+    w.fake.cancelElsewhere(placed[0].idempotency_key!);
+    await w.pass();
+    await w.pass();
+    assert.equal((await entries(saved.strategy!.id)).length, placed.length);
+    assert.match(
+      (await w.strategy(saved.strategy!.id)).runnerNote,
+      /not among this exchange account's allowed instruments/,
+    );
   });
 
   test("a strategy cannot start without the portfolio's drawdown limit", async () => {

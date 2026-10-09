@@ -12,6 +12,7 @@ import {
   ruleLimits,
   standingEntryIntent,
   type DcaInterval,
+  DEFAULT_ALLOWED_INSTRUMENTS,
   type Instrument,
   type StrategyRules,
 } from "@crypto-trading/domain";
@@ -101,7 +102,7 @@ export function newStrategyForm(
   return {
     kind,
     name: "",
-    instrument: market?.instrument ?? "BTC-USDT",
+    instrument: market?.instrument ?? DEFAULT_ALLOWED_INSTRUMENTS[0],
     allocation: kind === "dca" ? "225" : kind === "grid" ? "500" : "200",
     dailyLossLimit: "25",
     totalLossLimit: "75",
@@ -136,7 +137,7 @@ export function newStrategyForm(
       entryExpiresAt: utcInput(now + 24 * HOUR_MS),
     },
     ai: {
-      instruments: ["BTC-USDT"],
+      instruments: [market?.instrument ?? DEFAULT_ALLOWED_INSTRUMENTS[0]],
       maxPositionNotional: "100",
       maxProtectedEntries: "3",
       proposalApproval: "required",

@@ -139,6 +139,8 @@ const exchangeInfo = (filters: object[]) => ({
       otoAllowed: true,
       opoAllowed: true,
       filters,
+      baseAsset: "BTC",
+      quoteAsset: "USDT",
     },
   ],
 });

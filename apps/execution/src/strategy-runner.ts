@@ -11,21 +11,23 @@ import {
   type EntryIntent,
   type EntryPlan,
   type LossLimitStatus,
+  type Instrument,
+  instrumentSchema,
 } from "@crypto-trading/domain";
 import {
-  BinanceTestnetError,
+  ExchangeError,
+  UnlistedMarketError,
+  venueFor,
   protectedEntryFilterIssues,
   protectedLeg,
   STOP_REASON_LABELS,
-  testnetInstrumentSchema,
   type AiSource,
   type ManualOrderOutcome,
   type StrategiesState,
   type StrategyMarket,
   type StrategyMeasure,
   type StrategyView,
-  type SymbolRules,
-  type TestnetInstrument,
+  type MarketRules,
 } from "@crypto-trading/exchanges";
 import type { AccountScope } from "./accounts";
 import {
@@ -75,7 +77,6 @@ const STOP_TYPES = new Set([
   "TAKE_PROFIT",
   "TAKE_PROFIT_LIMIT",
 ]);
-const RULES_TTL_MS = 5 * 60_000;
 const HOUR_MS = 60 * 60 * 1000;
 
 /** A strategy's results, measured, or why they could not be. */
@@ -147,7 +148,6 @@ export class StrategyRunner {
   readonly #log: (message: string) => void;
   readonly #exclusive: Serializer;
   readonly #dayStartPrices = new Map<string, Promise<string>>();
-  #rules?: { fetchedAt: number; value: Promise<SymbolRules[]> };
   #lastLogged?: string;
 
   constructor(options: {
@@ -401,8 +401,8 @@ export class StrategyRunner {
     const { rules } = strategy;
     if (rules.kind === "ai_managed")
       return this.#analyse(scope, context, strategy, rules, unclosed, measured);
-    const instrument = rules.instrument as TestnetInstrument;
-    const symbol = await this.#symbolRules(instrument, context.reads.exchange);
+    const instrument = rules.instrument as Instrument;
+    const symbol = await context.reads.exchange.getMarketRules(instrument);
     const steps = { tickSize: symbol.tickSize, quantityStep: symbol.stepSize };
     const free = await this.#freeStopOrders(scope, context, instrument, symbol);
     const limit = (rulesLimit: number) =>
@@ -529,13 +529,18 @@ export class StrategyRunner {
     )
       return strategy.runnerNote;
     const markets = [];
+    // The AI is offered only markets the account allows and the venue lists.
+    const allowed = await this.store.allowedInstruments(scope);
     for (const instrument of rules.allowedInstruments) {
-      const parsed = testnetInstrumentSchema.safeParse(instrument);
-      if (!parsed.success) continue;
-      const symbol = await this.#symbolRules(
-        parsed.data,
-        context.reads.exchange,
-      );
+      const parsed = instrumentSchema.safeParse(instrument);
+      if (!parsed.success || !allowed.includes(parsed.data)) continue;
+      const symbol = await context.reads.exchange
+        .getMarketRules(parsed.data)
+        .catch((error: unknown) => {
+          if (error instanceof UnlistedMarketError) return undefined;
+          throw error;
+        });
+      if (!symbol) continue;
       markets.push({
         instrument: parsed.data,
         lastPrice: await context.reads.lastPrice(parsed.data),
@@ -545,6 +550,8 @@ export class StrategyRunner {
         minNotional: symbol.minNotional,
       });
     }
+    if (!markets.length)
+      return `Not analysed at ${utc(now)}: none of its markets is allowed on this exchange account and listed by ${venueFor(context.reads.exchange.venue).name}.`;
     const available = Decimal.max(
       new Decimal(strategy.allocation)
         .minus(measured.committed)
@@ -620,7 +627,7 @@ export class StrategyRunner {
     const proposal = await this.#proposals.find(scope, proposalId);
     if (!proposal || proposal.strategyId !== strategy.id)
       return { status: "skipped", reason: "There is no such proposal." };
-    const instrument = testnetInstrumentSchema.safeParse(proposal.instrument);
+    const instrument = instrumentSchema.safeParse(proposal.instrument);
     if (!instrument.success)
       return {
         status: "skipped",
@@ -676,8 +683,8 @@ export class StrategyRunner {
   ): Promise<Submission> {
     const { reads } = context;
     const { intent } = candidate;
-    const instrument = intent.instrument as TestnetInstrument;
-    const symbol = await this.#symbolRules(instrument, reads.exchange);
+    const instrument = intent.instrument as Instrument;
+    const symbol = await reads.exchange.getMarketRules(instrument);
     const order = {
       instrument,
       quantity: intent.quantity,
@@ -735,7 +742,7 @@ export class StrategyRunner {
       try {
         await reads.exchange.testProtectedEntry(entry);
       } catch (error) {
-        if (error instanceof BinanceTestnetError && error.kind === "rejected")
+        if (error instanceof ExchangeError && error.kind === "rejected")
           return {
             status: "skipped",
             reason: `Binance rejected the entry: ${error.reason ?? error.message}`,
@@ -770,8 +777,8 @@ export class StrategyRunner {
   async #freeStopOrders(
     scope: AccountScope,
     context: PassContext,
-    instrument: TestnetInstrument,
-    symbol: SymbolRules,
+    instrument: Instrument,
+    symbol: MarketRules,
   ) {
     const open = [...(await context.reads.openOrders(instrument)).values()];
     const used = new Set<string>();
@@ -780,7 +787,7 @@ export class StrategyRunner {
       const list = protectedLeg(order.clientOrderId)?.listClientOrderId;
       if (list) visible.add(list);
       if (
-        order.orderListId >= 0 &&
+        order.orderListId !== null &&
         (order.side === "BUY" || STOP_TYPES.has(order.type))
       )
         used.add(`list:${order.orderListId}`);
@@ -790,27 +797,6 @@ export class StrategyRunner {
       await this.store.inFlightEntries(scope, instrument)
     ).filter((id) => !visible.has(id));
     return maxStopOrders(symbol) - used.size - inFlight.length;
-  }
-
-  // The rules are public, so any account's client reads them.
-  async #symbolRules(
-    instrument: TestnetInstrument,
-    exchange: ExecutionExchange,
-  ) {
-    const now = this.#now().getTime();
-    if (!this.#rules || now - this.#rules.fetchedAt > RULES_TTL_MS) {
-      const value = exchange.getSymbolRules();
-      this.#rules = { fetchedAt: now, value };
-      value.catch(() => {
-        this.#rules = undefined;
-      });
-    }
-    const rules = (await this.#rules.value).find(
-      (entry) => entry.instrument === instrument,
-    );
-    if (!rules)
-      throw new Error(`Binance's rules for ${instrument} are missing.`);
-    return rules;
   }
 
   /** One strategy's results and loss limits, read afresh. */
@@ -883,7 +869,7 @@ export class StrategyRunner {
           instrument: entry.instrument,
           holding: entry.state !== "handed_over" && entry.state !== "missing",
           stepSize: (
-            await this.#symbolRules(entry.instrument, context.reads.exchange)
+            await context.reads.exchange.getMarketRules(entry.instrument)
           ).stepSize,
         });
     } catch (error) {
@@ -898,7 +884,7 @@ export class StrategyRunner {
       ),
     );
     try {
-      const marks = new Map<TestnetInstrument, string>();
+      const marks = new Map<Instrument, string>();
       for (const instrument of new Set(
         placed
           .filter(
@@ -907,7 +893,7 @@ export class StrategyRunner {
           .map((entry) => entry.instrument),
       ))
         marks.set(instrument, await context.reads.lastPrice(instrument));
-      const dayStartMarks = new Map<TestnetInstrument, string>();
+      const dayStartMarks = new Map<Instrument, string>();
       for (const instrument of dayStartInstruments(measuredEntries, own, now))
         dayStartMarks.set(
           instrument,
@@ -946,7 +932,7 @@ export class StrategyRunner {
 
   /** The open of the hourly candle at the latest midnight UTC. */
   #dayStartPrice(
-    instrument: TestnetInstrument,
+    instrument: Instrument,
     now: Date,
     exchange: ExecutionExchange,
   ) {
@@ -995,9 +981,11 @@ export class StrategyRunner {
       entries,
     );
     const markets: StrategyMarket[] = [];
-    for (const instrument of testnetInstrumentSchema.options) {
+    // The markets a new strategy may trade: the account's allowed
+    // instruments that the venue lists.
+    for (const instrument of await this.store.allowedInstruments(scope)) {
       try {
-        const symbol = await this.#symbolRules(instrument, exchange);
+        const symbol = await exchange.getMarketRules(instrument);
         const [lastPrice, bestAsk, free] = await Promise.all([
           context.reads.lastPrice(instrument).catch(() => null),
           context.reads.bestAsk(instrument).catch(() => undefined),
@@ -1276,15 +1264,15 @@ function strategyView(
   };
 }
 
-function maxStopOrders(symbol: SymbolRules) {
+function maxStopOrders(symbol: MarketRules) {
   return symbol.maxStopOrders ?? DEFAULT_MAX_STOP_ORDERS;
 }
 
 function waitNote(
   plan: Extract<EntryPlan, { action: "wait" }>,
-  instrument: TestnetInstrument,
+  instrument: Instrument,
   freeStops: number,
-  symbol: SymbolRules,
+  symbol: MarketRules,
 ) {
   const until = plan.until ? ` until ${utc(plan.until)}` : "";
   switch (plan.reason) {
@@ -1334,7 +1322,7 @@ function plural(count: number, one: string, many: string) {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-function pair(instrument: TestnetInstrument) {
+function pair(instrument: Instrument) {
   return instrument.replace("-", "/");
 }
 
@@ -1344,7 +1332,8 @@ function plainText(value: string) {
 
 /** A message safe to log: never request URLs, signatures or credentials. */
 function describe(error: unknown) {
-  if (error instanceof BinanceTestnetError) return error.message;
+  if (error instanceof ExchangeError || error instanceof UnlistedMarketError)
+    return error.message;
   if (error instanceof Error && error.name === "PostgresError")
     return `PostgreSQL: ${error.message}`;
   if (

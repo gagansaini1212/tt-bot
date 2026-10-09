@@ -1,16 +1,16 @@
 // Test doubles for the worker's dashboard orders: an in-memory Binance and a
 // ManualOrderDesk wired to it.
 import assert from "node:assert/strict";
+import { instrumentAssets, type Instrument } from "@crypto-trading/domain";
 import {
   BinanceTestnetError,
   protectedLegIds,
   type ManualOrderRequest,
   type ProtectedEntry,
-  type SymbolRules,
-  type TestnetInstrument,
-  type TestnetOrder,
-  type TestnetOrderList,
-  type TestnetOrderListReport,
+  type MarketRules,
+  type ExchangeOrder,
+  type ExchangeOrderList,
+  type ExchangeOrderListReport,
 } from "@crypto-trading/exchanges";
 import type { AccountScope } from "../accounts";
 import {
@@ -23,9 +23,10 @@ import type { RiskLimitStore } from "../risk-limits";
 import { MemoryRiskLimits, TEST_RISK_LIMITS } from "./memory-risk-limits";
 import type { TradeProposalStore } from "../trade-proposals";
 
-export const rules = (instrument: TestnetInstrument): SymbolRules => ({
+export const rules = (instrument: Instrument): MarketRules => ({
   instrument,
-  trading: true,
+  venueSymbol: `${instrumentAssets(instrument).base}${instrumentAssets(instrument).quote}`,
+  status: "trading",
   protectedEntryAllowed: true,
   minPrice: "0.01",
   maxPrice: "1000000",
@@ -37,7 +38,6 @@ export const rules = (instrument: TestnetInstrument): SymbolRules => ({
   maxNotional: "9000000",
   maxStopOrders: 5,
 });
-const symbol = (instrument: TestnetInstrument) => instrument.replace("-", "");
 
 export type Behaviour =
   | "rest"
@@ -57,8 +57,8 @@ export function fakeExchange(
   gate: Promise<void> = Promise.resolve(),
 ) {
   const calls = { test: 0, place: 0, cancelList: 0, cancelOrder: 0 };
-  const orders = new Map<string, TestnetOrder>();
-  const lists: TestnetOrderList[] = [];
+  const orders = new Map<string, ExchangeOrder>();
+  const lists: ExchangeOrderList[] = [];
   let nextId = 100;
   const open = () =>
     [...orders.values()].filter((order) =>
@@ -70,7 +70,7 @@ export function fakeExchange(
       balances: [{ asset: "USDT", free: "1000", locked: "0" }],
     }),
     getOpenOrders: async (instrument) =>
-      open().filter((order) => order.symbol === symbol(instrument)),
+      open().filter((order) => order.instrument === instrument),
     getOpenOrderLists: async () =>
       lists.filter((list) => list.listOrderStatus === "EXECUTING"),
     getOrder: async (_instrument, clientOrderId) => {
@@ -89,7 +89,7 @@ export function fakeExchange(
         );
       return list;
     },
-    getSymbolRules: async () => [rules("BTC-USDT"), rules("ETH-USDT")],
+    getMarketRules: async (instrument) => rules(instrument),
     getDepth: async () => ({
       lastUpdateId: 1,
       bids: [{ price: "59999.00", quantity: "1" }],
@@ -112,20 +112,20 @@ export function fakeExchange(
         throw new BinanceTestnetError("unknown_outcome");
       if (behaviour === "rate_limited")
         throw new BinanceTestnetError("rate_limited", -1015, 30);
-      const orderListId = nextId++;
+      const orderListId = String(nextId++);
       const ids = protectedLegIds(entry.listClientOrderId);
       const filled = ["fill", "fill_without_exits"].includes(behaviour);
       const leg = (
         clientOrderId: string,
-        fields: Partial<TestnetOrder>,
-      ): TestnetOrder => ({
-        symbol: symbol(entry.instrument),
-        orderId: nextId++,
+        fields: Partial<ExchangeOrder>,
+      ): ExchangeOrder => ({
+        instrument: entry.instrument,
+        orderId: String(nextId++),
         clientOrderId,
         price: "0",
         origQty: "0",
         executedQty: "0",
-        cummulativeQuoteQty: "0",
+        cumulativeQuoteQty: "0",
         status: "PENDING_NEW",
         type: "LIMIT_MAKER",
         side: "SELL",
@@ -155,9 +155,9 @@ export function fakeExchange(
         listStatusType: "EXEC_STARTED",
         listOrderStatus: behaviour === "fok_expire" ? "ALL_DONE" : "EXECUTING",
         listClientOrderId: entry.listClientOrderId,
-        symbol: symbol(entry.instrument),
-        orders: legs.map(({ symbol, orderId, clientOrderId }) => ({
-          symbol,
+        instrument: entry.instrument,
+        orders: legs.map(({ instrument, orderId, clientOrderId }) => ({
+          instrument,
           orderId,
           clientOrderId,
         })),
@@ -176,7 +176,7 @@ export function fakeExchange(
           orders.set(exit.clientOrderId, { ...exit, status: "EXPIRED" });
       if (behaviour === "timeout_placed")
         throw new BinanceTestnetError("unknown_outcome");
-      return { ...list, orderReports: legs } as TestnetOrderListReport;
+      return { ...list, orderReports: legs } as ExchangeOrderListReport;
     },
     cancelOrderList: async (_instrument, orderListId) => {
       calls.cancelList++;
@@ -192,7 +192,7 @@ export function fakeExchange(
         orderReports: list.orders.map(({ clientOrderId }) =>
           orders.get(clientOrderId)!,
         ),
-      } as TestnetOrderListReport;
+      } as ExchangeOrderListReport;
     },
     cancelOrderById: async (_instrument, orderId) => {
       calls.cancelOrder++;
@@ -225,7 +225,10 @@ export function deskFixture({
   proposals?: TradeProposalStore;
   scope: AccountScope;
   gate?: Promise<void>;
-  risk?: Pick<RiskLimitStore, "current" | "dailyRiskUsed">;
+  risk?: Pick<
+    RiskLimitStore,
+    "current" | "dailyRiskUsed" | "allowedInstruments"
+  >;
 }) {
   const loaded = loadManualTradingConfig({
     TESTNET_MANUAL_INSTRUMENTS: "BTC-USDT,ETH-USDT",

@@ -34,7 +34,8 @@ function candles(
 const market: BacktestMarket = {
   rules: {
     instrument: "BTC-USDT",
-    trading: true,
+    venueSymbol: "BTCUSDT",
+    status: "trading",
     protectedEntryAllowed: true,
     minPrice: "0.01",
     maxPrice: "1000000",

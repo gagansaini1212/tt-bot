@@ -1,4 +1,5 @@
 import Decimal from "decimal.js";
+import { instrumentSchema } from "@crypto-trading/domain";
 import {
   withCustomerScope,
   type Database,
@@ -6,12 +7,11 @@ import {
 } from "@crypto-trading/database";
 import {
   protectedEntrySchema,
-  testnetInstrumentSchema,
   type EntryAlert,
   type ProtectedEntry,
-  type TestnetFill,
-  type TestnetMarketSell,
-  type TestnetOrder,
+  type ExchangeFill,
+  type MarketSellRequest,
+  type ExchangeOrder,
 } from "@crypto-trading/exchanges";
 import type { JSONValue } from "@crypto-trading/database";
 import type { AccountScope } from "./accounts";
@@ -71,7 +71,7 @@ export type TrackedEntry = {
     orderIntentId: string;
     clientOrderId: string;
     status: OrderIntentStatus;
-    order: TestnetMarketSell;
+    order: MarketSellRequest;
   }[];
   // Fills of its orders and of the worker's sells, by client order ID.
   fills: {
@@ -239,10 +239,7 @@ export class ExecutionStore {
       for (const leg of legs) {
         ownerOf(leg.order_intent_id)?.legs.set(leg.client_order_id, {
           clientOrderId: leg.client_order_id,
-          orderId:
-            leg.exchange_order_id === null
-              ? null
-              : Number(leg.exchange_order_id),
+          orderId: leg.exchange_order_id,
           status: leg.status,
           origQty: amount(leg.requested_quantity),
           executedQty: amount(leg.filled_quantity),
@@ -311,7 +308,7 @@ export class ExecutionStore {
   }
 
   /** Keeps Binance's report of each order under the intent it belongs to. */
-  recordOrders(scope: AccountScope, orders: TestnetOrder[]) {
+  recordOrders(scope: AccountScope, orders: ExchangeOrder[]) {
     if (!orders.length) return Promise.resolve();
     return this.#scoped(scope, (tx) => upsertOrders(tx, scope, orders));
   }
@@ -320,7 +317,7 @@ export class ExecutionStore {
   recordFills(
     scope: AccountScope,
     clientOrderId: string,
-    fills: TestnetFill[],
+    fills: ExchangeFill[],
   ) {
     if (!fills.length) return Promise.resolve();
     return this.#scoped(scope, async (tx) => {
@@ -498,7 +495,7 @@ export class ExecutionStore {
         order by r.updated_at desc, i.id
       `;
       return rows.flatMap((row) => {
-        const instrument = testnetInstrumentSchema.safeParse(row.instrument);
+        const instrument = instrumentSchema.safeParse(row.instrument);
         if (!instrument.success) return [];
         return [
           {

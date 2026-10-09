@@ -1,5 +1,9 @@
 import Decimal from "decimal.js";
 import {
+  DEFAULT_ALLOWED_INSTRUMENTS,
+  type Instrument,
+} from "@crypto-trading/domain";
+import {
   protectedLegIds,
   type ManualRiskLimits,
 } from "@crypto-trading/exchanges";
@@ -30,19 +34,32 @@ const ENDED_UNFILLED = new Set([
  * An in-memory RiskLimitStore for tests of the worker's order logic.
  * risk-limits.test.ts proves the PostgreSQL store behaves the same way. With
  * `limits`, every account starts at version 1 with them; with `intents`,
- * daily risk is measured from that store's entries.
+ * daily risk is measured from that store's entries. Every account allows
+ * `instruments`, the default list unless given.
  */
 export class MemoryRiskLimits implements RiskLimitStore {
   readonly #versions = new Map<string, RiskLimitsVersion[]>();
   readonly #initial?: ManualRiskLimits;
   readonly #intents?: MemoryOrderIntents;
 
+  instruments: Instrument[];
+
   constructor({
     limits,
     intents,
-  }: { limits?: ManualRiskLimits; intents?: MemoryOrderIntents } = {}) {
+    instruments = [...DEFAULT_ALLOWED_INSTRUMENTS],
+  }: {
+    limits?: ManualRiskLimits;
+    intents?: MemoryOrderIntents;
+    instruments?: Instrument[];
+  } = {}) {
     this.#initial = limits;
     this.#intents = intents;
+    this.instruments = instruments;
+  }
+
+  async allowedInstruments() {
+    return [...this.instruments];
   }
 
   #list(scope: AccountScope) {

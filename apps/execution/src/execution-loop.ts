@@ -1,4 +1,5 @@
 import Decimal from "decimal.js";
+import { type Instrument } from "@crypto-trading/domain";
 import {
   listCustomerIds,
   withCustomerScope,
@@ -6,18 +7,17 @@ import {
   type JSONValue,
 } from "@crypto-trading/database";
 import {
-  BinanceTestnetError,
+  ExchangeError,
+  UnlistedMarketError,
   closeOrderId,
   floorToStep,
   protectedLegIds,
   type BinanceSpotTestnet,
   type ExecutionState,
   type ManualOrderOutcome,
-  type SymbolRules,
-  type TestnetFill,
-  type TestnetInstrument,
-  type TestnetMarketSell,
-  type TestnetOrder,
+  type ExchangeFill,
+  type MarketSellRequest,
+  type ExchangeOrder,
 } from "@crypto-trading/exchanges";
 import type { AccountResolver, AccountScope } from "./accounts";
 import { PassReads, type ExecutionExchange } from "./pass-reads";
@@ -88,9 +88,6 @@ export const PASS_INTERVAL_MS = 5_000;
 export const MAX_CLOSE_ATTEMPTS = 3;
 // closeOrderId numbers an entry's sells 1 to 9.
 const MAX_SELL_IDS = 9;
-// Binance's code for an order or order list that does not exist.
-const NO_SUCH_ORDER = -2013;
-const RULES_TTL_MS = 5 * 60_000;
 // The dashboard lists notifications from this long ago at most.
 const NOTIFICATIONS_SHOWN_MS = 7 * 24 * 60 * 60_000;
 
@@ -131,7 +128,6 @@ export class ExecutionLoop {
   readonly #lockCustomers: boolean;
   readonly #strategies?: Pick<StrategyRunner, "run">;
   readonly #lastPass = new Map<string, Date>();
-  #rules?: { fetchedAt: number; value: Promise<SymbolRules[]> };
   #running?: Promise<void>;
   #delivering?: Promise<void>;
   #timer?: NodeJS.Timeout;
@@ -441,7 +437,7 @@ export class ExecutionLoop {
       order: ManualOrder | null;
     },
     exchange: ExecutionExchange,
-  ): Promise<{ orderListId?: number; orders?: TestnetOrder[] } | undefined> {
+  ): Promise<{ orderListId?: string; orders?: ExchangeOrder[] } | undefined> {
     const order = intent.order;
     if (!order || order.kind === "protected_entry") {
       const list = await absentIfMissing(
@@ -496,7 +492,7 @@ export class ExecutionLoop {
     const { instrument } = tracked.entry;
     const ids = protectedLegIds(tracked.listClientOrderId);
     const open = await reads.openOrders(instrument);
-    const reports: TestnetOrder[] = [];
+    const reports: ExchangeOrder[] = [];
     // A leg Binance reported final is read from the database; others from
     // the open orders, or one by one.
     const read = async (
@@ -543,7 +539,7 @@ export class ExecutionLoop {
     ]);
 
     let facts = this.#fillFacts(tracked);
-    const rules = await this.#symbolRules(instrument, reads.exchange);
+    const rules = await reads.exchange.getMarketRules(instrument);
     const observation: EntryObservation = {
       entry: entryLeg,
       takeProfit,
@@ -710,11 +706,10 @@ export class ExecutionLoop {
     exitReason: string | null,
   ) {
     const orderListId = legs.find(
-      (leg) =>
-        isOpen(leg) && leg?.orderListId !== undefined && leg.orderListId >= 0,
+      (leg) => isOpen(leg) && leg?.orderListId != null,
     )?.orderListId;
-    if (orderListId === undefined) return undefined;
-    let orderReports: TestnetOrder[];
+    if (orderListId == null) return undefined;
+    let orderReports: ExchangeOrder[];
     try {
       ({ orderReports } = await reads.exchange.cancelOrderList(
         tracked.entry.instrument,
@@ -751,7 +746,7 @@ export class ExecutionLoop {
     const { instrument } = tracked.entry;
     const base = baseAsset(instrument);
     const [rules, price, balance] = await Promise.all([
-      this.#symbolRules(instrument, reads.exchange),
+      reads.exchange.getMarketRules(instrument),
       reads.lastPrice(instrument),
       reads.balance(base),
     ]);
@@ -798,7 +793,7 @@ export class ExecutionLoop {
         kind: "waiting",
         note: `Only ${new Decimal(balance.free).toFixed()} ${base} is free to sell; other orders lock the rest, or it was sold elsewhere.`,
       };
-    const order: TestnetMarketSell = {
+    const order: MarketSellRequest = {
       instrument,
       quantity: quantity.toFixed(),
       clientOrderId: closeOrderId(tracked.listClientOrderId, attempt),
@@ -818,7 +813,7 @@ export class ExecutionLoop {
     reads.forgetBalance();
     const close = (
       intentStatus: CloseState["intentStatus"],
-      placed?: TestnetOrder,
+      placed?: ExchangeOrder,
       rateLimited = false,
     ): Sale => ({
       kind: "sent",
@@ -830,12 +825,12 @@ export class ExecutionLoop {
       rateLimited,
       note: "",
     });
-    let placed: TestnetOrder;
+    let placed: ExchangeOrder;
     try {
       placed = await reads.exchange.placeMarketSell(order);
     } catch (error) {
       const refused =
-        error instanceof BinanceTestnetError &&
+        error instanceof ExchangeError &&
         (error.kind === "rejected" || error.kind === "rate_limited");
       await this.#intents
         .settle(
@@ -856,7 +851,7 @@ export class ExecutionLoop {
       return close(
         refused ? "rejected" : "unknown",
         undefined,
-        error instanceof BinanceTestnetError && error.kind === "rate_limited",
+        error instanceof ExchangeError && error.kind === "rate_limited",
       );
     }
     this.#onChange();
@@ -871,27 +866,6 @@ export class ExecutionLoop {
         ),
       );
     return close("acknowledged", placed);
-  }
-
-  // The rules are public, so any account's client reads them.
-  async #symbolRules(
-    instrument: TestnetInstrument,
-    exchange: ExecutionExchange,
-  ) {
-    const now = this.#now().getTime();
-    if (!this.#rules || now - this.#rules.fetchedAt > RULES_TTL_MS) {
-      const value = exchange.getSymbolRules();
-      this.#rules = { fetchedAt: now, value };
-      value.catch(() => {
-        this.#rules = undefined;
-      });
-    }
-    const rules = (await this.#rules.value).find(
-      (entry) => entry.instrument === instrument,
-    );
-    if (!rules)
-      throw new Error(`Binance's rules for ${instrument} are missing.`);
-    return rules;
   }
 
   /** Binance has no record of an acknowledged entry, as after a testnet reset. */
@@ -1062,7 +1036,7 @@ type Sale =
   | { kind: "sent"; close: CloseState; rateLimited: boolean; note: string }
   | { kind: "dust" | "gone" | "waiting" | "blocked"; note: string };
 
-function toLeg(order: TestnetOrder): LegState {
+function toLeg(order: ExchangeOrder): LegState {
   return {
     clientOrderId: order.clientOrderId,
     orderId: order.orderId,
@@ -1084,7 +1058,7 @@ function missingLeg(clientOrderId: string): LegState {
   };
 }
 
-function toFill(clientOrderId: string, fill: TestnetFill) {
+function toFill(clientOrderId: string, fill: ExchangeFill) {
   return {
     clientOrderId,
     quantity: fill.qty,
@@ -1100,9 +1074,9 @@ async function absentIfMissing<T>(request: Promise<T>) {
     return await request;
   } catch (error) {
     if (
-      error instanceof BinanceTestnetError &&
+      error instanceof ExchangeError &&
       error.kind === "rejected" &&
-      error.code === NO_SUCH_ORDER
+      error.orderNotFound
     )
       return undefined;
     throw error;
@@ -1110,11 +1084,11 @@ async function absentIfMissing<T>(request: Promise<T>) {
 }
 
 /** BTC-USDT → BTC */
-function baseAsset(instrument: TestnetInstrument) {
+function baseAsset(instrument: Instrument) {
   return instrument.split("-")[0];
 }
 
-function pair(instrument: TestnetInstrument) {
+function pair(instrument: Instrument) {
   return instrument.replace("-", "/");
 }
 
@@ -1205,7 +1179,8 @@ function triggerInterrupted(
 
 /** A message safe to log: never request URLs, signatures or credentials. */
 function describe(error: unknown) {
-  if (error instanceof BinanceTestnetError) return error.message;
+  if (error instanceof ExchangeError || error instanceof UnlistedMarketError)
+    return error.message;
   if (error instanceof Error && error.name === "PostgresError")
     return `PostgreSQL: ${error.message}`;
   if (error instanceof Error && error.constructor === Error)

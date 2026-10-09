@@ -7,7 +7,10 @@ import {
   type KillSwitchResult,
   type PortfolioLimitsChange,
   type StrategyChange,
+  type StrategyDraft,
+  UnlistedMarketError,
 } from "@crypto-trading/exchanges";
+import { ruleLimits } from "@crypto-trading/domain";
 import { z } from "zod";
 import type { AccountScope } from "../accounts";
 import { accountHandler, handler } from "../http";
@@ -42,6 +45,23 @@ export function strategies(
       change: { result: result.result, message: result.message, strategy },
     };
   };
+  // A draft may trade only markets its venue's catalogue lists. The store
+  // then checks the account allows them.
+  const unlisted = async (
+    exchange: BinanceSpotTestnet,
+    draft: StrategyDraft,
+  ): Promise<ControlResult | undefined> => {
+    for (const instrument of ruleLimits(draft.rules).allowedInstruments) {
+      try {
+        await exchange.getMarketRules(instrument);
+      } catch (error) {
+        if (error instanceof UnlistedMarketError)
+          return { result: "refused", message: error.message };
+        throw error;
+      }
+    }
+    return undefined;
+  };
   const invalid = (error: z.ZodError) => {
     const [issue] = error.issues;
     const path = issue.path.join(".");
@@ -75,7 +95,8 @@ export function strategies(
         return answer(
           account,
           exchange,
-          await store.create(account, draft.data, new Date()),
+          (await unlisted(exchange, draft.data)) ??
+            (await store.create(account, draft.data, new Date())),
         );
       },
     }),
@@ -89,7 +110,8 @@ export function strategies(
         return answer(
           account,
           exchange,
-          await store.newVersion(account, strategyId, baseVersion, draft),
+          (await unlisted(exchange, draft)) ??
+            (await store.newVersion(account, strategyId, baseVersion, draft)),
         );
       },
     }),
