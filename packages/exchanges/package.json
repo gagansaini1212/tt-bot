@@ -9,6 +9,7 @@
     "./contract": "./src/contract.ts",
     "./exchange-accounts": "./src/exchange-accounts.ts",
     "./execution": "./src/execution-state.ts",
+    "./fixtures/fake-htx": "./src/fixtures/fake-htx.ts",
     "./manual-order": "./src/manual-order.ts",
     "./market-catalogue": "./src/market-catalogue.ts",
     "./order-rules": "./src/order-rules.ts",

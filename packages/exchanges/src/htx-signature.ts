@@ -1,28 +1,12 @@
 // Server-only: HTX's signature version 2, which signs a private REST request
-// with HmacSHA256 over its canonical form. It is self-contained, so a shared
-// signer interface can wrap it. See docs/venues/htx.md.
-import { createHmac } from "node:crypto";
-
-/**
- * A request to sign. The HTX adapter only reads, so only GET requests are
- * signed: HTX signs a POST's auth parameters but not its body, and nothing
- * here sends one.
- */
-export type HtxRequestToSign = {
-  host: string;
-  path: string;
-  parameters: Readonly<Record<string, string>>;
-  /** When the request is sent, by HTX's clock. */
-  time: number;
-};
-
-export type HtxSigner = {
-  /**
-   * The request's query string: its parameters and HTX's auth parameters in
-   * canonical order, then the Signature.
-   */
-  sign(request: HtxRequestToSign): string;
-};
+// with HmacSHA256 over its canonical form, as a RequestSigner (ADR 0010).
+// See docs/venues/htx.md.
+import {
+  CredentialsError,
+  hmac,
+  type RequestSigner,
+  type SigningCredentials,
+} from "./signing";
 
 /** HTX's Timestamp parameter: UTC to the second, as YYYY-MM-DDThh:mm:ss. */
 export function htxTimestamp(time: number): string {
@@ -56,32 +40,51 @@ export function htxPreSignedText(host: string, path: string, query: string) {
 }
 
 /**
- * Signature version 2 for one API key: HTX's Access Key and Secret Key. The
- * secret never leaves the signer.
+ * HTX's signature version 2 for one API key: its Access Key and Secret Key,
+ * as `hmac` credentials. It adds AccessKeyId, SignatureMethod,
+ * SignatureVersion and the venue-corrected Timestamp to the query, puts the
+ * query in canonical order, and appends the base64 HmacSHA256 of the
+ * pre-signed text as Signature.
+ *
+ * It signs GET requests only. HTX would sign a POST's auth parameters but
+ * not its body, and the HTX adapter only reads, so it sends none.
  */
-export function htxSignatureV2(credentials: {
-  accessKey: string;
-  secretKey: string;
-}): HtxSigner {
-  const { accessKey, secretKey } = credentials;
-  if (!accessKey.trim() || !secretKey.trim())
-    throw new Error(
-      "An HTX access key and secret key are required in the execution service.",
+export function htxRequestSigner(
+  credentials: SigningCredentials,
+): RequestSigner {
+  if (credentials.kind !== "hmac")
+    throw new CredentialsError(
+      "HTX keys sign with a secret key (HMAC), not a private key.",
     );
+  if (credentials.passphrase !== undefined)
+    throw new CredentialsError("HTX takes no passphrase.");
+  const { apiKey, secret } = credentials;
+  if (!apiKey.trim() || !secret.trim())
+    throw new CredentialsError("HTX keys need an access key and a secret key.");
   return {
-    sign({ host, path, parameters, time }) {
+    scheme: "htx-v2",
+    sign(request) {
+      if (request.method !== "GET" || request.body !== undefined)
+        throw new Error(
+          "The HTX signer signs GET requests only: the HTX adapter only reads.",
+        );
+      const url = new URL(request.url);
       const query = htxCanonicalQuery({
-        ...parameters,
-        AccessKeyId: accessKey,
+        ...Object.fromEntries(url.searchParams),
+        AccessKeyId: apiKey,
         SignatureMethod: "HmacSHA256",
         SignatureVersion: "2",
-        Timestamp: htxTimestamp(time),
+        Timestamp: htxTimestamp(request.timestamp),
       });
       // The raw digest in base64, not its hex.
-      const signature = createHmac("sha256", secretKey)
-        .update(htxPreSignedText(host, path, query))
-        .digest("base64");
-      return `${query}&Signature=${encode(signature)}`;
+      const signature = hmac(
+        "sha256",
+        secret,
+        htxPreSignedText(url.host, url.pathname, query),
+        "base64",
+      );
+      url.search = `${query}&Signature=${encode(signature)}`;
+      return { url, headers: { ...request.headers } };
     },
   };
 }

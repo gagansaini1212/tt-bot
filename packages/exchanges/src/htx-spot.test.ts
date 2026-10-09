@@ -7,11 +7,12 @@ import { FakeHtx } from "./fixtures/fake-htx.js";
 import {
   htxCanonicalQuery,
   htxPreSignedText,
-  htxSignatureV2,
+  htxRequestSigner,
   htxTimestamp,
 } from "./htx-signature.js";
 import { HtxError, HtxSpot, parseHtxJson } from "./htx-spot.js";
 import { UnlistedMarketError } from "./market-catalogue.js";
+import { CredentialsError } from "./signing.js";
 import {
   canPlaceOrders,
   htxClientOrderIds,
@@ -56,40 +57,50 @@ const kinds = async (promise: Promise<unknown>) => {
   assert.fail("expected an HtxError");
 };
 
-test("signature v2 reproduces the official HTX SDKs' test vectors", () => {
+const sign = (
+  credentials: { apiKey: string; secret: string },
+  url: string,
+  timestamp: number,
+) =>
+  htxRequestSigner({ kind: "hmac", ...credentials }).sign({
+    method: "GET",
+    url: new URL(url),
+    headers: {},
+    timestamp,
+  });
+
+test("signature v2 reproduces the official HTX SDKs' test vectors behind the RequestSigner interface", () => {
   // huobi_Golang internal/requestbuilder/privateurlbuilder_test.go
-  const golang = htxSignatureV2({ accessKey: "access", secretKey: "secret" });
+  const golang = { apiKey: "access", secret: "secret" };
   const time = Date.UTC(2019, 10, 21, 10, 0, 0);
   assert.equal(
-    `https://api.huobi.pro/v1/account/accounts?${golang.sign({ host: "api.huobi.pro", path: "/v1/account/accounts", parameters: {}, time })}`,
+    String(sign(golang, "https://api.huobi.pro/v1/account/accounts", time).url),
     "https://api.huobi.pro/v1/account/accounts?AccessKeyId=access&SignatureMethod=HmacSHA256&SignatureVersion=2&Timestamp=2019-11-21T10%3A00%3A00&Signature=rWnLcMt3XBAsmXoNHtTQVpvMbH%2FcE1PXFwQAGeYwt3s%3D",
   );
   assert.equal(
-    `https://api.huobi.pro/v1/account/history?${golang.sign({
-      host: "api.huobi.pro",
-      path: "/v1/account/history",
-      parameters: { currency: "btc", "account-id": "123" },
-      time,
-    })}`,
+    String(
+      sign(
+        golang,
+        "https://api.huobi.pro/v1/account/history?currency=btc&account-id=123",
+        time,
+      ).url,
+    ),
     "https://api.huobi.pro/v1/account/history?AccessKeyId=access&SignatureMethod=HmacSHA256&SignatureVersion=2&Timestamp=2019-11-21T10%3A00%3A00&account-id=123&currency=btc&Signature=SGZYJ9Ub%2FhFerEBbSWsCxl8Djk%2BLRBgEZOB4fLc4T9Q%3D",
   );
   // huobi_CSharp Huobi.SDK.Core.Test/RequestBuilder/SignerTest.cs
-  const csharp = htxSignatureV2({
-    accessKey: "abcdefg-hijklmn-opqrst-uvwxyz",
-    secretKey: "12345-67890-12345-67890",
-  });
-  const query = new URLSearchParams(
-    csharp.sign({
-      host: "api.huobi.pro",
-      path: "/v1/account/accounts",
-      parameters: {},
-      time: Date.UTC(2020, 3, 1, 12, 34, 56),
-    }),
+  const signed = sign(
+    {
+      apiKey: "abcdefg-hijklmn-opqrst-uvwxyz",
+      secret: "12345-67890-12345-67890",
+    },
+    "https://api.huobi.pro/v1/account/accounts",
+    Date.UTC(2020, 3, 1, 12, 34, 56),
   );
   assert.equal(
-    query.get("Signature"),
+    signed.url.searchParams.get("Signature"),
     "3IUZcEak4IIRrh7/idFrP2Jj77MaWGXR/oQbe9gL4+I=",
   );
+  assert.equal(signed.body, undefined);
 });
 
 test("the canonical request matches HTX's documented signing example", () => {
@@ -113,29 +124,52 @@ test("the canonical request matches HTX's documented signing example", () => {
     "a=~-_.&b=a%20b%3Ac%2A%27%C3%A9",
   );
   // The signature is the raw HmacSHA256 digest in base64, not its hex.
-  const signed = new URLSearchParams(
-    htxSignatureV2({ accessKey: "key", secretKey: "secret" }).sign({
-      host: "api.huobi.pro",
-      path: "/v1/order/openOrders",
-      parameters: { symbol: "btcusdt" },
-      time: 0,
-    }),
+  const { url } = sign(
+    { apiKey: "key", secret: "secret" },
+    "https://api.huobi.pro/v1/order/openOrders?symbol=btcusdt",
+    0,
   );
-  const signature = signed.get("Signature");
-  signed.delete("Signature");
+  const signature = url.searchParams.get("Signature");
+  const unsigned = url.search.slice(1).replace(/&Signature=[^&]*$/, "");
   assert.equal(
     signature,
     createHmac("sha256", "secret")
-      .update(
-        `GET\napi.huobi.pro\n/v1/order/openOrders\n${signed.toString().replaceAll("+", "%20")}`,
-      )
+      .update(`GET\napi.huobi.pro\n/v1/order/openOrders\n${unsigned}`)
       .digest("base64"),
   );
-  assert.throws(
-    () => htxSignatureV2({ accessKey: " ", secretKey: "secret-value" }),
-    (error: unknown) =>
-      error instanceof Error && !error.message.includes("secret-value"),
-  );
+});
+
+test("the HTX signer signs GET requests only, with an HMAC key and no passphrase", () => {
+  const signer = htxRequestSigner({
+    kind: "hmac",
+    apiKey: "key",
+    secret: "secret-value",
+  });
+  assert.equal(signer.scheme, "htx-v2");
+  for (const method of ["POST", "PUT", "DELETE"] as const)
+    assert.throws(
+      () =>
+        signer.sign({
+          method,
+          url: new URL("https://api.huobi.pro/v1/order/orders/place"),
+          body: "{}",
+          headers: {},
+          timestamp: 0,
+        }),
+      /GET requests only/,
+    );
+  const refused = [
+    { kind: "hmac", apiKey: "key", secret: "secret-value", passphrase: "p" },
+    { kind: "ed25519", apiKey: "key", privateKey: "secret-value" },
+    { kind: "hmac", apiKey: " ", secret: "secret-value" },
+  ] as const;
+  for (const credentials of refused)
+    assert.throws(
+      () => htxRequestSigner(credentials),
+      (error: unknown) =>
+        error instanceof CredentialsError &&
+        !error.message.includes("secret-value"),
+    );
 });
 
 test("signed requests carry HTX's clock and pass the fake's independent signature check", async () => {
@@ -149,7 +183,8 @@ test("signed requests carry HTX's clock and pass the fake's independent signatur
     htxTimestamp(NOW + 180_000),
   );
   assert.equal(requests("/v1/common/timestamp").length, 1);
-  // A wrong secret fails HTX's check, and the error names no secret.
+  // A wrong secret fails HTX's check, even after HTX's time is read again,
+  // and the error names no secret.
   const wrong = new HtxSpot({
     apiKey: htx.apiKey,
     apiSecret: "not-the-secret",
@@ -160,6 +195,28 @@ test("signed requests carry HTX's clock and pass the fake's independent signatur
   assert.equal(error.kind, "rejected");
   assert.equal(error.code, "api-signature-not-valid");
   assert.doesNotMatch(error.message, /not-the-secret|e2xxxxxx|Signature=/);
+});
+
+test("a clock that moves is read again: HTX answers a stale timestamp as a bad signature", async () => {
+  const { exchange, htx, requests } = setup();
+  await exchange.getAccount();
+  assert.equal(requests("/v1/common/timestamp").length, 1);
+  // HTX's clock jumps ten minutes while the adapter still trusts its offset.
+  const clock = htx.now;
+  htx.now = () => clock() + 600_000;
+  await exchange.getAccount();
+  // The refused request was sent once more after HTX's time was read.
+  assert.equal(requests("/v1/common/timestamp").length, 2);
+  const balances = requests("/v1/account/accounts/10000001/balance");
+  assert.equal(balances.length, 3);
+  assert.equal(
+    balances[2].parameters.get("Timestamp"),
+    htxTimestamp(NOW + 600_000),
+  );
+  // When HTX's time cannot be read, the account is unavailable, not refused.
+  htx.now = () => clock() + 1_200_000;
+  htx.failNext("/v1/common/timestamp", () => new Response("", { status: 503 }));
+  assert.equal((await kinds(exchange.getAccount())).kind, "unavailable");
 });
 
 test("balances add up exactly, leave out empty assets and say the account cannot trade", async () => {

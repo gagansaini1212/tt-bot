@@ -82,7 +82,7 @@ export class FakeHtx {
     options: { apiKey?: string; apiSecret?: string; now?: () => number } = {},
   ) {
     this.apiKey = options.apiKey ?? "e2xxxxxx-99xxxxxx-84xxxxxx-7xxxx";
-    this.apiSecret = options.apiSecret ?? "fake-htx-secret";
+    this.apiSecret = options.apiSecret ?? "fake-htx-secret-key-0123456";
     this.now = options.now ?? Date.now;
     const now = this.now();
     this.openOrders = [

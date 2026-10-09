@@ -4,6 +4,7 @@
 // and its public market data client, so nothing about one venue reaches
 // another's.
 import { BinanceSpotTestnet } from "./binance-spot-testnet";
+import { HtxSpot } from "./htx-spot";
 import type {
   AccountReader,
   MarketDataAdapter,
@@ -122,5 +123,42 @@ export function binanceSpotTestnetVenue({
     market,
     connect: (credentials) =>
       new BinanceSpotTestnet({ credentials, markets, limits, fetch, now }),
+  };
+}
+
+/**
+ * HTX spot, read only (ADR 0009, docs/venues/htx.md): one catalogue, one set
+ * of limits and clock, and one public client for the venue, shared by every
+ * HTX account's client and by no other venue's. Each account's client also
+ * keeps its own limits, which HTX counts per user. Its clients implement
+ * AccountReader only, so `canTrade` is false for every one of them.
+ */
+export function htxVenue({
+  fetch,
+  now = Date.now,
+}: {
+  fetch?: typeof globalThis.fetch;
+  now?: () => number;
+} = {}): RegisteredVenue {
+  const venue = VENUES.htx;
+  const limits = new VenueLimits({ venue: venue.id, now });
+  const markets: MarketCatalogue = new MarketCatalogue({
+    venue: venue.id,
+    load: () => market.loadMarkets(),
+    now,
+  });
+  const market: HtxSpot = new HtxSpot({
+    publicData: true,
+    markets,
+    limits,
+    fetch,
+    now,
+  });
+  return {
+    venue,
+    limits,
+    market,
+    connect: (credentials) =>
+      new HtxSpot({ credentials, markets, limits, fetch, now }),
   };
 }

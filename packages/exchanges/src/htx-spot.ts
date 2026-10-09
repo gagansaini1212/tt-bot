@@ -27,16 +27,18 @@ import {
   type KlineInterval,
   type Ticker,
 } from "./contract";
-import {
-  htxCanonicalQuery,
-  htxSignatureV2,
-  type HtxSigner,
-} from "./htx-signature";
+import { htxCanonicalQuery, htxRequestSigner } from "./htx-signature";
 import {
   MarketCatalogue,
   marketRulesSchema,
   type MarketRules,
 } from "./market-catalogue";
+import {
+  credentialsFromKeys,
+  type RequestSigner,
+  type SigningCredentials,
+} from "./signing";
+import { Backoff, VenueLimits } from "./venue-limits";
 import { htxClientOrderIds, htxVenueSymbols } from "./venues";
 
 // Deliberately fixed. HTX documents api.huobi.pro and api-aws.huobi.pro, and
@@ -286,7 +288,10 @@ function klineCloseTime(interval: KlineInterval, openTime: number) {
 // HTX's depth parameter takes 5, 10 or 20 levels, or 150 when left out.
 const DEPTH_STEPS = [5, 10, 20] as const;
 
-// Error codes from HTX's Spot API documentation.
+// Error codes from HTX's Spot API documentation. HTX counts its private
+// endpoints' rate limits per user (UID), so on a signed request these hold
+// back that account's signed requests only. On a public request, and as an
+// HTTP 429 without one of them, a limit holds back the whole venue.
 const RATE_LIMITED = new Set(["1006", "frequent-invoke"]);
 const UNAVAILABLE = new Set([
   "500",
@@ -301,7 +306,12 @@ const ORDER_NOT_FOUND = new Set([
 // What HTX answers a sub-user's key on an endpoint only a parent user may
 // call, such as GET /v2/user/api-key.
 const FORBIDDEN = new Set(["403", "1002"]);
-const RATE_LIMIT_WAIT_SECONDS = 10;
+// HTX documents no error for a stale timestamp: it answers as it does a
+// wrong signature.
+const SIGNATURE_NOT_VALID = new Set(["api-signature-not-valid", "1003"]);
+// The wait when HTX sends no Retry-After. Its documented windows are 1 to 2
+// seconds.
+export const HTX_RATE_LIMIT_WAIT_SECONDS = 10;
 
 /**
  * An ExchangeError from HTX, with HTX's error code. The adapter sends no
@@ -336,6 +346,28 @@ export class HtxError extends ExchangeError {
 /** The permissions HTX reports for an API key. */
 type HtxKeyPermissions = { trade: boolean; withdraw: boolean };
 
+export type HtxSpotOptions = (
+  | {
+      /** HTX's Access Key. */
+      apiKey: string;
+      /** HTX's Secret Key. */
+      apiSecret: string;
+    }
+  | { credentials: SigningCredentials }
+  // Public market data needs no key. Signed requests then throw before
+  // anything is sent.
+  | { publicData: true }
+) & {
+  fetch?: typeof fetch;
+  now?: () => number;
+  // The venue's catalogue, shared with its other clients. Without one,
+  // this client keeps its own.
+  markets?: MarketCatalogue;
+  // The venue's backoff and clock, shared with its other clients and no
+  // other venue's. Without them, this client keeps its own.
+  limits?: VenueLimits;
+};
+
 /**
  * HTX spot, read only. Its capabilities say `read_only`, it implements
  * AccountReader and nothing more, and every request it sends is a GET.
@@ -343,36 +375,17 @@ type HtxKeyPermissions = { trade: boolean; withdraw: boolean };
 export class HtxSpot implements AccountReader {
   readonly venue = VENUE;
   readonly markets: MarketCatalogue;
+  readonly #limits: VenueLimits;
+  // This account's own limits: HTX counts private endpoints per user.
+  readonly #accountBackoff: Backoff;
   // Unset on a public market data client.
   readonly #accessKey?: string;
-  readonly #signer?: HtxSigner;
+  readonly #signer?: RequestSigner;
   readonly #fetch: typeof fetch;
   readonly #now: () => number;
-  #clockOffset = 0;
-  #clockSyncedAt = -Infinity;
-  #clockSync?: Promise<void>;
-  #blockedUntil = 0;
   #spotAccountId?: Promise<string>;
 
-  constructor(
-    options: (
-      | {
-          /** HTX's Access Key. */
-          apiKey: string;
-          /** HTX's Secret Key. */
-          apiSecret: string;
-        }
-      // Public market data needs no key. Signed requests then throw before
-      // anything is sent.
-      | { publicData: true }
-    ) & {
-      fetch?: typeof fetch;
-      now?: () => number;
-      // The venue's catalogue, shared with its other clients. Without one,
-      // this client keeps its own.
-      markets?: MarketCatalogue;
-    },
-  ) {
+  constructor(options: HtxSpotOptions) {
     this.#fetch = options.fetch ?? fetch;
     this.#now = options.now ?? Date.now;
     this.markets =
@@ -384,69 +397,80 @@ export class HtxSpot implements AccountReader {
       });
     if (this.markets.venue !== VENUE)
       throw new Error("The market catalogue belongs to another venue.");
+    this.#limits =
+      options.limits ?? new VenueLimits({ venue: VENUE, now: this.#now });
+    if (this.#limits.venue !== VENUE)
+      throw new Error("The venue limits belong to another venue.");
+    this.#accountBackoff = new Backoff(this.#now);
     if ("publicData" in options) return;
-    this.#signer = htxSignatureV2({
-      accessKey: options.apiKey,
-      secretKey: options.apiSecret,
-    });
-    this.#accessKey = options.apiKey;
+    const credentials =
+      "credentials" in options
+        ? options.credentials
+        : credentialsFromKeys({
+            apiKey: options.apiKey,
+            apiSecret: options.apiSecret,
+          });
+    this.#signer = htxRequestSigner(credentials);
+    this.#accessKey = credentials.apiKey;
   }
 
+  /** HTX's clock, shared by every client of the venue. */
   async #syncClock() {
-    if (this.#now() - this.#clockSyncedAt < 60_000) return;
-    if (!this.#clockSync) {
-      this.#clockSync = (async () => {
-        const start = this.#now();
-        const { data } = await this.#request(
-          "/v1/common/timestamp",
-          {},
-          z.object({ data: millis }),
-          false,
-        );
-        this.#clockOffset = data - Math.floor((start + this.#now()) / 2);
-        this.#clockSyncedAt = this.#now();
-      })().finally(() => {
-        this.#clockSync = undefined;
-      });
-    }
-    await this.#clockSync;
+    await this.#limits.clock.sync(async () => {
+      const { data } = await this.#request(
+        "/v1/common/timestamp",
+        {},
+        z.object({ data: millis }),
+        false,
+      );
+      return data;
+    });
   }
 
-  /** A GET request, signed unless `signed` is false. There is no other kind. */
+  /**
+   * A GET request, signed unless `signed` is false. There is no other kind.
+   * A signed request HTX refuses as not validly signed is sent once more
+   * after HTX's time is read again, since HTX answers a stale timestamp the
+   * same way; a GET changes nothing, so sending it twice is safe.
+   */
   async #request<T>(
     path: string,
     parameters: Record<string, string>,
     schema: z.ZodType<T>,
     signed = true,
+    retried = false,
   ): Promise<T> {
-    if (this.#now() < this.#blockedUntil) {
-      throw new HtxError("rate_limited", {
-        retryAfterSeconds: Math.ceil((this.#blockedUntil - this.#now()) / 1000),
-      });
-    }
+    // The venue's backoff holds every request back; the account's only its
+    // own signed ones.
+    const wait = Math.max(
+      this.#limits.backoff.remainingSeconds(),
+      signed ? this.#accountBackoff.remainingSeconds() : 0,
+    );
+    if (wait > 0)
+      throw new HtxError("rate_limited", { retryAfterSeconds: wait });
     if (signed && !this.#signer)
       throw new Error(
         "This HTX client serves public market data only. Configure API keys for account requests.",
       );
     if (signed) await this.#syncClock();
-    const query = signed
+    const unsigned = new URL(`https://${HTX_SPOT_HOST}${path}`);
+    unsigned.search = htxCanonicalQuery(parameters);
+    const request = signed
       ? this.#signer!.sign({
-          host: HTX_SPOT_HOST,
-          path,
-          parameters,
-          time: this.#now() + this.#clockOffset,
+          method: "GET",
+          url: unsigned,
+          headers: {},
+          timestamp: this.#limits.clock.now(),
         })
-      : htxCanonicalQuery(parameters);
+      : { url: unsigned, headers: {} };
     let response: Response;
     try {
-      response = await this.#fetch(
-        `https://${HTX_SPOT_HOST}${path}${query ? `?${query}` : ""}`,
-        {
-          method: "GET",
-          redirect: "error",
-          signal: AbortSignal.timeout(12_000),
-        },
-      );
+      response = await this.#fetch(request.url, {
+        method: "GET",
+        redirect: "error",
+        signal: AbortSignal.timeout(12_000),
+        headers: request.headers,
+      });
     } catch {
       // Never include request URLs, signatures, headers or transport errors.
       throw new HtxError("unavailable");
@@ -480,17 +504,28 @@ export class HtxSpot implements AccountReader {
         reported && /^[A-Za-z0-9._-]{1,64}$/.test(reported)
           ? reported
           : undefined;
-      if (response.status === 429 || (code && RATE_LIMITED.has(code))) {
+      const coded = code !== undefined && RATE_LIMITED.has(code);
+      if (response.status === 429 || coded) {
         const seconds = Number(response.headers.get("Retry-After"));
         const retryAfter =
           Number.isFinite(seconds) && seconds > 0
             ? seconds
-            : RATE_LIMIT_WAIT_SECONDS;
-        this.#blockedUntil = this.#now() + retryAfter * 1000;
+            : HTX_RATE_LIMIT_WAIT_SECONDS;
+        // HTX's own rate-limit codes on a signed request count against the
+        // account's user; anything else holds back the venue.
+        (signed && coded ? this.#accountBackoff : this.#limits.backoff).hold(
+          retryAfter,
+        );
         throw new HtxError("rate_limited", {
           code,
           retryAfterSeconds: retryAfter,
         });
+      }
+      if (signed && code !== undefined && SIGNATURE_NOT_VALID.has(code)) {
+        // Perhaps HTX's clock moved: read it again before the next request.
+        this.#limits.clock.invalidate();
+        if (!retried)
+          return this.#request(path, parameters, schema, signed, true);
       }
       if (response.status >= 500 || (code && UNAVAILABLE.has(code)))
         throw new HtxError("unavailable", { code });

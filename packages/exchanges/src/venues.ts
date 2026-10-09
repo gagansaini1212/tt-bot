@@ -239,6 +239,8 @@ export const VENUES: { readonly [Id in VenueId]: Venue & { id: Id } } = {
       testOrders: false,
       lookupByClientOrderId: false,
     },
+    // An Access Key and Secret Key, signed with HmacSHA256.
+    credentials: { keyTypes: ["hmac"], passphrase: false },
     symbols: htxVenueSymbols,
     clientOrderIds: htxClientOrderIds,
   },
