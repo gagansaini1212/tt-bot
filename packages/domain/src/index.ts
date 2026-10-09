@@ -5,6 +5,7 @@ export * from "./grid";
 export * from "./instruments";
 export * from "./loss-limits";
 export * from "./protection";
+export * from "./reporting";
 export * from "./standing-instruction";
 export * from "./strategy-rules";
 export * from "./strategy-status";

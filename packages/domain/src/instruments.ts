@@ -22,6 +22,14 @@ export const instrumentSchema = z
   .check(z.regex(INSTRUMENT_PATTERN, { error: INVALID }));
 export type Instrument = z.infer<typeof instrumentSchema>;
 
+/**
+ * One asset or currency code as a venue's catalogue normalizes it, such as
+ * BTC, USDT or EUR: the codes an instrument joins.
+ */
+export const assetCodeSchema = z
+  .string()
+  .regex(ASSET_PATTERN, { error: "Name an asset code, such as USDT." });
+
 /** Whether `value` names an instrument in BASE-QUOTE form. */
 export function isInstrument(value: unknown): value is Instrument {
   return typeof value === "string" && INSTRUMENT_PATTERN.test(value);
