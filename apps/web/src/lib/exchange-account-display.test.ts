@@ -13,9 +13,12 @@ const binance = VENUES["binance-spot-testnet"];
 
 test("an account's venue is known only if this build has its adapter", () => {
   assert.equal(accountVenue("binance-spot-testnet"), binance);
+  assert.equal(accountVenue("htx"), VENUES.htx);
   assert.equal(accountVenue("kraken"), undefined);
-  assert.deepEqual(addableVenues(), [binance]);
+  // HTX accounts can be added, read only.
+  assert.deepEqual(addableVenues(), [binance, VENUES.htx]);
   assert.equal(isReadOnly(binance), false);
+  assert.equal(isReadOnly(VENUES.htx), true);
 });
 
 test("a venue's keys sign with the kinds it accepts", () => {

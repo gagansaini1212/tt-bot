@@ -57,10 +57,14 @@ type Snapshot = Pick<AccountSnapshot, "orders" | "pendingOrders">;
 export function OpenOrders({
   snapshot,
   execution,
+  readOnly = false,
 }: {
   snapshot: Snapshot;
   // What the worker's execution loop holds or is selling, when it reports.
   execution?: Pick<ExecutionState, "alerts" | "triggers">;
+  // Lists the orders without cancel buttons: for an account the dashboard
+  // does not act on, or one on a venue the product only reads.
+  readOnly?: boolean;
 }) {
   const groups = groupOpenOrders(snapshot);
   const all = groups.flatMap((group) => group.orders);
@@ -83,9 +87,11 @@ export function OpenOrders({
             <TableHead>Filled / quantity</TableHead>
             <TableHead>Price</TableHead>
             <TableHead>Status</TableHead>
-            <TableHead>
-              <span className="sr-only">Actions</span>
-            </TableHead>
+            {readOnly ? null : (
+              <TableHead>
+                <span className="sr-only">Actions</span>
+              </TableHead>
+            )}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -94,7 +100,10 @@ export function OpenOrders({
               className="bg-destructive/5 hover:bg-destructive/5"
               key={`alert-${alert.listClientOrderId}`}
             >
-              <TableCell className="whitespace-normal text-xs" colSpan={5}>
+              <TableCell
+                className="whitespace-normal text-xs"
+                colSpan={readOnly ? 4 : 5}
+              >
                 <div className="sticky left-3 max-w-[calc(100vw-6rem)] md:max-w-[calc(100vw-22rem)] xl:max-w-none">
                   <span
                     className={
@@ -142,22 +151,25 @@ export function OpenOrders({
                   {plain(held.stopLossPrice)}
                 </span>
               </TableCell>
-              <TableCell className="text-right">
-                <Button
-                  aria-label={`Cancel stop-limit buy ${held.instrument.split("-")[0]}, stop ${plain(held.stopPrice)}`}
-                  onClick={() => setTrigger(held)}
-                  size="sm"
-                  variant="destructive"
-                >
-                  Cancel
-                </Button>
-              </TableCell>
+              {readOnly ? null : (
+                <TableCell className="text-right">
+                  <Button
+                    aria-label={`Cancel stop-limit buy ${held.instrument.split("-")[0]}, stop ${plain(held.stopPrice)}`}
+                    onClick={() => setTrigger(held)}
+                    size="sm"
+                    variant="destructive"
+                  >
+                    Cancel
+                  </Button>
+                </TableCell>
+              )}
             </TableRow>
           ))}
           {groups.map((group) => (
             <Fragment key={group.key}>
               {group.orderListId !== undefined ? (
                 <ListHeader
+                  columns={readOnly ? 4 : 5}
                   orderListId={group.orderListId}
                   orders={group.orders}
                 />
@@ -190,23 +202,25 @@ export function OpenOrders({
                     {orderPriceLabel(order)}
                   </TableCell>
                   <TableCell>{orderStatusLabel(order)}</TableCell>
-                  <TableCell className="text-right">
-                    <Button
-                      aria-label={`Cancel ${describe(order)}`}
-                      onClick={() => setTarget(order)}
-                      size="sm"
-                      variant="destructive"
-                    >
-                      Cancel
-                    </Button>
-                  </TableCell>
+                  {readOnly ? null : (
+                    <TableCell className="text-right">
+                      <Button
+                        aria-label={`Cancel ${describe(order)}`}
+                        onClick={() => setTarget(order)}
+                        size="sm"
+                        variant="destructive"
+                      >
+                        Cancel
+                      </Button>
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </Fragment>
           ))}
           {groups.length + triggers.length + alerts.length === 0 ? (
             <TableRow>
-              <TableCell colSpan={5}>No open orders.</TableCell>
+              <TableCell colSpan={readOnly ? 4 : 5}>No open orders.</TableCell>
             </TableRow>
           ) : null}
         </TableBody>
@@ -283,14 +297,16 @@ function TriggerCancelDialog({
 function ListHeader({
   orderListId,
   orders,
+  columns,
 }: {
   orderListId: string;
   orders: ExchangeOrder[];
+  columns: number;
 }) {
   const summary = orderListSummary(orders);
   return (
     <TableRow className="bg-muted/40 hover:bg-muted/40">
-      <TableCell className="whitespace-normal text-xs" colSpan={5}>
+      <TableCell className="whitespace-normal text-xs" colSpan={columns}>
         {/* Stays in view while a narrow screen scrolls the table sideways. */}
         <div className="sticky left-3 max-w-[calc(100vw-6rem)] md:max-w-[calc(100vw-22rem)] xl:max-w-none">
           <span className="font-medium">Order list {orderListId}</span>{" "}

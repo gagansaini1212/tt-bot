@@ -77,6 +77,7 @@ const SOURCES: Record<ExchangeAccountSummary["keys"]["source"], string> = {
 const KEY_HINTS: Partial<Record<VenueId, string>> = {
   "binance-spot-testnet":
     "Create an API key at testnet.binance.vision with account-read and trading permissions, and without withdrawals.",
+  htx: "Create an API key in HTX's API Management with read permission only, without trade or withdraw permission. Enter its Access Key and Secret Key.",
 };
 
 /**
@@ -325,6 +326,42 @@ function ReadOnlyNote({ venue }: { venue: Venue }) {
   );
 }
 
+/**
+ * The customer's word that a read-only venue's key can neither trade nor
+ * withdraw. The worker needs it only when the venue will not report the
+ * key's permissions, as HTX will not for a sub-account's key (ADR 0013).
+ */
+function ReadOnlyConfirmation({
+  venue,
+  checked,
+  onChange,
+}: {
+  venue: Venue;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  const id = useId();
+  return (
+    <div className="space-y-1.5">
+      <label className="flex items-start gap-2 text-sm" htmlFor={id}>
+        <input
+          aria-describedby={`${id}-hint`}
+          checked={checked}
+          className="mt-0.5 size-4 shrink-0 accent-primary"
+          id={id}
+          onChange={(event) => onChange(event.target.checked)}
+          type="checkbox"
+        />
+        This key has read permission only: it can neither trade nor withdraw.
+      </label>
+      <p className="text-xs leading-5 text-muted-foreground" id={`${id}-hint`}>
+        Needed when {venue.name} will not report a key&apos;s permissions, as
+        for a sub-account&apos;s key. Otherwise the worker checks them itself.
+      </p>
+    </div>
+  );
+}
+
 function RenameForm({
   account,
   onDone,
@@ -374,6 +411,7 @@ function ReplaceKeysForm({
   onDone: (result: SettingsActionResult) => void;
 }) {
   const keys = useKeyFields(venue);
+  const [readOnlyConfirmed, setReadOnlyConfirmed] = useState(false);
   const [pending, startTransition] = useTransition();
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -381,9 +419,15 @@ function ReplaceKeysForm({
       const outcome = await replaceAccountKeys({
         exchangeAccountId: account.id,
         credentials: keys.request(),
+        ...(isReadOnly(venue) && readOnlyConfirmed
+          ? { confirmReadOnly: true }
+          : {}),
       });
       // The keys leave the browser's memory once the worker has them.
-      if (outcome.result === "saved") keys.clear();
+      if (outcome.result === "saved") {
+        keys.clear();
+        setReadOnlyConfirmed(false);
+      }
       onDone(outcome);
     });
   };
@@ -392,6 +436,13 @@ function ReplaceKeysForm({
       <fieldset className="space-y-4" disabled={!canSave || pending}>
         <legend className="text-sm font-medium">New keys</legend>
         <KeyFields fields={keys} venue={venue} />
+        {isReadOnly(venue) ? (
+          <ReadOnlyConfirmation
+            checked={readOnlyConfirmed}
+            onChange={setReadOnlyConfirmed}
+            venue={venue}
+          />
+        ) : null}
       </fieldset>
       <Button disabled={!canSave || pending} type="submit">
         {pending ? <LoaderCircle className="animate-spin" /> : <KeyRound />}
@@ -410,6 +461,7 @@ function AddAccountForm({ canSave }: { canSave: boolean }) {
   const [mode, setMode] = useState<ExchangeAccountMode | undefined>(modes[0]);
   const [currency, setCurrency] = useState<string>(ACCOUNTING_CURRENCIES[0]);
   const keys = useKeyFields(venue);
+  const [readOnlyConfirmed, setReadOnlyConfirmed] = useState(false);
   const [pending, startTransition] = useTransition();
   const [result, setResult] = useState<SettingsActionResult>();
 
@@ -423,12 +475,16 @@ function AddAccountForm({ canSave }: { canSave: boolean }) {
         mode,
         accountingCurrency: currency,
         credentials: keys.request(),
+        ...(isReadOnly(venue) && readOnlyConfirmed
+          ? { confirmReadOnly: true }
+          : {}),
       });
       setResult(outcome);
       // The keys leave the browser's memory once the worker has them.
       if (outcome.result === "saved") {
         keys.clear();
         setLabel("");
+        setReadOnlyConfirmed(false);
       }
     });
   };
@@ -459,6 +515,7 @@ function AddAccountForm({ canSave }: { canSave: boolean }) {
                     setVenueId(id);
                     setMode(next ? accountModes(next)[0] : undefined);
                     keys.clear();
+                    setReadOnlyConfirmed(false);
                   }}
                   options={venues.map((item) => ({
                     value: item.id,
@@ -504,6 +561,13 @@ function AddAccountForm({ canSave }: { canSave: boolean }) {
                   "Create an API key used only by this product, without withdraw permission."}
               </p>
               <KeyFields fields={keys} venue={venue} />
+              {isReadOnly(venue) ? (
+                <ReadOnlyConfirmation
+                  checked={readOnlyConfirmed}
+                  onChange={setReadOnlyConfirmed}
+                  venue={venue}
+                />
+              ) : null}
             </fieldset>
             <Button disabled={!canSave || pending} type="submit">
               {pending ? <LoaderCircle className="animate-spin" /> : <Plus />}

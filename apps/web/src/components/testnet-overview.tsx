@@ -15,6 +15,7 @@ import {
 } from "@/components/execution-alerts";
 import { FillsTable } from "@/components/fills-table";
 import { OpenOrders } from "@/components/open-orders";
+import { OtherAccounts } from "@/components/other-accounts";
 import { PageHeader } from "@/components/page-header";
 import { PortfolioSummary } from "@/components/portfolio-summary";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -31,6 +32,7 @@ import { WelcomeCard } from "@/components/welcome-card";
 import type { OverviewState } from "@/lib/account-portfolio";
 import { assistantAccounts } from "@/lib/assistant-context";
 import type { ExecutionView } from "@/lib/execution";
+import { accountVenue, isReadOnly } from "@/lib/exchange-account-display";
 import type { TestnetAccountState } from "@/lib/testnet-account";
 
 export function TestnetOverview({
@@ -43,13 +45,16 @@ export function TestnetOverview({
   execution: ExecutionView;
 }) {
   const connected = account.status === "connected";
+  // The account the dashboard acts on: its oldest that trades, by default.
+  const venue = connected ? accountVenue(account.snapshot.venue) : undefined;
+  const readOnly = venue ? isReadOnly(venue) : false;
   return (
     <>
       <PageHeader
         action={
           <div className="flex flex-wrap items-center gap-2">
             <Badge className="h-8 px-3" variant="outline">
-              Binance Spot Testnet
+              {venue?.name ?? "Binance Spot Testnet"}
             </Badge>
             <AccountRefresh />
             <Link
@@ -70,14 +75,16 @@ export function TestnetOverview({
         <ShieldCheck className="size-4" />
         <AlertTitle>
           {connected
-            ? "Connected · virtual funds"
+            ? readOnly
+              ? "Connected · read only"
+              : "Connected · virtual funds"
             : account.status === "not_configured"
               ? "Testnet setup required"
               : "Testnet account unavailable"}
         </AlertTitle>
         <AlertDescription>
           {connected
-            ? `Updated ${account.snapshot.capturedAt.slice(11, 19)} UTC. Refreshes every 10 seconds. These balances and fills come from Binance Spot Testnet.`
+            ? `Updated ${account.snapshot.capturedAt.slice(11, 19)} UTC. Refreshes every 10 seconds. These balances and fills come from ${venue?.name ?? "the exchange"}${readOnly ? ", which the product only monitors and never trades" : ""}.`
             : account.message}
         </AlertDescription>
       </Alert>
@@ -91,6 +98,7 @@ export function TestnetOverview({
           account={account}
           execution={execution}
           overview={overview}
+          readOnly={readOnly}
         />
       ) : (
         <Card className="mt-6">
@@ -111,10 +119,13 @@ function AccountContent({
   account,
   overview,
   execution,
+  readOnly,
 }: {
   account: Extract<TestnetAccountState, { status: "connected" }>;
   overview: OverviewState;
   execution: ExecutionView;
+  // On a venue the product only reads: its orders have no cancel buttons.
+  readOnly: boolean;
 }) {
   const { snapshot } = account;
   const available = (asset: string) =>
@@ -192,6 +203,7 @@ function AccountContent({
                     ? execution.execution
                     : undefined
                 }
+                readOnly={readOnly}
                 snapshot={snapshot}
               />
             </CardContent>
@@ -219,6 +231,8 @@ function AccountContent({
           </Card>
         </div>
       </div>
+
+      <OtherAccounts overview={overview} />
     </>
   );
 }

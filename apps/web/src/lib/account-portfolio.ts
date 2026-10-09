@@ -60,6 +60,8 @@ export type AccountTotals = {
   account: PortfolioAccount;
   /** Its venue, then its label if different. */
   name: string;
+  /** Whether it is the account the dashboard acts on. */
+  current: boolean;
   /**
    * The account's own snapshot, as the worker read it, for an account it
    * serves. Never another account's (ADR 0009).
@@ -165,6 +167,7 @@ export async function getAccountPortfolio(): Promise<{
         return {
           account: summary,
           name,
+          current: summary.id === currentId,
           status: "unavailable",
           reason: "The execution worker does not read this account.",
         };
@@ -176,6 +179,7 @@ export async function getAccountPortfolio(): Promise<{
         ? {
             account: summary,
             name,
+            current: summary.id === currentId,
             snapshot: own,
             status: "valued",
             portfolio: valued.portfolio,
@@ -183,6 +187,7 @@ export async function getAccountPortfolio(): Promise<{
         : {
             account: summary,
             name,
+            current: summary.id === currentId,
             snapshot: own,
             status: "unavailable",
             reason: valued.message,
