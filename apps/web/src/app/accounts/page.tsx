@@ -116,9 +116,9 @@ function ValuedHoldings({ portfolio }: { portfolio: Portfolio }) {
             {missing.map((holding) => holding.asset).join(", ")}
           </AlertTitle>
           <AlertDescription>
-            Binance Spot Testnet has no market that converts these into{" "}
-            {portfolio.currency}, directly or through USDT or USDC, so they have
-            no value here. They are never counted as zero.
+            Binance Spot Testnet has no market with a price that converts these
+            into {portfolio.currency}, directly or through USDT or USDC, so they
+            have no value here. They are never counted as zero.
           </AlertDescription>
         </Alert>
       ) : null}

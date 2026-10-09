@@ -10,6 +10,7 @@ import {
   DEFAULT_REPORTING_CURRENCY,
   drawdownAcrossAccounts,
   reportingCurrencyOptions,
+  unitPrice,
   valueAccount,
   VALUATION_FRESHNESS_MS,
   type MarketPrice,
@@ -76,16 +77,37 @@ describe("conversionRoute", () => {
     assert.equal(conversionRoute("USD", "USDT", noBridge), undefined);
   });
 
-  it("ignores a market without a positive price", () => {
+  it("tries USDT before USDC when both bridges exist", () => {
+    const both = venue([
+      ["ABC-USDT", "2"],
+      ["ABC-USDC", "2.1"],
+      ["EUR-USDT", "1.1"],
+      ["EUR-USDC", "1.09"],
+    ]);
+    assert.deepEqual(
+      conversionRoute("ABC", "EUR", both)?.legs.map((leg) => leg.instrument),
+      ["ABC-USDT", "EUR-USDT"],
+    );
+  });
+
+  it("takes the first market that exists, even when it has no usable price", () => {
     const zero = venue([
       ["BTC-USDT", "0"],
       ["BTC-USDC", "59900"],
       ["USDC-USDT", "1"],
     ]);
+    // The listed BTC-USDT market decides the route...
     assert.deepEqual(
       conversionRoute("BTC", "USDT", zero)?.legs.map((leg) => leg.instrument),
-      ["BTC-USDC", "USDC-USDT"],
+      ["BTC-USDT"],
     );
+    // ...so the conversion is missing, not taken through USDC.
+    assert.deepEqual(convertAmount("1", "BTC", "USDT", zero, now), {
+      status: "missing",
+      reason: "no_price",
+      from: "BTC",
+      to: "USDT",
+    });
   });
 });
 
@@ -128,7 +150,7 @@ describe("convertAmount", () => {
   it("reports a missing route, never zero", () => {
     assert.deepEqual(
       convertAmount("3", "XYZ", "USDT", venue([["XYZ-BTC", "1"]]), now),
-      { status: "missing", from: "XYZ", to: "USDT" },
+      { status: "missing", reason: "no_route", from: "XYZ", to: "USDT" },
     );
   });
 
@@ -199,10 +221,32 @@ describe("valueAccount", () => {
     assert.equal(valuation.change, "100");
     assert.equal(valuation.changeBase, "600");
     assert.equal(valuation.converted, 3);
+    // ETH counts in the total, but not in the 24h change, and says so.
+    assert.equal(valuation.withoutOpen, 1);
     // A zero balance is never "left out".
     assert.deepEqual(valuation.unconverted, [
-      { asset: "XYZ", quantity: "7", status: "missing" },
+      { asset: "XYZ", quantity: "7", status: "missing", reason: "no_route" },
     ]);
+  });
+});
+
+describe("unitPrice", () => {
+  it("prices one unit along a route, now and at the open", () => {
+    const route = conversionRoute(
+      "TRY",
+      "USDC",
+      venue([
+        ["USDT-TRY", "40", "50"],
+        ["USDC-USDT", "1.25", "1"],
+      ]),
+    )!;
+    assert.deepEqual(unitPrice(route), { price: "0.02", openPrice: "0.02" });
+    assert.deepEqual(
+      unitPrice(
+        conversionRoute("BTC", "USDT", venue([["BTC-USDT", "60000"]]))!,
+      ),
+      { price: "60000", openPrice: null },
+    );
   });
 });
 
@@ -217,18 +261,28 @@ describe("combineAccounts", () => {
   };
 
   it("adds every account's value in the reporting currency", () => {
-    const valued = (total: string, change: string, changeBase: string) => ({
+    const valued = (
+      total: string,
+      change: string,
+      changeBase: string,
+      withoutOpen = 0,
+    ) => ({
       currency: "USDT",
       holdings: [],
       total,
       change,
       changeBase,
       converted: 1,
+      withoutOpen,
       unconverted: [],
     });
     const combined = combineAccounts("USDT", [
       { ...binance, status: "valued", valuation: valued("1000", "10", "990") },
-      { ...htx, status: "valued", valuation: valued("500.5", "-20", "520.5") },
+      {
+        ...htx,
+        status: "valued",
+        valuation: valued("500.5", "-20", "520.5", 2),
+      },
     ]);
 
     assert.equal(combined.total, "1500.5");
@@ -240,6 +294,8 @@ describe("combineAccounts", () => {
     );
     assert.equal(combined.complete, true);
     assert.equal(combined.counted, 2);
+    // Two holdings count in the total but not in the 24h change.
+    assert.equal(combined.withoutOpen, 2);
   });
 
   it("leaves out an unavailable account and stale holdings, and says so", () => {

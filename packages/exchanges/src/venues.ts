@@ -2,7 +2,11 @@
 // and how the application's names for markets and orders translate to each
 // venue's. See docs/adr/0008-normalize-venues-markets-and-order-ids.md.
 import { z } from "zod";
-import { instrumentAssets, type Instrument } from "@crypto-trading/domain";
+import {
+  instrumentAssets,
+  type AccountAccess,
+  type Instrument,
+} from "@crypto-trading/domain";
 
 /**
  * Every venue the application has an adapter for. An exchange account's
@@ -220,7 +224,7 @@ export function accountModes(venue: Venue): ("simulation" | "live")[] {
  * on any other venue, or on one this build has no adapter for, is read only:
  * monitored, but never the target of a strategy, proposal or order (ADR 0009).
  */
-export function exchangeAccountAccess(exchange: string): "trade" | "read_only" {
+export function exchangeAccountAccess(exchange: string): AccountAccess {
   const venue = venueIdSchema.safeParse(exchange);
   return venue.success && canPlaceOrders(venueFor(venue.data))
     ? "trade"

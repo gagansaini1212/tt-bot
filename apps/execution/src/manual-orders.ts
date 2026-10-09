@@ -14,6 +14,7 @@ import {
   protectedLeg,
   protectedLegIds,
   canPlaceOrders,
+  exchangeAccountAccess,
   findMarketRules,
   venueFor,
   type ManualOrderOutcome,
@@ -347,9 +348,7 @@ export class ManualOrderDesk {
       },
       {
         ...scope,
-        accountAccess: canPlaceOrders(venueFor(this.#exchange.venue))
-          ? "trade"
-          : "read_only",
+        accountAccess: exchangeAccountAccess(this.#exchange.venue),
       },
     );
     return {

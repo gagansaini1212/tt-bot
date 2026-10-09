@@ -103,7 +103,10 @@ test("values balances through a direct market, its inverse, or USDC, and never t
 
   // Without a route, a balance is listed and left out rather than counted as zero.
   assert.equal(byAsset.JPY.valuation, undefined);
-  assert.deepEqual(byAsset.JPY.unconverted, { status: "missing" });
+  assert.deepEqual(byAsset.JPY.unconverted, {
+    status: "missing",
+    reason: "no_route",
+  });
   assert.deepEqual(portfolio.unpriced, ["JPY", "XYZ"]);
   assert.equal(portfolio.total, "45195.01");
   assert.equal(portfolio.change, "7505.01");
@@ -178,24 +181,26 @@ test("sums and products are exact", () => {
   assert.equal(portfolio.total, "12193263124675.6076310231564186");
 });
 
-test("a market without a last price is skipped; one without an open price has no 24h change", () => {
+test("a listed market without a last price leaves its holding without a value; one without an open price has no 24h change", () => {
   const portfolio = value(
     [balance("AAA", "2"), balance("BBB", "3")],
     [
+      // AAA's direct market is listed but has never traded, so AAA is not
+      // valued through USDC instead.
       ticker("AAAUSDT", "0"),
       ticker("AAAUSDC", "5"),
       ticker("USDCUSDT", "1"),
       ticker("BBBUSDT", "4", "0"),
     ],
   );
-  // Highest value first.
   const [bbb, aaa] = portfolio.holdings;
-  assert.equal(aaa.valuation?.source, "AAA/USDC × USDC/USDT");
-  assert.equal(aaa.valuation?.value, "10");
+  assert.equal(aaa.valuation, undefined);
+  assert.deepEqual(aaa.unconverted, { status: "missing", reason: "no_price" });
   assert.equal(bbb.valuation?.value, "12");
   assert.equal(bbb.valuation?.change, null);
   assert.equal(bbb.valuation?.changePercent, null);
-  assert.deepEqual(portfolio.unpriced, []);
+  assert.equal(portfolio.valuation.withoutOpen, 1);
+  assert.deepEqual(portfolio.unpriced, ["AAA"]);
   assert.equal(portfolio.change, "0");
 });
 

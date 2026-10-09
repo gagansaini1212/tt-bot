@@ -1,11 +1,12 @@
 import Decimal from "decimal.js";
 import {
-  convertAmount,
   instrumentLabel,
+  unitPrice,
   valueAccount,
   type AccountValuation,
   type ConversionRoute,
   type PriceSource,
+  type ConversionProblem,
 } from "@crypto-trading/domain";
 import type { Ticker } from "@crypto-trading/exchanges/contract";
 import { venueFor, venueIdSchema } from "@crypto-trading/exchanges/venues";
@@ -78,8 +79,11 @@ export type Holding = Balance & {
   quantity: string;
   /** Missing when the holding could not be converted; never counted as zero. */
   valuation?: HoldingValue;
-  /** Why a nonzero holding has no value: no route on its venue, or a stale price. */
-  unconverted?: { status: "missing" } | { status: "stale"; since: number };
+  /**
+   * Why a nonzero holding has no value: no route or no price on its venue,
+   * or a stale price.
+   */
+  unconverted?: ConversionProblem;
   /** Zero, or valued below 1 in the reporting currency. A balance without a value is not dust. */
   dust: boolean;
 };
@@ -130,13 +134,11 @@ export function valuePortfolio(
         holding.unconverted =
           conversion.status === "stale"
             ? { status: "stale", since: conversion.since }
-            : { status: "missing" };
+            : { status: "missing", reason: conversion.reason };
       return { holding, value: undefined };
     }
     const value = new Exact(conversion.value);
-    const unit = convertAmount("1", balance.asset, currency, prices, now);
-    const price = unit.status === "converted" ? unit.value : "0";
-    const priceAtOpen = unit.status === "converted" ? unit.valueAtOpen : null;
+    const { price, openPrice: priceAtOpen } = unitPrice(conversion.route);
     // Compared at the cent shown, so a value displayed as 1.00 is not dust.
     holding.dust = value.toDecimalPlaces(2, Exact.ROUND_HALF_UP).lt(DUST_LIMIT);
     holding.valuation = {

@@ -101,24 +101,36 @@ export type Conversion =
       since: number;
     }
   | {
-      /** No route exists on the venue. */
+      /**
+       * `no_route`: the venue lists no route. `no_price`: it lists the
+       * route's markets, but one of them has no usable price.
+       */
       status: "missing";
+      reason: "no_route" | "no_price";
       from: string;
       to: string;
     };
 
-const POSITIVE_DECIMAL = /^(0|[1-9]\d*)(\.\d+)?$/;
+const DECIMAL = /^(0|[1-9]\d*)(\.\d+)?$/;
 
-function usablePrice(market: MarketPrice | undefined) {
+/** Whether `value` is a decimal string above zero. */
+function positive(value: string | null | undefined): value is string {
   return (
-    market !== undefined &&
-    POSITIVE_DECIMAL.test(market.price) &&
-    new Decimal(market.price).greaterThan(0) &&
-    Number.isFinite(market.observedAt)
+    typeof value === "string" &&
+    DECIMAL.test(value) &&
+    new Decimal(value).greaterThan(0)
   );
 }
 
-/** The one market between `from` and `to`, in either direction. */
+/** Whether a leg's price can value an amount: positive, and timed. */
+function priced(leg: ConversionLeg) {
+  return positive(leg.price) && Number.isFinite(leg.observedAt);
+}
+
+/**
+ * The one market the venue lists between `from` and `to`, in either
+ * direction, whether or not it has a usable price.
+ */
 function directLeg(
   from: string,
   to: string,
@@ -130,18 +142,12 @@ function directLeg(
   ] as const) {
     if (!instrument) continue;
     const market = prices(instrument);
-    if (!market || !usablePrice(market)) continue;
-    const open =
-      market.openPrice &&
-      POSITIVE_DECIMAL.test(market.openPrice) &&
-      new Decimal(market.openPrice).greaterThan(0)
-        ? market.openPrice
-        : null;
+    if (!market) continue;
     return {
       instrument,
       side,
       price: market.price,
-      openPrice: open,
+      openPrice: positive(market.openPrice) ? market.openPrice : null,
       observedAt: market.observedAt,
     };
   }
@@ -152,7 +158,10 @@ function directLeg(
  * The route that converts `from` into `to` on one venue, the first that
  * exists of: no conversion when they are the same; one market between them,
  * in either direction; two markets through USDT, then through USDC. Longer
- * routes are never used, and no currency is assumed equal to another.
+ * routes are never used, and no currency is assumed equal to another. A
+ * market exists if the venue lists it: one without a usable price still
+ * decides the route, so the conversion is missing rather than taken from
+ * other markets.
  */
 export function conversionRoute(
   from: string,
@@ -191,18 +200,20 @@ function applyRoute(
 ) {
   let value = new ExactDecimal(amount);
   for (const leg of legs) {
-    const rate = price(leg);
-    if (rate === null) return null;
-    value = leg.side === "base" ? value.times(rate) : value.dividedBy(rate);
+    const legPrice = price(leg);
+    if (legPrice === null) return null;
+    value =
+      leg.side === "base" ? value.times(legPrice) : value.dividedBy(legPrice);
   }
   return value;
 }
 
 /**
  * Converts `amount`, in `from`, into `to` with one venue's `prices`, as of
- * `now`. A conversion is missing when the venue has no route, and stale when
- * any price on the route is older than `maxAgeMs`: either way it has no
- * value, so it is never counted as zero or filled from another venue.
+ * `now`. A conversion is missing when the venue has no route, or a market on
+ * it has no usable price, and stale when any price on the route is older
+ * than `maxAgeMs`: either way it has no value, so it is never counted as
+ * zero or filled from another venue.
  */
 export function convertAmount(
   amount: Decimal.Value,
@@ -213,7 +224,9 @@ export function convertAmount(
   maxAgeMs = VALUATION_FRESHNESS_MS,
 ): Conversion {
   const route = conversionRoute(from, to, prices);
-  if (!route) return { status: "missing", from, to };
+  if (!route) return { status: "missing", reason: "no_route", from, to };
+  if (!route.legs.every(priced))
+    return { status: "missing", reason: "no_price", from, to };
   if (route.legs.length) {
     const oldest = Math.min(...route.legs.map((leg) => leg.observedAt));
     // A price from the future is no older than now.
@@ -230,21 +243,34 @@ export function convertAmount(
   };
 }
 
+/**
+ * What one unit costs in the route's target currency, now and at the
+ * 24-hour open (null without open prices), from the prices it recorded.
+ */
+export function unitPrice(route: ConversionRoute) {
+  return {
+    price: applyRoute(1, route.legs, (leg) => leg.price)!.toFixed(),
+    openPrice:
+      applyRoute(1, route.legs, (leg) => leg.openPrice)?.toFixed() ?? null,
+  };
+}
+
 /** One asset an exchange account holds, available and locked together. */
 export type AssetBalance = { asset: string; quantity: string };
 
 export type ValuedHolding = AssetBalance & { conversion: Conversion };
 
+/** Why an amount has no value: a missing or a stale conversion. */
+export type ConversionProblem =
+  | { status: "missing"; reason: "no_route" | "no_price" }
+  | {
+      status: "stale";
+      /** When the route's oldest price was observed. */
+      since: number;
+    };
+
 /** A nonzero holding left out of a total, and why. */
-export type UnconvertedHolding = AssetBalance &
-  (
-    | { status: "missing" }
-    | {
-        status: "stale";
-        /** When the route's oldest price was observed. */
-        since: number;
-      }
-  );
+export type UnconvertedHolding = AssetBalance & ConversionProblem;
 
 /** One exchange account's holdings in a reporting currency. */
 export type AccountValuation = {
@@ -262,6 +288,8 @@ export type AccountValuation = {
   changeBase: string;
   /** Nonzero holdings converted, so counted in `total`. */
   converted: number;
+  /** Of those, the ones without a 24-hour open price, left out of `change`. */
+  withoutOpen: number;
   /** Nonzero holdings left out of `total`. */
   unconverted: UnconvertedHolding[];
 };
@@ -281,6 +309,7 @@ export function valueAccount(
   let change = new ExactDecimal(0);
   let changeBase = new ExactDecimal(0);
   let converted = 0;
+  let withoutOpen = 0;
   const unconverted: UnconvertedHolding[] = [];
   const holdings = balances.map((balance): ValuedHolding => {
     const conversion = convertAmount(
@@ -297,13 +326,13 @@ export function valueAccount(
       if (conversion.valueAtOpen !== null) {
         change = change.plus(conversion.value).minus(conversion.valueAtOpen);
         changeBase = changeBase.plus(conversion.valueAtOpen);
-      }
+      } else if (nonzero) withoutOpen += 1;
       if (nonzero) converted += 1;
     } else if (nonzero)
       unconverted.push(
         conversion.status === "stale"
           ? { ...balance, status: "stale", since: conversion.since }
-          : { ...balance, status: "missing" },
+          : { ...balance, status: "missing", reason: conversion.reason },
       );
     return { ...balance, conversion };
   });
@@ -314,11 +343,12 @@ export function valueAccount(
     change: change.toFixed(),
     changeBase: changeBase.toFixed(),
     converted,
+    withoutOpen,
     unconverted,
   };
 }
 
-/** How the dashboard names an exchange account: its venue and label. */
+/** An exchange account, and how the dashboard names it: its venue and label. */
 export type AccountName = { exchangeAccountId: string; label: string };
 
 /** One exchange account's part in a total across accounts. */
@@ -345,6 +375,8 @@ export type CombinedValuation = {
   counted: number;
   /** Nonzero holdings counted, across those accounts. */
   converted: number;
+  /** Of those, the ones without a 24-hour open price, left out of `change`. */
+  withoutOpen: number;
   /** Every account counted and every holding converted. */
   complete: boolean;
   /** Accounts not counted, with why. */
@@ -370,6 +402,7 @@ export function combineAccounts(
   let changeBase = new ExactDecimal(0);
   let counted = 0;
   let converted = 0;
+  let withoutOpen = 0;
   const leftOutAccounts: CombinedValuation["leftOutAccounts"] = [];
   const unconverted: CombinedValuation["unconverted"] = [];
   for (const account of accounts) {
@@ -395,6 +428,7 @@ export function combineAccounts(
     changeBase = changeBase.plus(valuation.changeBase);
     counted += 1;
     converted += valuation.converted;
+    withoutOpen += valuation.withoutOpen;
     for (const holding of valuation.unconverted)
       unconverted.push({ ...name, ...holding });
   }
@@ -407,6 +441,7 @@ export function combineAccounts(
       : change.dividedBy(changeBase).times(100).toFixed(),
     counted,
     converted,
+    withoutOpen,
     complete: leftOutAccounts.length === 0 && unconverted.length === 0,
     leftOutAccounts,
     unconverted,
@@ -479,14 +514,17 @@ export function drawdownAcrossAccounts(
       convert(account.today.pnl),
       convert(account.today.allocation),
     ];
+    // Both amounts take the same route, so they fail the same way.
     if (result.status !== "converted" || allocated.status !== "converted") {
-      const problem = result.status === "converted" ? allocated : result;
+      const pair = `${account.accountingCurrency} to ${currency}`;
       leftOut.push({
         ...name,
         reason:
-          problem.status === "stale"
-            ? `Its ${account.accountingCurrency} to ${currency} price is stale.`
-            : `Its venue has no market to convert ${account.accountingCurrency} to ${currency}.`,
+          result.status === "stale"
+            ? `Its ${pair} price is stale.`
+            : result.status === "missing" && result.reason === "no_price"
+              ? `Its venue has no price to convert ${pair}.`
+              : `Its venue has no market to convert ${pair}.`,
       });
       continue;
     }

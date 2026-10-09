@@ -1,4 +1,5 @@
 import {
+  type AccountAccess,
   instrumentAssets,
   instrumentLabel,
   isInstrument,
@@ -15,7 +16,7 @@ export type AccountInstruments = {
   accountingCurrency: string;
   // From the account's venue: a read-only account is never traded, whatever
   // it allows (ADR 0009).
-  access: "trade" | "read_only";
+  access: AccountAccess;
 };
 
 /**

@@ -1,18 +1,18 @@
 import "server-only";
-import { venueFor, venueIdSchema } from "@crypto-trading/exchanges/venues";
+import { accountVenue } from "@crypto-trading/exchanges/exchange-accounts";
 import type { AccountSnapshot } from "@crypto-trading/exchanges/contract";
 import type { OverviewState } from "./account-portfolio";
 import { contentId } from "./content-id";
 import type { JsonObject } from "./json";
 import type { TestnetAccountState } from "./testnet-account";
 
-// The snapshot names these balances; Accounts lists the rest.
+// The snapshot names these balances, and the account's accounting currency,
+// which pays for its entries; Accounts lists the rest.
 const SNAPSHOT_ASSETS = ["BTC", "ETH", "USDT"];
 
 /** How the assistant is told what kind of data a venue's snapshot holds. */
 function dataKind(venue: string, name: string) {
-  const known = venueIdSchema.safeParse(venue);
-  return known.success && venueFor(known.data).capabilities.funds === "virtual"
+  return accountVenue(venue)?.capabilities.funds === "virtual"
     ? `${name}, virtual funds`
     : `${name}, real funds, read only`;
 }
@@ -29,9 +29,13 @@ function accountSnapshot(
     venue: string;
     venueName: string;
     label: string;
-    accountingCurrency: string;
+    // Null when the account list, which says it, is unavailable.
+    accountingCurrency: string | null;
   },
 ): JsonObject {
+  const assets = [
+    ...new Set([...SNAPSHOT_ASSETS, account.accountingCurrency ?? "USDT"]),
+  ];
   const content = {
     capturedAt: snapshot.capturedAt,
     dataKind: dataKind(account.venue, account.venueName),
@@ -43,9 +47,9 @@ function accountSnapshot(
       canTrade: snapshot.canTrade,
       liveTradingLocked: true,
     },
-    balanceScope: `${SNAPSHOT_ASSETS.join(", ")}. Other asset balances are listed on Accounts.`,
+    balanceScope: `${assets.join(", ")}. Other asset balances are listed on Accounts.`,
     balances: snapshot.balances.filter((balance) =>
-      SNAPSHOT_ASSETS.includes(balance.asset),
+      assets.includes(balance.asset),
     ),
     openOrders: snapshot.orders,
     recentFills: snapshot.fills.slice(0, 10),
@@ -71,7 +75,8 @@ export function assistantAccounts(
     // Without the account list, the snapshot cannot name its account, so
     // nothing can be proposed on it.
     if (account.status !== "connected") return [];
-    const name = "Binance Spot Testnet";
+    const name =
+      accountVenue(account.snapshot.venue)?.name ?? account.snapshot.venue;
     return [
       {
         exchangeAccountId: null,
@@ -84,7 +89,7 @@ export function assistantAccounts(
           venue: account.snapshot.venue,
           venueName: name,
           label: name,
-          accountingCurrency: "USDT",
+          accountingCurrency: null,
         }),
       },
     ];

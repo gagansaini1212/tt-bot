@@ -242,6 +242,31 @@ test("the assistant sees each account labelled, with its own snapshot or why it 
   assert.match(other.noSnapshot ?? "", /does not read this account/);
 });
 
+test("an account's snapshot for the assistant includes its accounting currency's balance", async () => {
+  mockWorker({
+    "/portfolio": {
+      portfolio: {
+        reportingCurrency: "USDT",
+        options,
+        accounts: [{ ...served, accountingCurrency: "EUR" }],
+      },
+    },
+    "/snapshot": snapshot([
+      { asset: "EUR", free: "250" },
+      { asset: "XRP", free: "9" },
+    ]),
+    "/market/tickers": { tickers: [] },
+  });
+  const { account, overview } = await getAccountPortfolio();
+  const [context] = assistantAccounts(account, overview) as {
+    snapshot: { balances: { asset: string }[] } | null;
+  }[];
+  assert.deepEqual(
+    context.snapshot?.balances.map(({ asset }) => asset),
+    ["EUR"],
+  );
+});
+
 test("the drawdown across accounts converts each account's result, and is left out when it would repeat one account's", async () => {
   const today = Promise.resolve({ pnl: "-25", allocation: "1000" });
   mockWorker({

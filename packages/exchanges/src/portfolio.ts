@@ -1,9 +1,11 @@
 // Browser-safe: a customer's exchange accounts and reporting currency, as the
 // execution worker reports them for totals across accounts (ADR 0009).
 import {
+  accountAccessSchema,
   assetCodeSchema,
   reportingCurrencyChoiceSchema,
   reportingCurrencySchema,
+  type ReportingCurrencyOption,
 } from "@crypto-trading/domain";
 import { z } from "zod";
 import {
@@ -26,7 +28,7 @@ export const portfolioAccountSchema = z.object({
   mode: exchangeAccountModeSchema,
   status: exchangeAccountStatusSchema,
   // From the venue's adapter: a read-only account is monitored, never traded.
-  access: z.enum(["trade", "read_only"]),
+  access: accountAccessSchema,
   // Whether this worker reads the account now: /snapshot serves its
   // balances. An account it does not read is left out of totals.
   served: z.boolean(),
@@ -47,7 +49,7 @@ export const reportingCurrencyOptionSchema = z.object({
   available: z.boolean(),
   // The accounts whose venue has no route to the currency.
   unavailableFor: z.array(z.string().max(300)),
-});
+}) satisfies z.ZodType<ReportingCurrencyOption>;
 export type ReportingCurrencyOptionView = z.infer<
   typeof reportingCurrencyOptionSchema
 >;

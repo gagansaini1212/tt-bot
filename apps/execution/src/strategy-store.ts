@@ -386,16 +386,14 @@ export class StrategyStore {
   ): Promise<ControlResult> {
     return this.#scoped(scope, async (tx) => {
       const account = await selectAccountInstruments(tx, scope);
-      const readOnly = accountTradingRefusal(account);
-      if (readOnly) return { result: "refused", message: readOnly };
+      const refused = draftRefusal(account, draft);
+      if (refused) return refused;
       if (!(await latestPortfolioLimit(tx, scope)))
         return {
           result: "refused",
           message:
             "Set the portfolio's daily drawdown limit in Settings → Risk limits before starting a strategy.",
         };
-      const refused = disallowedInstruments(account, draft);
-      if (refused) return refused;
       const id = randomUUID();
       await tx`
         insert into strategies (
@@ -472,10 +470,10 @@ export class StrategyStore {
           message:
             "A new version keeps the strategy's kind. Create a new strategy for another kind.",
         };
-      const account = await selectAccountInstruments(tx, scope);
-      const readOnly = accountTradingRefusal(account);
-      if (readOnly) return { result: "refused", message: readOnly };
-      const refused = disallowedInstruments(account, draft);
+      const refused = draftRefusal(
+        await selectAccountInstruments(tx, scope),
+        draft,
+      );
       if (refused) return refused;
       const version = current.version + 1;
       await insertVersion(tx, scope, strategyId, version, draft);
@@ -1260,18 +1258,21 @@ export const ENDED_LABELS: Record<string, string> = {
 };
 
 /**
- * Refuses a draft whose rules name an instrument the exchange account cannot
- * trade. Whether the venue lists it is checked before, by the route.
+ * Refuses a draft on a read-only exchange account, or whose rules name an
+ * instrument the account cannot trade. Whether the venue lists it is checked
+ * before, by the route.
  */
-function disallowedInstruments(
+function draftRefusal(
   account: AccountInstruments,
   draft: StrategyDraft,
 ): ControlResult | undefined {
-  const refusal = ruleLimits(draft.rules)
-    .allowedInstruments.map((instrument) =>
-      instrumentRefusal(account, instrument),
-    )
-    .find(Boolean);
+  const refusal =
+    accountTradingRefusal(account) ??
+    ruleLimits(draft.rules)
+      .allowedInstruments.map((instrument) =>
+        instrumentRefusal(account, instrument),
+      )
+      .find(Boolean);
   return refusal ? { result: "refused", message: refusal } : undefined;
 }
 

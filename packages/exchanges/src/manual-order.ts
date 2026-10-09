@@ -8,6 +8,7 @@ import {
   executionPolicySchema,
   instrumentLabel,
   instrumentSchema,
+  type AccountAccess,
   type ExecutionPolicy,
   type TradeProposal,
 } from "@crypto-trading/domain";
@@ -194,7 +195,7 @@ export function manualTestnetPolicy(
   account: {
     customerId: string;
     exchangeAccountId: string;
-    accountAccess: "trade" | "read_only";
+    accountAccess: AccountAccess;
   },
 ): ExecutionPolicy {
   return executionPolicySchema.parse({

@@ -27,7 +27,7 @@ import {
 import { cn } from "@/lib/utils";
 
 // Holdings left out that are named before the rest are counted.
-const LISTED = 5;
+const NAMED_HOLDINGS = 5;
 
 /**
  * Net worth and its 24-hour change across every exchange account, in the
@@ -157,6 +157,9 @@ function Figures({
         ) : null}
         <span className="font-normal text-muted-foreground">
           24h change in value of current holdings
+          {combined.withoutOpen
+            ? `, except ${combined.withoutOpen === 1 ? "1 holding" : `${combined.withoutOpen} holdings`} without a 24-hour open price`
+            : ""}
         </span>
       </p>
     </>
@@ -183,12 +186,12 @@ function LeftOut({ combined }: { combined: CombinedValuation }) {
       ))}
       {missing.length ? (
         <Note>
-          Left out, with no market on their venue to convert them into{" "}
-          {currency}:{" "}
+          Left out, with no market with a price on their venue to convert them
+          into {currency}:{" "}
           {listed(
             missing.length,
             missing
-              .slice(0, LISTED)
+              .slice(0, NAMED_HOLDINGS)
               .map(
                 (holding) =>
                   `${formatDecimal(holding.quantity)} ${holding.asset}${where(holding.label)}`,
@@ -204,7 +207,7 @@ function LeftOut({ combined }: { combined: CombinedValuation }) {
           {listed(
             stale.length,
             stale
-              .slice(0, LISTED)
+              .slice(0, NAMED_HOLDINGS)
               .map(
                 (holding) =>
                   `${formatDecimal(holding.quantity)} ${holding.asset}${where(holding.label)}, priced ${formatUtc(holding.since)}`,

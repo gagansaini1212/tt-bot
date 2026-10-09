@@ -157,7 +157,9 @@ function HoldingRow({ holding }: { holding: Holding }) {
             {unconverted?.status === "stale"
               ? `Price stale since ${formatUtc(unconverted.since)}`
               : unconverted?.status === "missing"
-                ? "No conversion route"
+                ? unconverted.reason === "no_price"
+                  ? "No price"
+                  : "No conversion route"
                 : "Not priced"}
           </span>
         )}

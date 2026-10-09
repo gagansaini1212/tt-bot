@@ -14,6 +14,14 @@ export const marketKindSchema = z.enum(["spot", "perpetual"]);
 export const tradeDirectionSchema = z.enum(["long", "short"]);
 export const tradingModeSchema = z.enum(["simulation", "live"]);
 
+/**
+ * Whether an exchange account may be traded, from its venue's adapter. A
+ * read-only account is monitored, but never the target of an entry
+ * (ADR 0009).
+ */
+export const accountAccessSchema = z.enum(["trade", "read_only"]);
+export type AccountAccess = z.infer<typeof accountAccessSchema>;
+
 export type MarketKind = z.infer<typeof marketKindSchema>;
 export type TradeDirection = z.infer<typeof tradeDirectionSchema>;
 
@@ -48,7 +56,7 @@ export const executionPolicySchema = z
     exchangeAccountId: z.uuid(),
     // From the account's venue adapter. A read-only exchange account is
     // monitored, but never the target of an entry.
-    accountAccess: z.enum(["trade", "read_only"]),
+    accountAccess: accountAccessSchema,
     // The account's accounting currency. The allocation, capital, budget and
     // position limit are amounts in it, so an entry must be in a market
     // quoted in it: none of them depends on a conversion.
