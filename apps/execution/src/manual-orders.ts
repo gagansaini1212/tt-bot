@@ -345,7 +345,12 @@ export class ManualOrderDesk {
         committedCapital: exposure.committedCapital,
         reservedBudget: held.plus(exposure.reservedBudget).toFixed(),
       },
-      scope,
+      {
+        ...scope,
+        accountAccess: canPlaceOrders(venueFor(this.#exchange.venue))
+          ? "trade"
+          : "read_only",
+      },
     );
     return {
       capturedAt: now.toISOString(),

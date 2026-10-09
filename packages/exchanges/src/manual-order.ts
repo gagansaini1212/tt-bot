@@ -178,15 +178,30 @@ export function defaultStopLossPrice(
     : undefined;
 }
 
-/** The limits for `account`'s manual orders. */
+/**
+ * The accounting currency of the manual allocation and risk limits. Only
+ * markets quoted in it pass the checks.
+ */
+export const MANUAL_ACCOUNTING_CURRENCY = "USDT";
+
+/**
+ * The limits for `account`'s manual orders. `accountAccess` comes from its
+ * venue: a read-only exchange account takes no orders.
+ */
 export function manualTestnetPolicy(
   config: ManualTradingConfig,
   exposure: { committedCapital: string; reservedBudget: string },
-  account: { customerId: string; exchangeAccountId: string },
+  account: {
+    customerId: string;
+    exchangeAccountId: string;
+    accountAccess: "trade" | "read_only";
+  },
 ): ExecutionPolicy {
   return executionPolicySchema.parse({
     customerId: account.customerId,
     exchangeAccountId: account.exchangeAccountId,
+    accountAccess: account.accountAccess,
+    accountingCurrency: MANUAL_ACCOUNTING_CURRENCY,
     ...MANUAL_TESTNET_STRATEGY,
     // Testnet funds are virtual, so this is simulated trading. Live trading
     // stays disabled.

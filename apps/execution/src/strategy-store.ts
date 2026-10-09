@@ -29,9 +29,11 @@ import type { AccountScope } from "./accounts";
 import { TERMINAL_STATES, type EntryState } from "./entry-assessment";
 import { requestExitIn, requestStrategyExits } from "./execution-store";
 import {
+  accountTradingRefusal,
   instrumentRefusal,
   selectAccountInstruments,
   tradableInstruments,
+  type AccountInstruments,
 } from "./instrument-access";
 import { raiseNotification, type NewNotification } from "./notifications";
 import {
@@ -372,8 +374,10 @@ export class StrategyStore {
 
   /**
    * Creates a strategy, running in simulation, from its first version and
-   * its allocation. It needs the portfolio's daily drawdown limit set, and
-   * may trade only instruments the exchange account allows.
+   * its allocation, on `scope`'s exchange account for its whole life. The
+   * account must be able to trade, the portfolio's daily drawdown limit must
+   * be set, and it may trade only instruments the account allows. Its
+   * allocation is in the account's accounting currency.
    */
   create(
     scope: AccountScope,
@@ -381,13 +385,16 @@ export class StrategyStore {
     now: Date,
   ): Promise<ControlResult> {
     return this.#scoped(scope, async (tx) => {
+      const account = await selectAccountInstruments(tx, scope);
+      const readOnly = accountTradingRefusal(account);
+      if (readOnly) return { result: "refused", message: readOnly };
       if (!(await latestPortfolioLimit(tx, scope)))
         return {
           result: "refused",
           message:
             "Set the portfolio's daily drawdown limit in Settings → Risk limits before starting a strategy.",
         };
-      const refused = await disallowedInstruments(tx, scope, draft);
+      const refused = disallowedInstruments(account, draft);
       if (refused) return refused;
       const id = randomUUID();
       await tx`
@@ -405,8 +412,8 @@ export class StrategyStore {
         insert into allocations
           (customer_id, exchange_account_id, strategy_id, currency, amount)
         values (
-          ${scope.customerId}, ${scope.exchangeAccountId}, ${id}, 'USDT',
-          ${draft.allocation}::numeric
+          ${scope.customerId}, ${scope.exchangeAccountId}, ${id},
+          ${account.accountingCurrency}, ${draft.allocation}::numeric
         )
       `;
       await audit(tx, scope, id, "strategy.created", {
@@ -426,7 +433,8 @@ export class StrategyStore {
   /**
    * Saves `draft` as the next version, made from `baseVersion`, and sets
    * the allocation. Entries keep the version they were made under, and the
-   * kind cannot change. Its rules start again: a completed strategy runs
+   * kind and exchange account cannot change: only a strategy on `scope`'s
+   * account is found. Its rules start again: a completed strategy runs
    * again under the new version, as a grid does to trade a new range, and
    * entries made after its old rules ended are no longer closed for it.
    */
@@ -464,7 +472,10 @@ export class StrategyStore {
           message:
             "A new version keeps the strategy's kind. Create a new strategy for another kind.",
         };
-      const refused = await disallowedInstruments(tx, scope, draft);
+      const account = await selectAccountInstruments(tx, scope);
+      const readOnly = accountTradingRefusal(account);
+      if (readOnly) return { result: "refused", message: readOnly };
+      const refused = disallowedInstruments(account, draft);
       if (refused) return refused;
       const version = current.version + 1;
       await insertVersion(tx, scope, strategyId, version, draft);
@@ -1038,7 +1049,9 @@ export class StrategyStore {
       const limits = ruleLimits(strategy.rules);
       // The rules' instruments, narrowed to those the account can trade now.
       const account = await selectAccountInstruments(tx, scope);
-      const refusal = instrumentRefusal(account, intent.instrument);
+      const refusal =
+        accountTradingRefusal(account) ??
+        instrumentRefusal(account, intent.instrument);
       if (refusal) return refuse(refusal);
       const allowedInstruments = limits.allowedInstruments.filter(
         (instrument) => !instrumentRefusal(account, instrument),
@@ -1072,7 +1085,11 @@ export class StrategyStore {
         proposal,
         {
           customerId: scope.customerId,
+          // The strategy's own account: its capital, positions and limits
+          // only, never another account's (ADR 0009).
           exchangeAccountId: scope.exchangeAccountId,
+          accountAccess: account.access,
+          accountingCurrency: account.accountingCurrency,
           strategyId: strategy.id,
           strategyVersion: strategy.version,
           // Binance Spot Testnet funds are virtual: simulated trading.
@@ -1246,12 +1263,10 @@ export const ENDED_LABELS: Record<string, string> = {
  * Refuses a draft whose rules name an instrument the exchange account cannot
  * trade. Whether the venue lists it is checked before, by the route.
  */
-async function disallowedInstruments(
-  tx: Transaction,
-  scope: AccountScope,
+function disallowedInstruments(
+  account: AccountInstruments,
   draft: StrategyDraft,
-): Promise<ControlResult | undefined> {
-  const account = await selectAccountInstruments(tx, scope);
+): ControlResult | undefined {
   const refusal = ruleLimits(draft.rules)
     .allowedInstruments.map((instrument) =>
       instrumentRefusal(account, instrument),

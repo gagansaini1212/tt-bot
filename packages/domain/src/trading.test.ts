@@ -31,6 +31,8 @@ const proposal: TradeProposal = {
 const policy: ExecutionPolicy = {
   customerId: proposal.customerId,
   exchangeAccountId: proposal.exchangeAccountId,
+  accountAccess: "trade",
+  accountingCurrency: "USDT",
   strategyId: proposal.strategyId,
   strategyVersion: 3,
   tradingMode: "simulation",
@@ -312,5 +314,118 @@ describe("authorizeTradeProposal with several protected entries", () => {
 
     assert.equal(result.allowed, false);
     if (!result.allowed) assert.equal(result.code, "direction_not_allowed");
+  });
+});
+
+describe("authorizeTradeProposal across exchange accounts (ADR 0009)", () => {
+  // A second exchange account of the same customer, with its own strategy.
+  const otherAccount = "10000000-0000-4000-8000-000000000013";
+  const otherStrategy = "10000000-0000-4000-8000-000000000014";
+  const onOther: TradeProposal = {
+    ...proposal,
+    proposalId: "10000000-0000-4000-8000-000000000015",
+    exchangeAccountId: otherAccount,
+    strategyId: otherStrategy,
+  };
+  const otherPolicy: ExecutionPolicy = {
+    ...policy,
+    exchangeAccountId: otherAccount,
+    strategyId: otherStrategy,
+  };
+
+  it("checks a proposal only against the one exchange account it names", () => {
+    // Plenty of capital on this account cannot pay for an entry on another.
+    const result = authorizeTradeProposal(
+      onOther,
+      { ...policy, allocation: "1000000", maxPositionNotional: "1000000" },
+      now,
+    );
+
+    assert.equal(result.allowed, false);
+    if (!result.allowed) assert.equal(result.code, "account_mismatch");
+  });
+
+  it("does not let spare capital on one account fund an entry on another", () => {
+    // The other account's allocation is spent; this one has 700 to spare.
+    const spent = {
+      ...otherPolicy,
+      committedCapital: "1000",
+      reservedBudget: "0",
+    };
+
+    assert.equal(authorizeTradeProposal(proposal, policy, now).allowed, true);
+    const result = authorizeTradeProposal(onOther, spent, now);
+    assert.equal(result.allowed, false);
+    if (!result.allowed) assert.equal(result.code, "allocation_exceeded");
+  });
+
+  it("refuses a proposal that names no exchange account", () => {
+    const { exchangeAccountId: _, ...unaddressed } = proposal;
+    const result = authorizeTradeProposal(unaddressed, policy, now);
+
+    assert.equal(result.allowed, false);
+    if (!result.allowed) assert.equal(result.code, "invalid_proposal");
+  });
+
+  it("never targets a read-only exchange account, however the rest checks out", () => {
+    const result = authorizeTradeProposal(
+      proposal,
+      { ...policy, accountAccess: "read_only" },
+      now,
+    );
+
+    assert.equal(result.allowed, false);
+    if (!result.allowed) assert.equal(result.code, "account_read_only");
+  });
+
+  it("trades only markets quoted in the account's accounting currency", () => {
+    const euro: TradeProposal = {
+      ...proposal,
+      instrument: "BTC-EUR",
+    };
+    const allowsEuro = {
+      ...policy,
+      allowedInstruments: ["BTC-USDT" as const, "BTC-EUR" as const],
+    };
+    const inUsdt = authorizeTradeProposal(euro, allowsEuro, now);
+    const inEur = authorizeTradeProposal(
+      euro,
+      { ...allowsEuro, accountingCurrency: "EUR" },
+      now,
+    );
+
+    assert.equal(inUsdt.allowed, false);
+    if (!inUsdt.allowed) assert.equal(inUsdt.code, "quote_currency_mismatch");
+    assert.equal(inEur.allowed, true);
+  });
+
+  it("holds the same instrument on two accounts as two positions, never netted", () => {
+    // This account's strategy holds its largest BTC position.
+    const full = {
+      ...policy,
+      committedCapital: "750",
+      reservedBudget: "0",
+      positionNotionalByInstrument: { "BTC-USDT": "750" },
+      protectedEntries: 1,
+      maxProtectedEntries: 5,
+    };
+    // The other account's strategy holds nothing yet.
+    const empty = {
+      ...otherPolicy,
+      committedCapital: "0",
+      reservedBudget: "0",
+      positionNotionalByInstrument: {},
+      protectedEntries: 0,
+      maxProtectedEntries: 5,
+    };
+
+    const here = authorizeTradeProposal(proposal, full, now);
+    const there = authorizeTradeProposal(onOther, empty, now);
+    // A position on the other account does not make room here...
+    assert.equal(here.allowed, false);
+    if (!here.allowed) assert.equal(here.code, "position_limit_exceeded");
+    // ...and this account's position does not count against the other's.
+    assert.equal(there.allowed, true);
+    if (there.allowed) assert.equal(there.positionNotional, "600");
   });
 });

@@ -40,6 +40,7 @@ const rules: MarketRules = {
 const account = {
   customerId: "0b8f9a62-3f5e-4c1d-8a7b-1c2d3e4f5a01",
   exchangeAccountId: "0b8f9a62-3f5e-4c1d-8a7b-1c2d3e4f5a02",
+  accountAccess: "trade" as const,
 };
 const config = {
   allowedInstruments: ["BTC-USDT" as const],
@@ -109,6 +110,8 @@ test("account limits come from authorizeTradeProposal and its explicit policy", 
   );
   assert.equal(policy.customerId, account.customerId);
   assert.equal(policy.exchangeAccountId, account.exchangeAccountId);
+  assert.equal(policy.accountAccess, "trade");
+  assert.equal(policy.accountingCurrency, "USDT");
   assert.equal(policy.tradingMode, "simulation");
   assert.equal(policy.liveTradingEnabled, false);
   assert.equal(policy.maxLeverage, 1);
@@ -131,6 +134,21 @@ test("account limits come from authorizeTradeProposal and its explicit policy", 
     "limits",
     "filters",
   ]);
+});
+
+test("a read-only exchange account fails the account limits for every order", () => {
+  const readOnly = ticket({
+    policy: manualTestnetPolicy(
+      config,
+      { committedCapital: "0", reservedBudget: "0" },
+      { ...account, accountAccess: "read_only" },
+    ),
+  });
+  const plan = planManualOrder(limit, readOnly, now, ids);
+  assert.equal(plan.passed, false);
+  const limits = plan.checks.find((check) => check.name === "limits");
+  assert.equal(limits?.passed, false);
+  assert.match(limits?.detail ?? "", /read only/);
 });
 
 test("the per-order cap, filters and free balance are checked separately", () => {

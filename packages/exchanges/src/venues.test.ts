@@ -4,6 +4,7 @@ import {
   binanceClientOrderIds,
   binanceVenueSymbols,
   canPlaceOrders,
+  exchangeAccountAccess,
   VENUE_IDS,
   venueFor,
   venueIdSchema,
@@ -94,4 +95,12 @@ test("capabilities are explicit, and only a testnet that attaches exits places o
     { ...binance.capabilities, access: "read_only" as const },
   ])
     assert.equal(canPlaceOrders({ ...binance, capabilities }), false);
+});
+
+test("an exchange account trades only on a venue that places orders; any other is read only", () => {
+  assert.equal(exchangeAccountAccess("binance-spot-testnet"), "trade");
+  // A venue this build has no trading adapter for, such as HTX, or a value
+  // that names no venue, is never traded.
+  for (const exchange of ["htx", "binance", "", "BINANCE-SPOT-TESTNET"])
+    assert.equal(exchangeAccountAccess(exchange), "read_only", exchange);
 });

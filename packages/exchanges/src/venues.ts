@@ -213,3 +213,22 @@ export function accountModes(venue: Venue): ("simulation" | "live")[] {
   if (funds === "virtual") return ["simulation"];
   return access === "read_only" ? ["live"] : [];
 }
+
+/**
+ * Whether an exchange account can be traded, from the venue ID its
+ * `exchange` column holds: only on a venue that `canPlaceOrders`. An account
+ * on any other venue, or on one this build has no adapter for, is read only:
+ * monitored, but never the target of a strategy, proposal or order (ADR 0009).
+ */
+export function exchangeAccountAccess(exchange: string): "trade" | "read_only" {
+  const venue = venueIdSchema.safeParse(exchange);
+  return venue.success && canPlaceOrders(venueFor(venue.data))
+    ? "trade"
+    : "read_only";
+}
+
+/** How the dashboard names the venue an exchange account is on. */
+export function venueName(exchange: string) {
+  const venue = venueIdSchema.safeParse(exchange);
+  return venue.success ? venueFor(venue.data).name : exchange;
+}

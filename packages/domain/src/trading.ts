@@ -2,7 +2,11 @@ import Decimal from "decimal.js";
 import { z } from "zod";
 
 import { decimalString, positiveDecimalString } from "./decimal";
-import { instrumentSchema } from "./instruments";
+import {
+  assetCodeSchema,
+  instrumentAssets,
+  instrumentSchema,
+} from "./instruments";
 import { protectionIsValid } from "./protection";
 
 export { instrumentSchema, type Instrument } from "./instruments";
@@ -37,7 +41,18 @@ export type TradeProposal = z.infer<typeof tradeProposalSchema>;
 export const executionPolicySchema = z
   .object({
     customerId: z.uuid(),
+    // The one exchange account the policy belongs to. Its allocation,
+    // capital, budget, positions and limits are that account's alone:
+    // nothing held on another account funds, offsets or measures an entry
+    // here, so a proposal for another account is refused (ADR 0009).
     exchangeAccountId: z.uuid(),
+    // From the account's venue adapter. A read-only exchange account is
+    // monitored, but never the target of an entry.
+    accountAccess: z.enum(["trade", "read_only"]),
+    // The account's accounting currency. The allocation, capital, budget and
+    // position limit are amounts in it, so an entry must be in a market
+    // quoted in it: none of them depends on a conversion.
+    accountingCurrency: assetCodeSchema,
     strategyId: z.uuid(),
     strategyVersion: z.int().positive(),
     tradingMode: tradingModeSchema,
@@ -50,7 +65,8 @@ export const executionPolicySchema = z
     committedCapital: decimalString,
     reservedBudget: decimalString,
     // The largest position in one instrument, counting every protected entry the
-    // strategy holds in it.
+    // strategy holds in it on this account. Positions on other accounts are
+    // never netted against it.
     maxPositionNotional: positiveDecimalString,
     maxLeverage: z.int().positive(),
     // The market kind and directions the strategy's rules allow, when set.
@@ -58,8 +74,8 @@ export const executionPolicySchema = z
     allowedDirections: z.array(tradeDirectionSchema).min(1).optional(),
     // A strategy that may hold several protected entries states the most it may
     // hold, how many it holds now, pending or open, and the entry notional of
-    // those entries per instrument. A policy without a maximum checks each
-    // entry's capital and size on its own.
+    // those entries per instrument, all on this account. A policy without a
+    // maximum checks each entry's capital and size on its own.
     maxProtectedEntries: z.int().positive().optional(),
     protectedEntries: z.int().nonnegative().optional(),
     positionNotionalByInstrument: z
@@ -85,9 +101,12 @@ export type AuthorizationRejection = {
   code:
     | "invalid_proposal"
     | "scope_mismatch"
+    | "account_mismatch"
+    | "account_read_only"
     | "strategy_not_active"
     | "live_trading_disabled"
     | "instrument_not_allowed"
+    | "quote_currency_mismatch"
     | "market_kind_not_allowed"
     | "direction_not_allowed"
     | "unsupported_spot_short"
@@ -130,15 +149,36 @@ export function authorizeTradeProposal(
   const proposal = parsedProposal.data;
   const policy = executionPolicySchema.parse(rawPolicy);
 
+  if (proposal.customerId !== policy.customerId) {
+    return reject(
+      "scope_mismatch",
+      "The proposal does not belong to the current customer.",
+    );
+  }
+
+  // Each exchange account stands alone: its capital never funds an entry on
+  // another account, and its positions never offset another's.
+  if (proposal.exchangeAccountId !== policy.exchangeAccountId) {
+    return reject(
+      "account_mismatch",
+      "The proposal targets another exchange account. Capital, positions and limits on one exchange account never fund or offset an entry on another.",
+    );
+  }
+
+  if (policy.accountAccess === "read_only") {
+    return reject(
+      "account_read_only",
+      "This exchange account is read only: the product monitors it but never trades on it.",
+    );
+  }
+
   if (
-    proposal.customerId !== policy.customerId ||
-    proposal.exchangeAccountId !== policy.exchangeAccountId ||
     proposal.strategyId !== policy.strategyId ||
     proposal.strategyVersion !== policy.strategyVersion
   ) {
     return reject(
       "scope_mismatch",
-      "The proposal does not belong to the current customer, account, strategy, and version.",
+      "The proposal does not belong to the current strategy and version.",
     );
   }
 
@@ -162,6 +202,14 @@ export function authorizeTradeProposal(
     return reject(
       "instrument_not_allowed",
       `${proposal.instrument} is outside the strategy's allowed instruments.`,
+    );
+  }
+
+  const { quote } = instrumentAssets(proposal.instrument);
+  if (quote !== policy.accountingCurrency) {
+    return reject(
+      "quote_currency_mismatch",
+      `${proposal.instrument} is quoted in ${quote}, but this exchange account's allocation and limits are in ${policy.accountingCurrency}.`,
     );
   }
 

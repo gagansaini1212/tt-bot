@@ -275,6 +275,8 @@ describe("planGridEntries", () => {
         {
           customerId: "10000000-0000-4000-8000-000000000010",
           exchangeAccountId: "10000000-0000-4000-8000-000000000011",
+          accountAccess: "trade",
+          accountingCurrency: "USDT",
           strategyId: "10000000-0000-4000-8000-000000000012",
           strategyVersion: 1,
           tradingMode: "simulation",

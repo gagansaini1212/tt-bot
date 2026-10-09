@@ -37,6 +37,7 @@ import {
 import { PostgresOrderIntents } from "./order-intents";
 import { PostgresRiskLimits } from "./risk-limits";
 import { StrategyRunner } from "./strategy-runner";
+import type { EntryCandidate } from "./strategy-store";
 import { PostgresTradeProposals } from "./trade-proposals";
 import { decisions } from "./routes/decisions";
 import { strategies as strategyRoutes } from "./routes/strategies";
@@ -1443,5 +1444,262 @@ describe("strategies", { skip: databaseTestsSkipped }, () => {
       new Date(),
     );
     assert.equal(created.result, "refused");
+  });
+
+  // ADR 0009: exchange accounts are isolated.
+
+  /** Another exchange account of `customerId`, which the worker may not trade on. */
+  async function addAccount(
+    customerId: string,
+    {
+      exchange = "binance-spot-testnet",
+      accountingCurrency = "USDT",
+      allowed = ["BTC-USDT", "ETH-USDT"],
+    } = {},
+  ): Promise<AccountScope> {
+    const scope = { customerId, exchangeAccountId: randomUUID() };
+    await withCustomerScope(
+      database.app,
+      customerId,
+      (tx) => tx`
+        insert into exchange_accounts
+          (id, customer_id, exchange, label, mode, accounting_currency, status,
+            allowed_instruments)
+        values (${scope.exchangeAccountId}, ${customerId}, ${exchange},
+          ${`Account ${scope.exchangeAccountId.slice(0, 8)}`}, 'simulation',
+          ${accountingCurrency}, 'connected', ${allowed})
+      `,
+    );
+    return scope;
+  }
+
+  /** A standing instruction with one entry, 0.001 at 59,900 (59.9 notional). */
+  const oneEntry = (now: Date, name: string, instrument = "BTC-USDT") =>
+    draft({
+      name,
+      allocation: "100",
+      ai: null,
+      rules: {
+        kind: "standing_price_instruction",
+        instrument,
+        marketKind: "spot",
+        direction: "long",
+        leverage: 1,
+        entries: [
+          {
+            quantity: "0.001",
+            entryPrice: "59900",
+            stopLossPrice: "55000",
+            takeProfitPrice: "62000",
+          },
+        ],
+        entryExpiresAt: new Date(now.getTime() + DAY).toISOString(),
+        holdingPeriodSeconds: 86_400,
+        lossLimits: { daily: "3", total: "10" },
+      },
+    });
+
+  /** That entry, as the runner asks the store to reserve it. */
+  const entryOf = (strategyId: string, now: Date): EntryCandidate => ({
+    strategyId,
+    key: "entry:0",
+    once: false,
+    intent: {
+      key: "entry:0",
+      instrument: "BTC-USDT",
+      marketKind: "spot",
+      direction: "long",
+      leverage: 1,
+      quantity: "0.001",
+      entryPrice: "59900",
+      stopLossPrice: "55000",
+      takeProfitPrice: "62000",
+      entryExpiresAt: new Date(now.getTime() + DAY).toISOString(),
+      holdingPeriodSeconds: 86_400,
+    },
+    rationale: "Standing entry 1",
+    sourceSnapshotId: randomUUID(),
+    proposalId: randomUUID(),
+    freeStopOrders: 5,
+  });
+
+  test("the same instrument on two exchange accounts is two positions, each owned by its own strategy and never netted", async () => {
+    const w = await world();
+    // On the worker's account, Standing holds BTC.
+    const { id: standing } = await holding(w);
+    const second = await addAccount(w.scope.customerId);
+    await w.runner.store.changePortfolioLimits(second, "50", 0);
+
+    // Another strategy on the same account waits for Standing's position.
+    const sameAccount = await w.create(oneEntry(w.now(), "Same account"));
+    const waits = await w.runner.store.reserve(
+      w.scope,
+      entryOf(sameAccount, w.now()),
+      w.now(),
+    );
+    assert.equal(waits.status, "refused");
+    assert.equal(waits.status === "refused" && waits.waits, true);
+
+    // On the second account, BTC is a separate position. Its strategy may
+    // hold 59.9 USDT of BTC; Standing's 59.9 on the first account does not
+    // count against it, as it would if positions were netted or summed.
+    const created = await w.runner.store.create(
+      second,
+      oneEntry(w.now(), "Elsewhere"),
+      w.now(),
+    );
+    assert.equal(created.result, "saved", created.message);
+    const elsewhere = created.result === "saved" ? created.strategy.id : "";
+    const reserved = await w.runner.store.reserve(
+      second,
+      entryOf(elsewhere, w.now()),
+      w.now(),
+    );
+    assert.equal(
+      reserved.status,
+      "saved",
+      reserved.status === "refused" ? reserved.reason : "",
+    );
+    // Its proposal, reservation and allocation are the second account's.
+    const [row] = await database.admin<
+      { proposal_account: string; allocation_account: string; amount: string }[]
+    >`
+      select p.exchange_account_id as proposal_account,
+        a.exchange_account_id as allocation_account, b.amount::text
+      from trade_proposals p
+      join budget_reservations b on b.proposal_id = p.id
+      join allocations a on a.id = b.allocation_id
+      where p.strategy_id = ${elsewhere}
+    `;
+    assert.equal(row.proposal_account, second.exchangeAccountId);
+    assert.equal(row.allocation_account, second.exchangeAccountId);
+    assert.equal(new Decimal(row.amount).toFixed(), "59.9");
+
+    // The kill switch on the second account leaves the first alone.
+    const killed = await w.runner.store.killSwitch(second);
+    assert.equal(killed.pausedStrategies, 1);
+    const first = await w.strategy(standing);
+    assert.equal(first.status, "simulation");
+    assert.equal(first.exitRequest, null);
+    assert.equal((await w.strategy(sameAccount)).status, "simulation");
+  });
+
+  test("a read-only exchange account is never the target of a strategy or its entries", async () => {
+    const w = await world();
+    const htx = await addAccount(w.scope.customerId, { exchange: "htx" });
+    await w.runner.store.changePortfolioLimits(htx, "50", 0);
+    const refused = await w.runner.store.create(
+      htx,
+      oneEntry(w.now(), "On HTX"),
+      w.now(),
+    );
+    assert.equal(refused.result, "refused");
+    assert.match(refused.message, /read only/);
+
+    // A strategy whose account becomes read only opens nothing, and cannot
+    // take a new version.
+    const later = await addAccount(w.scope.customerId);
+    await w.runner.store.changePortfolioLimits(later, "50", 0);
+    const created = await w.runner.store.create(
+      later,
+      oneEntry(w.now(), "Was tradable"),
+      w.now(),
+    );
+    assert.equal(created.result, "saved");
+    const id = created.result === "saved" ? created.strategy.id : "";
+    await database.admin`
+      update exchange_accounts set exchange = 'htx'
+      where id = ${later.exchangeAccountId}
+    `;
+    const entry = await w.runner.store.reserve(
+      later,
+      entryOf(id, w.now()),
+      w.now(),
+    );
+    assert.equal(entry.status, "refused");
+    assert.match(entry.status === "refused" ? entry.reason : "", /read only/);
+    const version = await w.runner.store.newVersion(
+      later,
+      id,
+      1,
+      oneEntry(w.now(), "Renamed"),
+    );
+    assert.equal(version.result, "refused");
+    assert.match(version.message, /read only/);
+    assert.equal((await entries(id)).length, 0);
+  });
+
+  test("a strategy keeps its exchange account for life", async () => {
+    const w = await world();
+    const id = await w.create(oneEntry(w.now(), "Home"));
+    const second = await addAccount(w.scope.customerId);
+    await w.runner.store.changePortfolioLimits(second, "50", 0);
+    // Neither a new version nor an entry can reach it through another account.
+    const moved = await w.runner.store.newVersion(
+      second,
+      id,
+      1,
+      oneEntry(w.now(), "Moved"),
+    );
+    assert.equal(moved.result, "refused");
+    assert.equal(moved.message, "There is no such strategy.");
+    const entry = await w.runner.store.reserve(
+      second,
+      entryOf(id, w.now()),
+      w.now(),
+    );
+    assert.equal(entry.status, "refused");
+    const [row] = await database.admin<
+      { exchange_account_id: string; current_version: number }[]
+    >`
+      select exchange_account_id, current_version from strategies
+      where id = ${id}
+    `;
+    assert.deepEqual(row, {
+      exchange_account_id: w.scope.exchangeAccountId,
+      current_version: 1,
+    });
+  });
+
+  test("a strategy's allocation is in its exchange account's accounting currency", async () => {
+    const w = await world();
+    const euro = await addAccount(w.scope.customerId, {
+      accountingCurrency: "EUR",
+      allowed: ["BTC-EUR", "BTC-USDT"],
+    });
+    await w.runner.store.changePortfolioLimits(euro, "50", 0);
+    // A USDT market would need a conversion, so it is refused.
+    const usdt = await w.runner.store.create(
+      euro,
+      oneEntry(w.now(), "USDT on EUR"),
+      w.now(),
+    );
+    assert.equal(usdt.result, "refused");
+    assert.match(usdt.message, /quoted in USDT/);
+    const created = await w.runner.store.create(
+      euro,
+      oneEntry(w.now(), "EUR", "BTC-EUR"),
+      w.now(),
+    );
+    assert.equal(created.result, "saved", created.message);
+    const id = await w.create(oneEntry(w.now(), "USDT"));
+    const currencies = await database.admin<
+      { strategy_id: string; currency: string }[]
+    >`
+      select strategy_id, currency from allocations
+      where strategy_id in ${database.admin([
+        created.result === "saved" ? created.strategy.id : "",
+        id,
+      ])}
+    `;
+    assert.deepEqual(
+      Object.fromEntries(
+        currencies.map((row) => [row.strategy_id, row.currency]),
+      ),
+      {
+        [created.result === "saved" ? created.strategy.id : ""]: "EUR",
+        [id]: "USDT",
+      },
+    );
   });
 });

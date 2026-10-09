@@ -8,6 +8,7 @@ import {
   entryIntentProposal,
   floorToStep,
   gridRangePosition,
+  instrumentAssets,
   lossLimitStatus,
   planDcaBuy,
   planGridEntries,
@@ -269,6 +270,9 @@ export function simulate(input: BacktestInput): SimulationResult {
       );
     return {
       ...SCOPE,
+      // The replayed account trades and accounts in the market's quote.
+      accountAccess: "trade",
+      accountingCurrency: instrumentAssets(instrument).quote,
       tradingMode: "simulation",
       strategyStatus: "simulation",
       liveTradingEnabled: false,
