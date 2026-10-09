@@ -14,8 +14,9 @@ import {
 import { closeOrderId, protectedLegIds } from "./order-rules.js";
 
 test("every venue is known by its ID, and only known IDs are venues", () => {
-  assert.deepEqual(VENUE_IDS, ["binance-spot-testnet"]);
+  assert.deepEqual(VENUE_IDS, ["binance-spot-testnet", "htx"]);
   assert.equal(venueFor("binance-spot-testnet").name, "Binance Spot Testnet");
+  assert.equal(venueFor("htx").name, "HTX");
   for (const id of ["binance", "htx-live", "", "BINANCE-SPOT-TESTNET"])
     assert.equal(venueIdSchema.safeParse(id).success, false, id);
 });
@@ -65,6 +66,8 @@ test("capabilities are explicit, and only a testnet that attaches exits places o
   assert.equal(binance.capabilities.attachedExits, "opoco");
   assert.equal(binance.capabilities.stopOrders, "exits_only");
   assert.equal(canPlaceOrders(binance), true);
+  // HTX is read only in M4: its funds are real, and its adapter only reads.
+  assert.equal(canPlaceOrders(VENUES.htx), false);
   // Live trading stays impossible: no venue with real funds trades.
   for (const venue of Object.values(VENUES) as Venue[])
     assert.ok(

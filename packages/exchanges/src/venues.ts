@@ -13,7 +13,7 @@ import {
  * `exchange` column holds one of these. Add a venue here with its
  * descriptor in VENUES below.
  */
-export const VENUE_IDS = ["binance-spot-testnet"] as const;
+export const VENUE_IDS = ["binance-spot-testnet", "htx"] as const;
 export const venueIdSchema = z.enum(VENUE_IDS);
 export type VenueId = z.infer<typeof venueIdSchema>;
 
@@ -168,6 +168,40 @@ export const binanceVenueSymbols: VenueSymbolCodec = {
   assetCode: (venueAsset) => venueAsset,
 };
 
+// HTX documents client order IDs as letters, digits, `_` and `-`, at most 64
+// characters, in its Spot API's trading introduction.
+const HTX_CLIENT_ORDER_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * HTX would take the application's IDs unchanged, should it ever trade. While
+ * it is read only, this only tells the application's orders from others.
+ */
+export const htxClientOrderIds: ClientOrderIdCodec = {
+  toVenue(orderId) {
+    const id = appOrderIdSchema.parse(orderId);
+    if (!HTX_CLIENT_ORDER_ID.test(id))
+      throw new Error("HTX cannot carry this client order ID.");
+    return id;
+  },
+  fromVenue(venueClientOrderId) {
+    return appOrderIdSchema.safeParse(venueClientOrderId).success
+      ? venueClientOrderId
+      : undefined;
+  },
+};
+
+/**
+ * HTX joins the assets in lowercase, BTC-USDT → btcusdt, and names assets in
+ * lowercase, btc → BTC.
+ */
+export const htxVenueSymbols: VenueSymbolCodec = {
+  toVenueSymbol(instrument) {
+    const { base, quote } = instrumentAssets(instrument);
+    return `${base}${quote}`.toLowerCase();
+  },
+  assetCode: (venueAsset) => venueAsset.toUpperCase(),
+};
+
 export const VENUES: { readonly [Id in VenueId]: Venue & { id: Id } } = {
   "binance-spot-testnet": {
     id: "binance-spot-testnet",
@@ -187,6 +221,26 @@ export const VENUES: { readonly [Id in VenueId]: Venue & { id: Id } } = {
     credentials: { keyTypes: ["hmac", "ed25519", "rsa"], passphrase: false },
     symbols: binanceVenueSymbols,
     clientOrderIds: binanceClientOrderIds,
+  },
+  // HTX shut its spot testnet down, so every HTX account holds real funds,
+  // and the adapter only reads it (ADR 0009). See docs/venues/htx.md.
+  htx: {
+    id: "htx",
+    name: "HTX",
+    capabilities: {
+      marketKinds: ["spot"],
+      access: "read_only",
+      funds: "real",
+      orderTypes: [],
+      timeInForce: [],
+      orderLists: [],
+      attachedExits: null,
+      stopOrders: "none",
+      testOrders: false,
+      lookupByClientOrderId: false,
+    },
+    symbols: htxVenueSymbols,
+    clientOrderIds: htxClientOrderIds,
   },
 };
 

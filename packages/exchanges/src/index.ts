@@ -4,6 +4,8 @@ export * from "./binance-spot-testnet";
 export * from "./contract";
 export * from "./exchange-accounts";
 export * from "./execution-state";
+export * from "./htx-signature";
+export * from "./htx-spot";
 export * from "./manual-order";
 export * from "./market-catalogue";
 export * from "./nonce-queue";
