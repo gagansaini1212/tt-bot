@@ -744,6 +744,40 @@ export class StrategyStore {
   }
 
   /**
+   * Pauses a strategy and closes its open entries because its trailing stop loss triggered.
+   */
+  async trailingStopTriggered(
+    scope: AccountScope,
+    strategyId: string,
+    detail: { peakPrice: string; triggerPrice: string; currentPrice: string },
+  ) {
+    return this.#database.begin(async (tx) => {
+      const row = await latestStrategy(tx, scope, strategyId, {
+        lock: true,
+      });
+      const current = row && toRecord(row);
+      if (!current || current.status === "retired") return false;
+      await stopStrategy(tx, scope, strategyId, {
+        pauseReason: isRunning(current.status) ? "trailing_stop" : undefined,
+        exitRequest: "trailing_stop",
+      });
+      await audit(tx, scope, strategyId, "strategy.trailing_stop_triggered", {
+        actor: "execution_worker",
+        subjectType: "strategy",
+        payload: detail,
+      });
+      await raiseNotification(tx, scope.customerId, {
+        kind: "trailing_stop_triggered",
+        severity: "warning",
+        title: `${current.name} trailing stop loss triggered`,
+        body: `${current.name} reached a peak price of ${detail.peakPrice} and pulled back to ${detail.currentPrice}, triggering its trailing stop loss at ${detail.triggerPrice}. The worker is cancelling pending entries and selling open positions to lock in gains.`,
+        data: { strategyId, ...detail },
+      });
+      return true;
+    });
+  }
+
+  /**
    * Pauses every running strategy on the account: the portfolio reached its
    * daily drawdown limit. Open entries keep their exits.
    */
@@ -1246,7 +1280,7 @@ export class StrategyStore {
 }
 
 // Exit requests that end a strategy's rules, which a new version lifts.
-const ENDED_EXITS = ["range_stop", "above_range"];
+const ENDED_EXITS = ["range_stop", "above_range", "trailing_stop"];
 
 /** Why a strategy's rules open no more entries, for the customer. */
 export const ENDED_LABELS: Record<string, string> = {
@@ -1255,6 +1289,7 @@ export const ENDED_LABELS: Record<string, string> = {
   all_entries_filled: "every entry filled",
   range_stop: "the market reached the range stop",
   above_range: "the market rose above the range",
+  trailing_stop: "the trailing stop loss was triggered",
 };
 
 /**

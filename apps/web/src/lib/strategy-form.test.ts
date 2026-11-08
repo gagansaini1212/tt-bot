@@ -195,6 +195,70 @@ describe("the strategy form", () => {
     assert.equal(backtestFormFor(ai).choice, "recorded_proposals");
   });
 
+  test("configures trailing stop loss and displays effects", () => {
+    const dcaForm = {
+      ...newStrategyForm("dca", now, btc),
+      name: "Trailing DCA",
+      dca: {
+        ...newStrategyForm("dca", now, btc).dca,
+        trailingStopPercent: "2.5",
+      },
+    };
+    const draft = ready(dcaForm);
+    assert.equal(draft.rules.kind === "dca" && draft.rules.trailingStopPercent, "2.5");
+    const { effects } = strategyEffects(draft, [btc], now);
+    const trailingEffect = effects.find((e) => e.label === "Trailing stop loss");
+    assert.ok(trailingEffect);
+    assert.equal(trailingEffect?.value, "2.5% pullback from peak");
+
+    // Grid trailing stop
+    const gridForm = {
+      ...newStrategyForm("grid", now, btc),
+      name: "Trailing Grid",
+      grid: {
+        ...newStrategyForm("grid", now, btc).grid,
+        trailingStopPercent: "3",
+      },
+    };
+    const gridDraft = ready(gridForm);
+    assert.equal(gridDraft.rules.kind === "grid" && gridDraft.rules.trailingStopPercent, "3");
+    const gridEffects = strategyEffects(gridDraft, [btc], now).effects;
+    assert.equal(
+      gridEffects.find((e) => e.label === "Trailing stop loss")?.value,
+      "3% pullback from peak",
+    );
+
+    // Standing instruction trailing stop
+    const standingForm: StrategyForm = {
+      ...newStrategyForm("standing_price_instruction", now, btc),
+      name: "Trailing Standing",
+      standing: {
+        entryExpiresAt: "2026-10-15T12:00",
+        entries: [
+          {
+            quantity: "0.001",
+            entryPrice: "58000",
+            stopLossPrice: "55000",
+            takeProfitPrice: "65000",
+            trailingStopPercent: "4",
+          },
+        ],
+      },
+      allocation: "200",
+    };
+    const standingDraft = ready(standingForm);
+    assert.equal(
+      standingDraft.rules.kind === "standing_price_instruction" &&
+        standingDraft.rules.entries[0]?.trailingStopPercent,
+      "4",
+    );
+    const standingRes = strategyEffects(standingDraft, [btc], now);
+    assert.ok(
+      standingRes.effects.find((e) => e.label === "Trailing stop loss"),
+    );
+    assert.match(standingRes.entries[0]?.stopLoss ?? "", /4% trail/);
+  });
+
   test("says how long a holding period is", () => {
     assert.equal(formatDuration(60), "1 minute");
     assert.equal(formatDuration(5400), "90 minutes");

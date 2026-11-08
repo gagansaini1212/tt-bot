@@ -79,6 +79,11 @@ const standingEntrySchema = z.strictObject({
   entryPrice: positiveDecimalString,
   stopLossPrice: positiveDecimalString,
   takeProfitPrice: positiveDecimalString,
+  trailingStopPercent: decimalBetween(
+    RULE_BOUNDS.minProtectionPercent,
+    RULE_BOUNDS.maxStopLossPercent,
+    "%",
+  ).optional(),
 });
 
 /**
@@ -210,6 +215,11 @@ export const dcaRulesSchema = z.strictObject({
     RULE_BOUNDS.maxTakeProfitPercent,
     "%",
   ),
+  trailingStopPercent: decimalBetween(
+    RULE_BOUNDS.minProtectionPercent,
+    RULE_BOUNDS.maxStopLossPercent,
+    "%",
+  ).optional(),
   // A buy due when the price is at least dropPercent below the previous buy's
   // entry price spends amountPerBuy times multiplier. It never compounds.
   dip: z
@@ -251,6 +261,11 @@ export const gridRulesSchema = z
     // Quote currency spent by a buy at any level.
     amountPerLevel: positiveDecimalString,
     rangeStopPrice: positiveDecimalString,
+    trailingStopPercent: decimalBetween(
+      RULE_BOUNDS.minProtectionPercent,
+      RULE_BOUNDS.maxStopLossPercent,
+      "%",
+    ).optional(),
     // The grid opens no entries after this.
     entryExpiresAt: z.iso.datetime(),
     holdingPeriodSeconds,

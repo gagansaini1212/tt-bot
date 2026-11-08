@@ -151,6 +151,7 @@ export class StrategyRunner {
   readonly #log: (message: string) => void;
   readonly #exclusive: AccountQueues;
   readonly #dayStartPrices = new Map<string, Promise<string>>();
+  readonly #peakPrices = new Map<string, Decimal>();
   #lastLogged?: string;
 
   constructor(options: {
@@ -368,6 +369,10 @@ export class StrategyRunner {
       )
     )
       this.#onChange();
+    for (const entry of entries) {
+      if (!isUnclosed(entry))
+        this.#peakPrices.delete(`${strategy.id}:${entry.proposalId}`);
+    }
     if (!strategy.rulesEndedAt) return undefined;
     if (await this.store.complete(scope, strategy.id)) {
       await this.store.settleReservations(scope, strategy.id);
@@ -429,6 +434,13 @@ export class StrategyRunner {
     const { now } = context;
     const unclosed = entries.filter(isUnclosed);
     const { rules } = strategy;
+    const trailingTriggered = await this.#checkTrailingStop(
+      scope,
+      context,
+      strategy,
+      unclosed,
+    );
+    if (trailingTriggered) return trailingTriggered;
     if (rules.kind === "ai_managed")
       return this.#analyse(scope, context, strategy, rules, unclosed, measured);
     const instrument = rules.instrument as Instrument;
@@ -528,6 +540,61 @@ export class StrategyRunner {
           .join(" ");
       }
     }
+  }
+
+  /**
+   * Checks whether any open entry of a strategy reached a peak and then pulled
+   * back by its configured trailing stop percentage, locking in profits.
+   */
+  async #checkTrailingStop(
+    scope: AccountScope,
+    context: PassContext,
+    strategy: StrategyRecord,
+    unclosed: StrategyEntry[],
+  ): Promise<string | undefined> {
+    const { rules } = strategy;
+    const trailingStopPercent =
+      "trailingStopPercent" in rules &&
+      typeof rules.trailingStopPercent === "string"
+        ? rules.trailingStopPercent
+        : undefined;
+
+    if (!trailingStopPercent) return undefined;
+    const trailingRatio = new Decimal(trailingStopPercent).dividedBy(100);
+
+    for (const entry of unclosed) {
+      if (
+        entry.orderIntentId &&
+        entry.intentStatus === "acknowledged" &&
+        new Decimal(entry.filled).gt(0) &&
+        entry.state !== "closed" &&
+        entry.exitReason === null
+      ) {
+        const lastPrice = await context.reads.lastPrice(entry.instrument);
+        if (!lastPrice) continue;
+        const current = new Decimal(lastPrice);
+        const entryPrice = new Decimal(entry.entryPrice);
+        const key = `${strategy.id}:${entry.proposalId}`;
+        const prevPeak = this.#peakPrices.get(key);
+        const peak = prevPeak
+          ? Decimal.max(prevPeak, current)
+          : Decimal.max(entryPrice, current);
+        this.#peakPrices.set(key, peak);
+
+        const triggerPrice = peak.times(new Decimal(1).minus(trailingRatio));
+        if (current.lte(triggerPrice) && peak.gt(entryPrice)) {
+          this.#peakPrices.delete(key);
+          await this.store.trailingStopTriggered(scope, strategy.id, {
+            peakPrice: peak.toFixed(),
+            triggerPrice: triggerPrice.toFixed(),
+            currentPrice: current.toFixed(),
+          });
+          this.#onChange();
+          return `Trailing stop loss triggered: price pulled back from peak of ${peak.toFixed()} to ${current.toFixed()}. Closing positions.`;
+        }
+      }
+    }
+    return undefined;
   }
 
   /**

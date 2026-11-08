@@ -442,7 +442,7 @@ function GridFields({
 }) {
   const grid = form.grid;
   return (
-    <fieldset className="grid grid-cols-2 gap-4 md:grid-cols-5">
+    <fieldset className="grid grid-cols-2 gap-4 md:grid-cols-6">
       <legend className="mb-2 text-sm font-medium">Grid</legend>
       <Field
         inputMode="decimal"
@@ -476,6 +476,13 @@ function GridFields({
         onChange={(rangeStopPrice) => onChange({ rangeStopPrice })}
         value={grid.rangeStopPrice}
       />
+      <Field
+        hint="Optional pullback %"
+        inputMode="decimal"
+        label="Trailing stop (%)"
+        onChange={(trailingStopPercent) => onChange({ trailingStopPercent })}
+        value={grid.trailingStopPercent ?? ""}
+      />
     </fieldset>
   );
 }
@@ -497,7 +504,7 @@ function DcaFields({
         options={DCA_INTERVALS}
         value={dca.interval}
       />
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-7">
         <Field
           inputMode="decimal"
           label="Per buy (USDT)"
@@ -522,6 +529,13 @@ function DcaFields({
           label="Take profit (%)"
           onChange={(takeProfitPercent) => onChange({ takeProfitPercent })}
           value={dca.takeProfitPercent}
+        />
+        <Field
+          hint="Optional pullback %"
+          inputMode="decimal"
+          label="Trailing stop (%)"
+          onChange={(trailingStopPercent) => onChange({ trailingStopPercent })}
+          value={dca.trailingStopPercent ?? ""}
         />
         <Field
           hint="Empty for no dip rule"
@@ -562,7 +576,7 @@ function StandingFields({
       </legend>
       {entries.map((entry, index) => (
         <div
-          className="grid grid-cols-2 items-end gap-4 md:grid-cols-[repeat(4,minmax(0,1fr))_auto]"
+          className="grid grid-cols-2 items-end gap-4 md:grid-cols-[repeat(5,minmax(0,1fr))_auto]"
           key={index}
         >
           <Field
@@ -588,6 +602,15 @@ function StandingFields({
             label="Take profit"
             onChange={(takeProfitPrice) => set(index, { takeProfitPrice })}
             value={entry.takeProfitPrice}
+          />
+          <Field
+            hint="Optional %"
+            inputMode="decimal"
+            label="Trailing stop (%)"
+            onChange={(trailingStopPercent) =>
+              set(index, { trailingStopPercent })
+            }
+            value={entry.trailingStopPercent ?? ""}
           />
           <Button
             aria-label={`Remove entry ${index + 1}`}

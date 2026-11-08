@@ -47,6 +47,7 @@ export type StrategyForm = {
     levelCount: string;
     amountPerLevel: string;
     rangeStopPrice: string;
+    trailingStopPercent: string;
     // "YYYY-MM-DDTHH:mm", UTC.
     entryExpiresAt: string;
   };
@@ -56,6 +57,7 @@ export type StrategyForm = {
     maxBuys: string;
     stopLossPercent: string;
     takeProfitPercent: string;
+    trailingStopPercent: string;
     // Both empty turns the dip multiplier off.
     dipDropPercent: string;
     dipMultiplier: string;
@@ -113,6 +115,7 @@ export function newStrategyForm(
       levelCount: "6",
       amountPerLevel: "100",
       rangeStopPrice: lower && step ? lower.minus(step).toFixed() : "",
+      trailingStopPercent: "",
       entryExpiresAt: utcInput(now + 7 * 24 * HOUR_MS),
     },
     dca: {
@@ -121,6 +124,7 @@ export function newStrategyForm(
       maxBuys: "6",
       stopLossPercent: "5",
       takeProfitPercent: "5",
+      trailingStopPercent: "",
       dipDropPercent: "3",
       dipMultiplier: "1.5",
       startsAt: utcInput(Math.ceil(now / 60_000) * 60_000),
@@ -132,6 +136,7 @@ export function newStrategyForm(
           entryPrice: "",
           stopLossPrice: "",
           takeProfitPrice: "",
+          trailingStopPercent: "",
         },
       ],
       entryExpiresAt: utcInput(now + 24 * HOUR_MS),
@@ -172,6 +177,7 @@ export function strategyFormFrom(strategy: StrategyView): StrategyForm {
           levelCount: String(rules.levelCount),
           amountPerLevel: rules.amountPerLevel,
           rangeStopPrice: rules.rangeStopPrice,
+          trailingStopPercent: rules.trailingStopPercent ?? "",
           entryExpiresAt: time(rules.entryExpiresAt),
         },
       };
@@ -185,6 +191,7 @@ export function strategyFormFrom(strategy: StrategyView): StrategyForm {
           maxBuys: String(rules.maxBuys),
           stopLossPercent: rules.stopLossPercent,
           takeProfitPercent: rules.takeProfitPercent,
+          trailingStopPercent: rules.trailingStopPercent ?? "",
           dipDropPercent: rules.dip?.dropPercent ?? "",
           dipMultiplier: rules.dip?.multiplier ?? "",
           startsAt: time(rules.startsAt),
@@ -195,7 +202,10 @@ export function strategyFormFrom(strategy: StrategyView): StrategyForm {
         ...form,
         instrument: rules.instrument,
         standing: {
-          entries: rules.entries.map((entry) => ({ ...entry })),
+          entries: rules.entries.map((entry) => ({
+            ...entry,
+            trailingStopPercent: entry.trailingStopPercent ?? "",
+          })),
           entryExpiresAt: time(rules.entryExpiresAt),
         },
       };
@@ -238,7 +248,8 @@ function formDraft(form: StrategyForm): Record<string, unknown> {
   };
   let rules: Record<string, unknown>;
   switch (form.kind) {
-    case "grid":
+    case "grid": {
+      const trailing = text(form.grid.trailingStopPercent);
       rules = {
         kind: "grid",
         instrument: form.instrument,
@@ -248,12 +259,15 @@ function formDraft(form: StrategyForm): Record<string, unknown> {
         levelCount: integer(form.grid.levelCount),
         amountPerLevel: text(form.grid.amountPerLevel),
         rangeStopPrice: text(form.grid.rangeStopPrice),
+        ...(trailing ? { trailingStopPercent: trailing } : {}),
         entryExpiresAt: fromUtcInput(form.grid.entryExpiresAt),
       };
       break;
+    }
     case "dca": {
       const drop = text(form.dca.dipDropPercent);
       const multiplier = text(form.dca.dipMultiplier);
+      const trailing = text(form.dca.trailingStopPercent);
       rules = {
         kind: "dca",
         instrument: form.instrument,
@@ -264,6 +278,7 @@ function formDraft(form: StrategyForm): Record<string, unknown> {
         maxBuys: integer(form.dca.maxBuys),
         stopLossPercent: text(form.dca.stopLossPercent),
         takeProfitPercent: text(form.dca.takeProfitPercent),
+        ...(trailing ? { trailingStopPercent: trailing } : {}),
         ...(drop || multiplier
           ? { dip: { dropPercent: drop, multiplier } }
           : {}),
@@ -282,6 +297,9 @@ function formDraft(form: StrategyForm): Record<string, unknown> {
           entryPrice: text(entry.entryPrice),
           stopLossPrice: text(entry.stopLossPrice),
           takeProfitPrice: text(entry.takeProfitPrice),
+          ...(text(entry.trailingStopPercent ?? "")
+            ? { trailingStopPercent: text(entry.trailingStopPercent ?? "") }
+            : {}),
         })),
         entryExpiresAt: fromUtcInput(form.standing.entryExpiresAt),
       };
@@ -325,6 +343,7 @@ const LABELS: Record<string, string> = {
   "rules.levelCount": "Levels",
   "rules.amountPerLevel": "Amount per level",
   "rules.rangeStopPrice": "Range stop",
+  "rules.trailingStopPercent": "Trailing stop loss",
   "rules.entryExpiresAt": "Entries expire",
   "rules.amountPerBuy": "Amount per buy",
   "rules.maxBuys": "Number of buys",
@@ -344,6 +363,7 @@ const ENTRY_FIELDS: Record<string, string> = {
   entryPrice: "price",
   stopLossPrice: "stop loss",
   takeProfitPrice: "take profit",
+  trailingStopPercent: "trailing stop loss",
 };
 
 function label(path: PropertyKey[]) {
@@ -525,6 +545,14 @@ export function strategyEffects(
               },
         );
       }
+      if (rules.trailingStopPercent) {
+        effects.push({
+          label: "Trailing stop loss",
+          value: `${rules.trailingStopPercent}% pullback from peak`,
+          detail:
+            "Once an entry is in profit, trails the highest market price reached to protect gains against pullbacks.",
+        });
+      }
       break;
     }
     case "dca": {
@@ -545,6 +573,14 @@ export function strategyEffects(
         value: `Stop loss ${rules.stopLossPercent}% below, take profit ${rules.takeProfitPercent}% above each buy`,
         detail: "Rounded up to the tick, so a stop never risks more.",
       });
+      if (rules.trailingStopPercent) {
+        effects.push({
+          label: "Trailing stop loss",
+          value: `${rules.trailingStopPercent}% pullback from peak`,
+          detail:
+            "Once an entry is in profit, trails the highest market price reached to protect gains against pullbacks.",
+        });
+      }
       const ask = market?.bestAsk;
       if (ask && steps) {
         const plan = planDcaBuy(rules, {
@@ -580,21 +616,35 @@ export function strategyEffects(
         );
       break;
     }
-    case "standing_price_instruction":
+    case "standing_price_instruction": {
       effects.push({
         label: "Entries",
         value: `${rules.entries.length} limit buy${rules.entries.length === 1 ? "" : "s"} at your prices`,
         detail: `Unfilled entries expire together at ${formatTime(rules.entryExpiresAt)}. An entry that filled anything is never placed again; one a pause cancelled before it filled is placed again on resume. The AI never changes them.`,
       });
+      const hasTrailing = rules.entries.some(
+        (entry) => entry.trailingStopPercent,
+      );
+      if (hasTrailing) {
+        effects.push({
+          label: "Trailing stop loss",
+          value: "Active on configured entries",
+          detail:
+            "Once an entry is in profit, trails the highest market price reached to protect gains against pullbacks.",
+        });
+      }
       rules.entries.forEach((_, index) => {
         const entry = standingEntryIntent(rules, index);
+        const originalEntry = rules.entries[index];
         entries.push({
           label: `Entry ${index + 1}`,
           quantity: entry.quantity,
           price: entry.entryPrice,
           cost: new Decimal(entry.quantity).times(entry.entryPrice).toFixed(),
           takeProfit: entry.takeProfitPrice,
-          stopLoss: entry.stopLossPrice,
+          stopLoss: originalEntry?.trailingStopPercent
+            ? `${entry.stopLossPrice} (${originalEntry.trailingStopPercent}% trail)`
+            : entry.stopLossPrice,
           now: index < limit,
           note:
             index < limit
@@ -603,6 +653,7 @@ export function strategyEffects(
         });
       });
       break;
+    }
     case "ai_managed":
       effects.push(
         {
@@ -684,6 +735,7 @@ export function backtestFormFor(draft: StrategyDraft): BacktestForm {
           levelCount: String(rules.levelCount),
           amountPerLevel: rules.amountPerLevel,
           rangeStopPrice: rules.rangeStopPrice,
+          trailingStopPercent: rules.trailingStopPercent ?? "",
         },
       };
     case "dca":
@@ -697,6 +749,7 @@ export function backtestFormFor(draft: StrategyDraft): BacktestForm {
           maxBuys: String(rules.maxBuys),
           stopLossPercent: rules.stopLossPercent,
           takeProfitPercent: rules.takeProfitPercent,
+          trailingStopPercent: rules.trailingStopPercent ?? "",
           dipDropPercent: rules.dip?.dropPercent ?? "",
           dipMultiplier: rules.dip?.multiplier ?? "",
         },
@@ -706,7 +759,10 @@ export function backtestFormFor(draft: StrategyDraft): BacktestForm {
         ...form,
         choice: "standing_price_instruction",
         instrument: rules.instrument,
-        standing: rules.entries.map((entry) => ({ ...entry })),
+        standing: rules.entries.map((entry) => ({
+          ...entry,
+          trailingStopPercent: entry.trailingStopPercent ?? "",
+        })),
       };
     case "ai_managed":
       return { ...form, choice: "recorded_proposals" };

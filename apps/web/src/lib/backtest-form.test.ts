@@ -29,8 +29,14 @@ describe("the backtest form", () => {
     });
   });
 
-  test("builds grid rules whose entries expire with the period", () => {
-    const built = buildBacktestRequest(grid, period);
+  test("builds grid rules whose entries expire with the period, including trailing stop", () => {
+    const built = buildBacktestRequest(
+      {
+        ...grid,
+        grid: { ...grid.grid, trailingStopPercent: "2" },
+      },
+      period,
+    );
     assert.equal(built.status, "ready");
     assert.deepEqual(built.status === "ready" && built.rules, {
       kind: "grid",
@@ -41,6 +47,7 @@ describe("the backtest form", () => {
       levelCount: 6,
       amountPerLevel: "100",
       rangeStopPrice: "76000",
+      trailingStopPercent: "2",
       entryExpiresAt: "2026-10-01T00:00:00.000Z",
       holdingPeriodSeconds: 168 * 3600,
       lossLimits: { daily: "50", total: "150" },

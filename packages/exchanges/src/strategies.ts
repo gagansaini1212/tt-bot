@@ -322,4 +322,5 @@ export const STOP_REASON_LABELS: Record<string, string> = {
   protection_failed: "an entry lost its stop loss",
   range_stop: "the market reached the range stop",
   above_range: "the market rose above the range",
+  trailing_stop: "the trailing stop loss was triggered",
 };

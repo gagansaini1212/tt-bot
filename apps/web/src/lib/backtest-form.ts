@@ -45,6 +45,7 @@ export type StandingEntryFields = {
   entryPrice: string;
   stopLossPrice: string;
   takeProfitPrice: string;
+  trailingStopPercent?: string;
 };
 
 /** What the form holds: text as typed, turned into rules on submit. */
@@ -63,6 +64,7 @@ export type BacktestForm = {
     levelCount: string;
     amountPerLevel: string;
     rangeStopPrice: string;
+    trailingStopPercent?: string;
   };
   dca: {
     amountPerBuy: string;
@@ -70,6 +72,7 @@ export type BacktestForm = {
     maxBuys: string;
     stopLossPercent: string;
     takeProfitPercent: string;
+    trailingStopPercent?: string;
     // Both empty turns the dip multiplier off.
     dipDropPercent: string;
     dipMultiplier: string;
@@ -86,6 +89,7 @@ export const EMPTY_STANDING_ENTRY: StandingEntryFields = {
   entryPrice: "",
   stopLossPrice: "",
   takeProfitPrice: "",
+  trailingStopPercent: "",
 };
 
 /** Starting values. Prices come from the chosen period, once it loads. */
@@ -103,6 +107,7 @@ export const DEFAULT_FORM: BacktestForm = {
     levelCount: "6",
     amountPerLevel: "100",
     rangeStopPrice: "",
+    trailingStopPercent: "",
   },
   dca: {
     amountPerBuy: "25",
@@ -110,6 +115,7 @@ export const DEFAULT_FORM: BacktestForm = {
     maxBuys: "30",
     stopLossPercent: "5",
     takeProfitPercent: "5",
+    trailingStopPercent: "",
     dipDropPercent: "3",
     dipMultiplier: "1.25",
   },
@@ -150,6 +156,7 @@ const LABELS: Record<string, string> = {
   "rules.maxBuys": "Number of buys",
   "rules.stopLossPercent": "Stop loss",
   "rules.takeProfitPercent": "Take profit",
+  "rules.trailingStopPercent": "Trailing stop loss",
   "rules.dip.dropPercent": "Dip drop",
   "rules.dip.multiplier": "Dip multiplier",
   "assumptions.makerFeePercent": "Maker fee",
@@ -162,6 +169,7 @@ const ENTRY_FIELDS: Record<string, string> = {
   entryPrice: "price",
   stopLossPrice: "stop loss",
   takeProfitPrice: "take profit",
+  trailingStopPercent: "trailing stop loss",
 };
 
 function label(path: PropertyKey[]) {
@@ -199,7 +207,8 @@ function formRules(
   const integer = (value: string) =>
     /^\d+$/.test(text(value)) ? Number(text(value)) : NaN;
   switch (form.choice) {
-    case "grid":
+    case "grid": {
+      const trailing = text(form.grid.trailingStopPercent ?? "");
       return {
         kind: "grid",
         ...common,
@@ -208,11 +217,14 @@ function formRules(
         levelCount: integer(form.grid.levelCount),
         amountPerLevel: text(form.grid.amountPerLevel),
         rangeStopPrice: text(form.grid.rangeStopPrice),
+        ...(trailing ? { trailingStopPercent: trailing } : {}),
         entryExpiresAt: end,
       };
+    }
     case "dca": {
       const drop = text(form.dca.dipDropPercent);
       const multiplier = text(form.dca.dipMultiplier);
+      const trailing = text(form.dca.trailingStopPercent ?? "");
       return {
         kind: "dca",
         ...common,
@@ -222,6 +234,7 @@ function formRules(
         maxBuys: integer(form.dca.maxBuys),
         stopLossPercent: text(form.dca.stopLossPercent),
         takeProfitPercent: text(form.dca.takeProfitPercent),
+        ...(trailing ? { trailingStopPercent: trailing } : {}),
         ...(drop || multiplier
           ? { dip: { dropPercent: drop, multiplier } }
           : {}),
@@ -238,6 +251,9 @@ function formRules(
           entryPrice: text(entry.entryPrice),
           stopLossPrice: text(entry.stopLossPrice),
           takeProfitPrice: text(entry.takeProfitPrice),
+          ...(text(entry.trailingStopPercent ?? "")
+            ? { trailingStopPercent: text(entry.trailingStopPercent ?? "") }
+            : {}),
         })),
         entryExpiresAt: end,
       };

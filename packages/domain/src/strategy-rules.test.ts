@@ -292,6 +292,10 @@ describe("DCA rules", () => {
     assert.deepEqual(parse({ ...dcaRules, takeProfitPercent: "1000.1" }), [
       "takeProfitPercent",
     ]);
+    assert.deepEqual(parse({ ...dcaRules, trailingStopPercent: "2" }), []);
+    assert.deepEqual(parse({ ...dcaRules, trailingStopPercent: "50.01" }), [
+      "trailingStopPercent",
+    ]);
   });
 
   it("caps the dip multiplier at 2 and requires it to raise the buy", () => {
