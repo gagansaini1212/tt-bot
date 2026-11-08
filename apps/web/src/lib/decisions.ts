@@ -4,10 +4,12 @@ import {
   proposalApprovalSchema,
   proposalRejectionSchema,
   proposalViewSchema,
+  tradeMistakeSchema,
   type DecisionView,
   type ProposalApproval,
   type ProposalRejection,
   type ProposalView,
+  type TradeMistakeView,
 } from "@crypto-trading/exchanges/ai-decisions";
 import { z } from "zod";
 import {
@@ -22,6 +24,11 @@ export type DecisionHistoryState = WorkerState<{
   readAt: number;
 }>;
 
+export type TradeMistakesState = WorkerState<{
+  mistakes: TradeMistakeView[];
+  readAt: number;
+}>;
+
 /** The customer's latest AI decisions, newest first, with their proposals. */
 export async function getDecisionHistory(): Promise<DecisionHistoryState> {
   const result = await callWorkerForAccount({
@@ -32,6 +39,21 @@ export async function getDecisionHistory(): Promise<DecisionHistoryState> {
     ? {
         status: "connected",
         decisions: result.data.decisions,
+        readAt: Date.parse(result.date ?? "") || Date.now(),
+      }
+    : { status: result.status, message: result.message };
+}
+
+/** The bot's learned mistakes, stop loss reviews, and adaptive adjustments. */
+export async function getTradeMistakes(): Promise<TradeMistakesState> {
+  const result = await callWorkerForAccount({
+    path: "/mistakes",
+    schema: z.object({ mistakes: z.array(tradeMistakeSchema) }),
+  });
+  return result.status === "connected"
+    ? {
+        status: "connected",
+        mistakes: result.data.mistakes,
         readAt: Date.parse(result.date ?? "") || Date.now(),
       }
     : { status: result.status, message: result.message };

@@ -11,6 +11,7 @@ import {
   quantityFor,
   type AiManagedRules,
   type Instrument,
+  type TradeMistake,
   instrumentSchema,
 } from "@crypto-trading/domain";
 import {
@@ -46,6 +47,8 @@ export type AnalysisRequest = {
   now: Date;
   // How many decisions it has made before, so a fixture takes its turn.
   sequence: number;
+  // Past trade mistakes and lessons learned for reflection.
+  mistakes?: TradeMistake[];
 };
 
 /** A decision to record, without its idempotency key. */
@@ -363,6 +366,7 @@ export class EveDecisionSource implements DecisionSource {
           entries: request.entries,
           availableAllocation: request.availableAllocation,
           capturedAt: request.now.toISOString(),
+          mistakes: request.mistakes ?? [],
         },
         outputSchema: decisionOutputJsonSchema(
           request.markets.map((market) => market.instrument),
@@ -413,9 +417,21 @@ export class EveDecisionSource implements DecisionSource {
 
 function analysisPrompt(request: AnalysisRequest) {
   const { rules } = request.strategy;
+  const mistakes = request.mistakes && request.mistakes.length > 0
+    ? `\n\nPAST MISTAKES & LESSONS LEARNED (DO NOT REPEAT):\n` +
+      request.mistakes
+        .slice(0, 5)
+        .map(
+          (m) =>
+            `- [${m.occurredAt.slice(0, 16).replace("T", " ")}] ${m.instrument}: ${m.kind.replace(/_/g, " ")}${m.lossPercent ? ` (loss: -${m.lossPercent}%)` : ""}. Lesson: ${m.lesson}`,
+        )
+        .join("\n") +
+      `\nCRITICAL: Review these past mistakes carefully. Proactively avoid entering under similar failed conditions (e.g. buying near local resistance, tight stops in chop, premature dip entries). If current market conditions carry similar risks, choose "no_trade".`
+    : "";
+
   return [
     `Scheduled analysis for the AI-managed strategy "${request.strategy.name}". Do not call any tool: answer with the structured decision only. The execution worker records it and checks it against the strategy's limits.`,
     `Decide whether to open one long spot limit entry now in ${request.markets.map((market) => market.instrument).join(" or ")}, or not to trade. A trade needs a quantity, an entry price, a stop loss below it, a take profit above it, and an entry expiry in the future (ISO 8601).`,
-    `Limits: positions up to ${rules.maxPositionNotional} USDT per instrument, at most ${rules.maxProtectedEntries} entries at once, ${request.availableAllocation} USDT of the allocation uncommitted, each entry held at most ${Math.round(rules.holdingPeriodSeconds / 60)} minutes. The market data and the strategy's entries are in the client context, captured at ${request.now.toISOString()}. A no-trade decision is valid.`,
+    `Limits: positions up to ${rules.maxPositionNotional} USDT per instrument, at most ${rules.maxProtectedEntries} entries at once, ${request.availableAllocation} USDT of the allocation uncommitted, each entry held at most ${Math.round(rules.holdingPeriodSeconds / 60)} minutes. The market data and the strategy's entries are in the client context, captured at ${request.now.toISOString()}. A no-trade decision is valid.${mistakes}`,
   ].join("\n\n");
 }

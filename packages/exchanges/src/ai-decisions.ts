@@ -246,3 +246,27 @@ export function proposalRisk(proposal: {
       : null,
   };
 }
+
+export const tradeMistakeSchema = z.object({
+  id: z.string(),
+  instrument: instrumentSchema,
+  kind: z.enum([
+    "stop_loss",
+    "holding_deadline",
+    "rejected_proposal",
+    "range_stop",
+    "trailing_stop_loss",
+  ]),
+  occurredAt: timestamp,
+  strategyId: z.string().optional(),
+  strategyName: z.string().optional(),
+  entryPrice: z.string().optional(),
+  exitPrice: z.string().optional(),
+  lossPercent: z.string().optional(),
+  lossAmountUsdt: z.string().optional(),
+  reason: z.string().optional(),
+  lesson: z.string(),
+  adaptiveAction: z.string(),
+});
+export type TradeMistakeView = z.infer<typeof tradeMistakeSchema>;
+

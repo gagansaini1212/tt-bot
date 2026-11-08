@@ -2,16 +2,22 @@ import { randomUUID } from "node:crypto";
 import Decimal from "decimal.js";
 import type { Database } from "@crypto-trading/database";
 import {
+  calculateAdaptiveDipDrop,
+  calculateAdaptivePositionMultiplier,
   dcaBuyIndexAt,
+  deriveLesson,
+  floorToStep,
   planDcaBuy,
   planGridEntries,
   planStandingEntries,
   utcDayStart,
+  type AdaptiveCooldown,
   type AiManagedRules,
   type EntryIntent,
   type EntryPlan,
   type LossLimitStatus,
   type Instrument,
+  type TradeMistake,
   instrumentLabel,
   instrumentSchema,
 } from "@crypto-trading/domain";
@@ -142,7 +148,7 @@ export class StrategyRunner {
   readonly store: StrategyStore;
   readonly #proposals: Pick<
     TradeProposalStore,
-    "record" | "find" | "reject" | "expire"
+    "record" | "find" | "reject" | "expire" | "decisions"
   >;
   readonly #intents: Pick<OrderIntentStore, "settle" | "recordOrders">;
   readonly #decisions: DecisionSource;
@@ -152,13 +158,17 @@ export class StrategyRunner {
   readonly #exclusive: AccountQueues;
   readonly #dayStartPrices = new Map<string, Promise<string>>();
   readonly #peakPrices = new Map<string, Decimal>();
+  readonly #lossCooldowns = new Map<
+    string,
+    { until: Date; instrument: Instrument; consecutiveLosses: number; reason: string }
+  >();
   #lastLogged?: string;
 
   constructor(options: {
     database: Database;
     proposals: Pick<
       TradeProposalStore,
-      "record" | "find" | "reject" | "expire"
+      "record" | "find" | "reject" | "expire" | "decisions"
     >;
     intents: Pick<OrderIntentStore, "settle" | "recordOrders">;
     decisions: DecisionSource;
@@ -441,8 +451,55 @@ export class StrategyRunner {
       unclosed,
     );
     if (trailingTriggered) return trailingTriggered;
+
+    // Track recent stop losses to maintain adaptive cooldowns and consecutive loss state
+    const cooldownKey = `${strategy.id}:${rules.kind === "ai_managed" ? "ai" : (rules.instrument as Instrument)}`;
+    const recentLoss = entries
+      .filter(
+        (e) =>
+          !isUnclosed(e) &&
+          (e.exitReason === "stop_loss" || e.exitReason === "range_stop"),
+      )
+      .at(-1);
+
+    if (recentLoss) {
+      const existing = this.#lossCooldowns.get(cooldownKey);
+      if (!existing || existing.until.getTime() <= now.getTime()) {
+        const consecutiveLosses = (existing?.consecutiveLosses ?? 0) + 1;
+        const cooldownMs = 60 * 60_000;
+        this.#lossCooldowns.set(cooldownKey, {
+          until: new Date(now.getTime() + cooldownMs),
+          instrument: recentLoss.instrument,
+          consecutiveLosses,
+          reason: recentLoss.exitReason!,
+        });
+      }
+    }
+
+    const activeCooldown = this.#lossCooldowns.get(cooldownKey);
+    const inCooldown =
+      activeCooldown && activeCooldown.until.getTime() > now.getTime();
+
     if (rules.kind === "ai_managed")
-      return this.#analyse(scope, context, strategy, rules, unclosed, measured);
+      return this.#analyse(
+        scope,
+        context,
+        strategy,
+        rules,
+        entries,
+        unclosed,
+        measured,
+        activeCooldown,
+      );
+
+    if (inCooldown && unclosed.length === 0) {
+      const remainingMinutes = Math.max(
+        1,
+        Math.ceil((activeCooldown.until.getTime() - now.getTime()) / 60_000),
+      );
+      return `Adaptive Cooldown active on ${activeCooldown.instrument} (${remainingMinutes}m remaining): Pausing new entries after recent ${activeCooldown.reason.replace(/_/g, " ")} to prevent revenge trading.`;
+    }
+
     const instrument = rules.instrument as Instrument;
     const market = await context.reads.exchange.getMarketRules(instrument);
     const steps = { tickSize: market.tickSize, quantityStep: market.stepSize };
@@ -472,7 +529,19 @@ export class StrategyRunner {
               entry.key?.startsWith("buy:") && entry.orderIntentId !== null,
           )
           .at(-1);
-        plan = planDcaBuy(rules, {
+        const consecutiveLosses = activeCooldown?.consecutiveLosses ?? 0;
+        const adaptedDip =
+          consecutiveLosses > 0 && rules.dip
+            ? {
+                ...rules.dip,
+                dropPercent: calculateAdaptiveDipDrop(
+                  rules.dip.dropPercent,
+                  consecutiveLosses,
+                ),
+              }
+            : rules.dip;
+        const effectiveRules = adaptedDip ? { ...rules, dip: adaptedDip } : rules;
+        plan = planDcaBuy(effectiveRules, {
           now,
           price: ask,
           steps,
@@ -519,6 +588,21 @@ export class StrategyRunner {
         const sent: string[] = [];
         const skipped: string[] = [];
         for (const intent of plan.intents) {
+          if (activeCooldown && activeCooldown.consecutiveLosses > 0) {
+            const multiplier = calculateAdaptivePositionMultiplier(
+              activeCooldown.consecutiveLosses,
+            );
+            const adaptedQuantity = floorToStep(
+              new Decimal(intent.quantity).times(multiplier),
+              steps.quantityStep,
+            );
+            if (
+              !adaptedQuantity.isZero() &&
+              adaptedQuantity.times(intent.entryPrice).gte(market.minNotional)
+            ) {
+              intent.quantity = adaptedQuantity.toFixed();
+            }
+          }
           const result = await this.#submit(scope, context, {
             strategyId: strategy.id,
             key: intent.key,
@@ -598,6 +682,16 @@ export class StrategyRunner {
   }
 
   /**
+   * Returns active cooldown if strategy/instrument recently triggered stop loss.
+   */
+  cooldown(strategyId: string, instrument: Instrument) {
+    const active = this.#lossCooldowns.get(`${strategyId}:${instrument}`);
+    return active && active.until.getTime() > this.#now().getTime()
+      ? active
+      : undefined;
+  }
+
+  /**
    * Asks the AI on the strategy's schedule. A proposal waits for the
    * customer, or, if they chose so, is submitted at once within the
    * strategy's limits. Resolves the strategy's note.
@@ -607,8 +701,10 @@ export class StrategyRunner {
     context: PassContext,
     strategy: StrategyRecord,
     rules: AiManagedRules,
+    entries: StrategyEntry[],
     unclosed: StrategyEntry[],
     measured: Extract<Measured, { status: "measured" }>,
+    activeCooldown?: { until: Date; instrument: Instrument; consecutiveLosses: number; reason: string },
   ): Promise<string> {
     const { now } = context;
     const ai = strategy.ai!;
@@ -616,6 +712,15 @@ export class StrategyRunner {
     // The last analysis's note stays until the next one.
     if (next && next.getTime() > now.getTime())
       return strategy.runnerNote || `Next analysis at ${utc(next)}.`;
+
+    if (activeCooldown && activeCooldown.until.getTime() > now.getTime() && unclosed.length === 0) {
+      const remainingMinutes = Math.max(
+        1,
+        Math.ceil((activeCooldown.until.getTime() - now.getTime()) / 60_000),
+      );
+      return `Adaptive Cooldown active (${remainingMinutes}m remaining): Pausing AI proposals after recent ${activeCooldown.reason.replace(/_/g, " ")} to prevent revenge trading.`;
+    }
+
     if (
       !(await this.store.claimAnalysis(
         scope,
@@ -653,6 +758,77 @@ export class StrategyRunner {
     const slot = Math.floor(
       now.getTime() / (ai.analysisIntervalMinutes * 60_000),
     );
+
+    // Extract past trade mistakes and lessons from closed entries & user rejections
+    const mistakes: TradeMistake[] = [];
+    for (const entry of entries) {
+      if (
+        !isUnclosed(entry) &&
+        (entry.exitReason === "stop_loss" ||
+          entry.exitReason === "holding_deadline" ||
+          entry.exitReason === "range_stop")
+      ) {
+        const lossPercent =
+          entry.entryPrice && entry.stopLossPrice
+            ? new Decimal(entry.entryPrice)
+                .minus(entry.stopLossPrice)
+                .dividedBy(entry.entryPrice)
+                .times(100)
+                .abs()
+                .toFixed(2)
+            : undefined;
+        const { lesson, adaptiveAction } = deriveLesson(
+          entry.exitReason as any,
+          {
+            instrument: entry.instrument,
+            entryPrice: entry.entryPrice,
+            exitPrice: entry.stopLossPrice,
+            lossPercent,
+          },
+        );
+        mistakes.push({
+          id: entry.proposalId,
+          instrument: entry.instrument,
+          kind: entry.exitReason as any,
+          occurredAt: entry.createdAt.toISOString(),
+          strategyId: strategy.id,
+          strategyName: strategy.name,
+          entryPrice: entry.entryPrice,
+          exitPrice: entry.stopLossPrice,
+          lossPercent,
+          lesson,
+          adaptiveAction,
+        });
+      }
+    }
+    try {
+      const pastDecisions = await this.#proposals.decisions(scope, now, 20);
+      for (const d of pastDecisions) {
+        if (
+          d.proposal?.status === "rejected" &&
+          d.proposal?.decidedBy === "customer"
+        ) {
+          const { lesson, adaptiveAction } = deriveLesson("rejected_proposal", {
+            instrument: d.proposal.instrument,
+            reason: d.proposal.decisionReason ?? undefined,
+          });
+          mistakes.push({
+            id: d.id,
+            instrument: d.proposal.instrument as Instrument,
+            kind: "rejected_proposal",
+            occurredAt: d.createdAt,
+            strategyId: strategy.id,
+            strategyName: strategy.name,
+            reason: d.proposal.decisionReason ?? undefined,
+            lesson,
+            adaptiveAction,
+          });
+        }
+      }
+    } catch {
+      // Continue if past decisions lookup is not available
+    }
+
     let decision;
     try {
       decision = await this.#decisions.decide({
@@ -666,6 +842,7 @@ export class StrategyRunner {
         availableAllocation: available,
         now,
         sequence: await this.store.decisionCount(scope, strategy.id),
+        mistakes,
       });
     } catch (error) {
       this.#warn(

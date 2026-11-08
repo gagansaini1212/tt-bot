@@ -113,6 +113,7 @@ export function createWorker({
     routes.push(
       route("POST", "/decisions", ai.record),
       route("GET", "/decisions", ai.list),
+      route("GET", "/mistakes", ai.mistakes),
       route("GET", "/proposals", ai.proposal),
       route("POST", "/proposals/approve", ai.approve),
       route("POST", "/proposals/reject", ai.reject),

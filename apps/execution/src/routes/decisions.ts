@@ -9,9 +9,11 @@ import {
   type AssistantDecisionRequest,
 } from "@crypto-trading/exchanges";
 import {
+  deriveLesson,
   instrumentAssets,
   instrumentLabel,
   type Instrument,
+  type TradeMistake,
 } from "@crypto-trading/domain";
 import { z } from "zod";
 import type { AccountScope } from "../accounts";
@@ -242,6 +244,73 @@ export function decisions({
         return {
           ...result,
           proposal: await latest(account, body.proposalId),
+        };
+      },
+    }),
+    mistakes: accountHandler({
+      query: z.strictObject({}),
+      async handle({ account }) {
+        const at = clock();
+        const listed = await proposals.decisions(account, at, DECISION_LIMIT);
+        const mistakes: TradeMistake[] = [];
+        for (const item of listed) {
+          if (!item.proposal) continue;
+          const p = item.proposal;
+          if (p.status === "rejected" && p.decidedBy === "customer") {
+            const { lesson, adaptiveAction } = deriveLesson("rejected_proposal", {
+              instrument: p.instrument,
+              reason: p.decisionReason ?? undefined,
+            });
+            mistakes.push({
+              id: item.id,
+              instrument: p.instrument as Instrument,
+              kind: "rejected_proposal",
+              occurredAt: item.createdAt,
+              strategyId: p.strategyId ?? undefined,
+              reason: p.decisionReason ?? undefined,
+              lesson,
+              adaptiveAction,
+            });
+          } else if (
+            p.reconciliation?.exitReason === "stop_loss" ||
+            p.reconciliation?.exitReason === "holding_deadline" ||
+            p.reconciliation?.exitReason === "range_stop" ||
+            p.reconciliation?.exitReason === "trailing_stop"
+          ) {
+            const kind = p.reconciliation.exitReason === "trailing_stop"
+              ? "trailing_stop_loss"
+              : p.reconciliation.exitReason;
+            const lossPercent = p.entryPrice && p.stopLossPrice
+              ? new Decimal(p.entryPrice)
+                  .minus(p.stopLossPrice)
+                  .dividedBy(p.entryPrice)
+                  .times(100)
+                  .abs()
+                  .toFixed(2)
+              : undefined;
+            const { lesson, adaptiveAction } = deriveLesson(kind, {
+              instrument: p.instrument,
+              entryPrice: p.entryPrice,
+              exitPrice: p.stopLossPrice,
+              lossPercent,
+            });
+            mistakes.push({
+              id: item.id,
+              instrument: p.instrument as Instrument,
+              kind,
+              occurredAt: p.reconciliation.checkedAt,
+              strategyId: p.strategyId ?? undefined,
+              entryPrice: p.entryPrice,
+              exitPrice: p.stopLossPrice,
+              lossPercent,
+              lesson,
+              adaptiveAction,
+            });
+          }
+        }
+        return {
+          status: "connected",
+          mistakes,
         };
       },
     }),

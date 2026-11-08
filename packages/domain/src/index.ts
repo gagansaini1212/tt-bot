@@ -9,4 +9,5 @@ export * from "./reporting";
 export * from "./standing-instruction";
 export * from "./strategy-rules";
 export * from "./strategy-status";
+export * from "./trade-mistakes";
 export * from "./trading";

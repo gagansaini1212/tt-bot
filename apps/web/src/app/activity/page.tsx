@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { AccountRefresh } from "@/components/account-refresh";
 import { DecisionHistory } from "@/components/decision-history";
 import { FillsTable } from "@/components/fills-table";
+import { MistakesJournal } from "@/components/mistakes/mistakes-journal";
 import { PageHeader } from "@/components/page-header";
 import {
   Card,
@@ -11,16 +12,17 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { getDecisionHistory } from "@/lib/decisions";
+import { getDecisionHistory, getTradeMistakes } from "@/lib/decisions";
 import { getTestnetAccount } from "@/lib/testnet-account";
 
 export const metadata: Metadata = { title: "Activity" };
 export const dynamic = "force-dynamic";
 
 export default async function ActivityPage() {
-  const [decisions, account] = await Promise.all([
+  const [decisions, account, mistakes] = await Promise.all([
     getDecisionHistory(),
     getTestnetAccount(),
+    getTradeMistakes(),
   ]);
   return (
     <>
@@ -43,6 +45,24 @@ export default async function ActivityPage() {
             <DecisionHistory
               decisions={decisions.decisions}
               now={decisions.readAt}
+            />
+          </CardContent>
+        ) : null}
+      </Card>
+      <Card className="mt-6">
+        <CardHeader>
+          <CardTitle>Trade Mistakes & Learned Lessons</CardTitle>
+          <CardDescription>
+            {mistakes.status === "connected"
+              ? "Past stop-loss hits, holding timeouts, and user feedback rejections analyzed by the bot. The AI reflects on these lessons before generating future trade ideas and dynamically adapts its risk."
+              : mistakes.message}
+          </CardDescription>
+        </CardHeader>
+        {mistakes.status === "connected" ? (
+          <CardContent>
+            <MistakesJournal
+              mistakes={mistakes.mistakes}
+              now={mistakes.readAt}
             />
           </CardContent>
         ) : null}
