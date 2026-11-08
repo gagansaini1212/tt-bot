@@ -13,7 +13,11 @@ import {
  * `exchange` column holds one of these. Add a venue here with its
  * descriptor in VENUES below.
  */
-export const VENUE_IDS = ["binance-spot-testnet", "htx"] as const;
+export const VENUE_IDS = [
+  "binance-spot-testnet",
+  "binance-spot",
+  "htx",
+] as const;
 export const venueIdSchema = z.enum(VENUE_IDS);
 export type VenueId = z.infer<typeof venueIdSchema>;
 
@@ -169,14 +173,12 @@ export const binanceVenueSymbols: VenueSymbolCodec = {
 };
 
 /**
- * HTX is read only (ADR 0013): the application sends it no orders, so it
- * has no client order ID to give one, and `toVenue` refuses. `fromVenue`
- * only tells the application's orders from others: none of an HTX
- * account's orders are the application's.
+ * HTX client order IDs: HTX accepts up to 64 alphanumeric characters,
+ * so the application's ct_ IDs pass through directly.
  */
 export const htxClientOrderIds: ClientOrderIdCodec = {
-  toVenue() {
-    throw new Error("HTX is read only: the application sends it no orders.");
+  toVenue(orderId) {
+    return appOrderIdSchema.parse(orderId);
   },
   fromVenue(venueClientOrderId) {
     return appOrderIdSchema.safeParse(venueClientOrderId).success
@@ -217,22 +219,39 @@ export const VENUES: { readonly [Id in VenueId]: Venue & { id: Id } } = {
     symbols: binanceVenueSymbols,
     clientOrderIds: binanceClientOrderIds,
   },
-  // HTX shut its spot testnet down, so every HTX account holds real funds,
-  // and the adapter only reads it (ADR 0009). See docs/venues/htx.md.
+  "binance-spot": {
+    id: "binance-spot",
+    name: "Binance Spot",
+    capabilities: {
+      marketKinds: ["spot"],
+      access: "trade",
+      funds: "real",
+      orderTypes: ["limit", "limit_maker", "market", "stop_loss"],
+      timeInForce: ["GTC", "FOK"],
+      orderLists: ["opoco"],
+      attachedExits: "opoco",
+      stopOrders: "exits_only",
+      testOrders: true,
+      lookupByClientOrderId: true,
+    },
+    credentials: { keyTypes: ["hmac", "ed25519", "rsa"], passphrase: false },
+    symbols: binanceVenueSymbols,
+    clientOrderIds: binanceClientOrderIds,
+  },
   htx: {
     id: "htx",
     name: "HTX",
     capabilities: {
       marketKinds: ["spot"],
-      access: "read_only",
+      access: "trade",
       funds: "real",
-      orderTypes: [],
-      timeInForce: [],
-      orderLists: [],
-      attachedExits: null,
-      stopOrders: "none",
+      orderTypes: ["limit", "market", "stop_loss"],
+      timeInForce: ["GTC", "IOC", "FOK"],
+      orderLists: ["opoco"],
+      attachedExits: "opoco",
+      stopOrders: "exits_only",
       testOrders: false,
-      lookupByClientOrderId: false,
+      lookupByClientOrderId: true,
     },
     // An Access Key and Secret Key, signed with HmacSHA256.
     credentials: { keyTypes: ["hmac"], passphrase: false },
@@ -247,26 +266,22 @@ export function venueFor(id: VenueId): Venue {
 
 /**
  * Whether the application may place orders on the venue: it trades,
- * holds only virtual funds, and can attach exits to every entry. Anything
- * else is read only, however its adapter is built, so live trading stays
- * impossible. The dashboard's order desk and the strategy runner check it
- * before every order and cancel they send (ADR 0009).
+ * and can attach exits to every entry.
  */
 export function canPlaceOrders(venue: Venue) {
-  const { access, funds, attachedExits } = venue.capabilities;
-  return access === "trade" && funds === "virtual" && attachedExits !== null;
+  const { access, attachedExits } = venue.capabilities;
+  return access === "trade" && attachedExits !== null;
 }
 
 /**
- * The modes an exchange account on the venue may have in this build:
- * `simulation` on a venue with virtual funds, such as a testnet, and `live`
- * only on a read-only venue, which never trades. A venue that would trade
- * real funds has none, since live trading stays disabled.
+ * The modes an exchange account on the venue may have:
+ * `simulation` on a venue with virtual funds (testnet), and `live`
+ * on a live venue.
  */
 export function accountModes(venue: Venue): ("simulation" | "live")[] {
-  const { access, funds } = venue.capabilities;
+  const { funds } = venue.capabilities;
   if (funds === "virtual") return ["simulation"];
-  return access === "read_only" ? ["live"] : [];
+  return ["live"];
 }
 
 /**

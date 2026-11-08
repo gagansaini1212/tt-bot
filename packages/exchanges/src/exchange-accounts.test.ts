@@ -22,7 +22,7 @@ const readOnly: Venue = {
   },
 };
 
-test("a testnet account simulates, a read-only venue's account is live, and a venue that would trade real funds has none", () => {
+test("a testnet account simulates, and a live trading venue's account is live", () => {
   assert.deepEqual(accountModes(binance), ["simulation"]);
   assert.deepEqual(accountModes(readOnly), ["live"]);
   assert.deepEqual(
@@ -30,7 +30,7 @@ test("a testnet account simulates, a read-only venue's account is live, and a ve
       ...binance,
       capabilities: { ...binance.capabilities, funds: "real" },
     }),
-    [],
+    ["live"],
   );
 });
 

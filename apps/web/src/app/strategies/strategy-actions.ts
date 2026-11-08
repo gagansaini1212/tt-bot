@@ -34,6 +34,7 @@ const invalid = (message: string): StrategyActionResult => ({
 
 export async function startStrategy(
   input: unknown,
+  exchangeAccountId?: string,
 ): Promise<StrategyActionResult> {
   if (!(await isLocalRequest())) return REFUSED;
   const draft = strategyDraftSchema.safeParse(input);
@@ -41,13 +42,14 @@ export async function startStrategy(
     return invalid(
       draft.error.issues[0]?.message ?? "Check the strategy and try again.",
     );
-  const result = await createStrategy(draft.data);
+  const result = await createStrategy(draft.data, exchangeAccountId);
   refresh();
   return result;
 }
 
 export async function saveVersion(
   input: unknown,
+  exchangeAccountId?: string,
 ): Promise<StrategyActionResult> {
   if (!(await isLocalRequest())) return REFUSED;
   const request = strategyVersionRequestSchema.safeParse(input);
@@ -55,7 +57,7 @@ export async function saveVersion(
     return invalid(
       request.error.issues[0]?.message ?? "Check the strategy and try again.",
     );
-  const result = await saveStrategyVersion(request.data);
+  const result = await saveStrategyVersion(request.data, exchangeAccountId);
   refresh();
   return result;
 }
@@ -69,6 +71,7 @@ const ACTIONS = {
 export async function controlStrategy(
   action: unknown,
   input: unknown,
+  exchangeAccountId?: string,
 ): Promise<StrategyActionResult> {
   if (!(await isLocalRequest())) return REFUSED;
   const request = strategyActionRequestSchema.safeParse(input);
@@ -76,6 +79,7 @@ export async function controlStrategy(
     return invalid("That strategy action is not available.");
   const result = await ACTIONS[action as keyof typeof ACTIONS](
     request.data.strategyId,
+    exchangeAccountId,
   );
   refresh();
   return result;

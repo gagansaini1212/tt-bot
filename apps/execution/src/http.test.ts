@@ -1324,7 +1324,7 @@ test("a read-only account takes no orders, whatever the request", async (t) => {
   );
 });
 
-test("an HTX account is read through HTX's own adapter, and takes no orders", async (t) => {
+test("an HTX account is served through HTX's own adapter with trading capability", async (t) => {
   const htx = new FakeHtx();
   const { call, json } = await serve(t, {
     exchange: new HtxSpot({
@@ -1341,22 +1341,11 @@ test("an HTX account is read through HTX's own adapter, and takes no orders", as
     }),
   });
   const ticket = await json("/orders/ticket");
-  assert.match(ticket.disabled, /HTX is read only here, so it takes no orders/);
-  const placed = await call("/orders", post("/orders", order));
-  assert.equal((await placed.json()).outcome.status, "rejected");
-  const cancelled = await call(
-    "/orders/cancel",
-    post("/orders/cancel", {
-      instrument: "BTC-USDT",
-      orderId: "357630527817871",
-      acceptUnprotected: false,
-    }),
-  );
-  assert.match((await cancelled.json()).outcome.message, /read only/);
+  assert.equal(ticket.disabled, undefined);
   // Its balances, open orders and fills are read for display.
   const { snapshot } = await json("/snapshot");
   assert.equal(snapshot.venue, "htx");
-  assert.equal(snapshot.canTrade, false);
+  assert.equal(snapshot.canTrade, true);
   assert.deepEqual(
     snapshot.orders.map((entry: { orderId: string }) => entry.orderId),
     ["357630527817871", "9007199254740993"],

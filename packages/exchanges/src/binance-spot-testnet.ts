@@ -41,8 +41,9 @@ import {
 import { Backoff, VenueLimits } from "./venue-limits";
 import { binanceClientOrderIds, binanceVenueSymbols } from "./venues";
 
-// Deliberately fixed: this adapter cannot be configured to send real orders.
+// Binance REST API endpoints: Testnet and Live Spot.
 export const BINANCE_SPOT_TESTNET_URL = "https://testnet.binance.vision";
+export const BINANCE_SPOT_URL = "https://api.binance.com";
 const VENUE = "binance-spot-testnet";
 const decimal = z.string().regex(/^\d+(\.\d+)?$/);
 // Binance's IDs are JSON numbers. Larger ones would lose digits.
@@ -290,11 +291,14 @@ export type BinanceSpotTestnetOptions = (
   // The venue's backoff and clock, shared with its other clients. Without
   // them, this client keeps its own.
   limits?: VenueLimits;
+  venue?: "binance-spot-testnet" | "binance-spot";
+  baseUrl?: string;
 };
 
 export class BinanceSpotTestnet implements TradingAdapter {
-  readonly venue = VENUE;
+  readonly venue: "binance-spot-testnet" | "binance-spot";
   readonly markets: MarketCatalogue;
+  readonly #baseUrl: string;
   readonly #limits: VenueLimits;
   // This account's own limits, such as its order count.
   readonly #accountBackoff: Backoff;
@@ -304,20 +308,26 @@ export class BinanceSpotTestnet implements TradingAdapter {
   readonly #now: () => number;
 
   constructor(options: BinanceSpotTestnetOptions) {
+    this.venue = options.venue ?? VENUE;
+    this.#baseUrl =
+      options.baseUrl ??
+      (this.venue === "binance-spot"
+        ? BINANCE_SPOT_URL
+        : BINANCE_SPOT_TESTNET_URL);
     this.#fetch = options.fetch ?? fetch;
     this.#now = options.now ?? Date.now;
     this.markets =
       options.markets ??
       new MarketCatalogue({
-        venue: VENUE,
+        venue: this.venue,
         load: () => this.loadMarkets(),
         now: this.#now,
       });
-    if (this.markets.venue !== VENUE)
+    if (this.markets.venue !== this.venue)
       throw new Error("The market catalogue belongs to another venue.");
     this.#limits =
-      options.limits ?? new VenueLimits({ venue: VENUE, now: this.#now });
-    if (this.#limits.venue !== VENUE)
+      options.limits ?? new VenueLimits({ venue: this.venue, now: this.#now });
+    if (this.#limits.venue !== this.venue)
       throw new Error("The venue limits belong to another venue.");
     this.#accountBackoff = new Backoff(this.#now);
     if ("publicData" in options) return;
@@ -359,7 +369,7 @@ export class BinanceSpotTestnet implements TradingAdapter {
         "This Binance client serves public market data only. Configure API keys for account requests.",
       );
     if (signed) await this.#syncClock();
-    const unsigned = new URL(`${BINANCE_SPOT_TESTNET_URL}${path}`);
+    const unsigned = new URL(`${this.#baseUrl}${path}`);
     const query = new URLSearchParams(parameters);
     if (method === "GET") unsigned.search = query.toString();
     const request =
@@ -973,3 +983,5 @@ function binanceKeys(keys: {
     );
   }
 }
+
+export { BinanceSpotTestnet as BinanceSpot };

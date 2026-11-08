@@ -249,11 +249,12 @@ export async function callWorkerForCustomer<T>(
 }
 
 // The customer's exchange accounts that the worker serves.
-const listAccounts = () =>
+export const listAccounts = () =>
   callWorkerForCustomer({
     path: "/accounts",
     schema: z.object({ accounts: z.array(servedAccountSchema) }),
   });
+export const getServedAccounts = listAccounts;
 
 /**
  * Calls a worker route that serves or changes an exchange account's data,

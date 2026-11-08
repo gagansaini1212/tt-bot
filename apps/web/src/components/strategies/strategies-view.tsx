@@ -28,6 +28,8 @@ import { lossShare } from "@/lib/strategy-display";
 import { backtestFormFor } from "@/lib/strategy-form";
 import type { WorkerState } from "@/lib/worker-client";
 
+import { type ServedAccount } from "@crypto-trading/exchanges/served-accounts";
+
 /**
  * The Strategies page: the portfolio's drawdown today, each strategy's
  * control card, the editor for a new strategy or version, and the backtest,
@@ -35,9 +37,13 @@ import type { WorkerState } from "@/lib/worker-client";
  */
 export function StrategiesView({
   state,
+  accounts = [],
+  activeAccount,
   acrossAccounts,
 }: {
   state: WorkerState<{ state: StrategiesState; readAt: number }>;
+  accounts?: ServedAccount[];
+  activeAccount?: ServedAccount;
   // The strategies on every exchange account together, shown only.
   acrossAccounts?: ReactNode;
 }) {
@@ -84,13 +90,36 @@ export function StrategiesView({
   const limit = limits.current;
   return (
     <>
+      {accounts.length > 1 ? (
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mr-1">
+            Account:
+          </span>
+          {accounts.map((acc) => {
+            const isSelected = acc.id === activeAccount?.id;
+            return (
+              <Button
+                asChild
+                key={acc.id}
+                size="sm"
+                variant={isSelected ? "default" : "outline"}
+              >
+                <Link href={`/strategies?account=${acc.id}`}>
+                  {acc.label} ({acc.venueName})
+                </Link>
+              </Button>
+            );
+          })}
+        </div>
+      ) : null}
+
       <Card className="mt-6">
         <CardHeader>
           <CardTitle>
             <h2>Portfolio today</h2>
           </CardTitle>
           <CardDescription className="mt-1">
-            Every strategy&apos;s result on this exchange account since midnight
+            Every strategy&apos;s result on {activeAccount?.label ?? "this exchange account"} since midnight
             UTC, against their allocations together. Reaching the account&apos;s
             daily drawdown limit pauses every strategy on it.
           </CardDescription>
@@ -161,16 +190,35 @@ export function StrategiesView({
         <h2 className="text-lg font-semibold tracking-tight">
           Your strategies
         </h2>
-        <Button disabled={!limit} onClick={() => edit()}>
+        <Button
+          disabled={!limit || Boolean(activeAccount?.readOnly)}
+          onClick={() => edit()}
+        >
           <Plus />
           New strategy
         </Button>
       </div>
+      {activeAccount?.readOnly ? (
+        <Alert className="mt-4">
+          <ShieldAlert />
+          <AlertTitle>Read only account</AlertTitle>
+          <AlertDescription>
+            {activeAccount.label} ({activeAccount.venueName}) is configured as a
+            read-only account and cannot execute automated strategies.
+          </AlertDescription>
+        </Alert>
+      ) : null}
       {editor ? (
         <div className="scroll-mt-6" id="strategy-editor">
           <StrategyEditor
+            accountLabel={
+              activeAccount
+                ? `${activeAccount.label} (${activeAccount.venueName})`
+                : undefined
+            }
             aiSource={aiSource}
             editing={editor.editing}
+            exchangeAccountId={activeAccount?.id}
             key={editor.key}
             markets={markets}
             now={state.readAt}
@@ -183,6 +231,7 @@ export function StrategiesView({
         <div className="mt-4 grid gap-4 xl:grid-cols-2">
           {strategies.map((strategy) => (
             <StrategyCard
+              exchangeAccountId={activeAccount?.id}
               key={strategy.id}
               now={state.readAt}
               onEdit={() => edit(strategy)}

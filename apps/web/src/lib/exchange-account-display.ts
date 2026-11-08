@@ -17,7 +17,7 @@ export { accountVenue } from "@crypto-trading/exchanges/exchange-accounts";
 
 export const MODE_LABELS: Record<ExchangeAccountMode, string> = {
   simulation: "Simulation (testnet)",
-  live: "Live, read only",
+  live: "Live",
 };
 
 export const STATUS_LABELS: Record<ExchangeAccountStatus, string> = {

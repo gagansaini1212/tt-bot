@@ -127,7 +127,49 @@ export function binanceSpotTestnetVenue({
 }
 
 /**
- * HTX spot, read only (ADR 0009, docs/venues/htx.md): one catalogue, one set
+ * Binance Spot Live: one catalogue, one set of limits and clock, and one
+ * public client for the venue, shared by every account's client.
+ */
+export function binanceSpotVenue({
+  fetch,
+  now = Date.now,
+}: {
+  fetch?: typeof globalThis.fetch;
+  now?: () => number;
+} = {}): RegisteredVenue {
+  const venue = VENUES["binance-spot"];
+  const limits = new VenueLimits({ venue: venue.id, now });
+  const markets: MarketCatalogue = new MarketCatalogue({
+    venue: venue.id,
+    load: () => market.loadMarkets(),
+    now,
+  });
+  const market: BinanceSpotTestnet = new BinanceSpotTestnet({
+    venue: "binance-spot",
+    publicData: true,
+    markets,
+    limits,
+    fetch,
+    now,
+  });
+  return {
+    venue,
+    limits,
+    market,
+    connect: (credentials) =>
+      new BinanceSpotTestnet({
+        venue: "binance-spot",
+        credentials,
+        markets,
+        limits,
+        fetch,
+        now,
+      }),
+  };
+}
+
+/**
+ * HTX spot (ADR 0009, docs/venues/htx.md): one catalogue, one set
  * of limits and clock, and one public client for the venue, shared by every
  * HTX account's client and by no other venue's. Each account's client also
  * keeps its own limits, which HTX counts per user. Its clients implement

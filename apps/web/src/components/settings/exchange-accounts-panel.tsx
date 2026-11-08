@@ -77,7 +77,9 @@ const SOURCES: Record<ExchangeAccountSummary["keys"]["source"], string> = {
 const KEY_HINTS: Partial<Record<VenueId, string>> = {
   "binance-spot-testnet":
     "Create an API key at testnet.binance.vision with account-read and trading permissions, and without withdrawals.",
-  htx: "Create an API key in HTX's API Management with read permission only, without trade or withdraw permission. Enter its Access Key and Secret Key.",
+  "binance-spot":
+    "Create an API key in Binance API Management with Spot trading and account read permissions enabled, and without withdrawals.",
+  htx: "Create an API key in HTX's API Management with Spot Trade and Read permissions enabled, and without withdraw permission. Enter its Access Key and Secret Key.",
 };
 
 /**
@@ -496,7 +498,7 @@ function AddAccountForm({ canSave }: { canSave: boolean }) {
         <CardDescription className="leading-6">
           Each account has its own keys. The execution worker stores them
           encrypted and never shows them again, logs them or gives them to the
-          assistant. Live trading is turned off.
+          assistant. Never attach keys with withdrawal permissions.
         </CardDescription>
       </CardHeader>
       <CardContent>

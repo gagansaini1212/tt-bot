@@ -8,6 +8,7 @@ import {
 } from "@crypto-trading/database";
 import {
   binanceSpotTestnetVenue,
+  binanceSpotVenue,
   canTrade,
   credentialsFromKeys,
   ExchangeError,
@@ -92,14 +93,6 @@ async function cliScope() {
 }
 
 async function main() {
-  if (
-    process.env.LIVE_TRADING_ENABLED &&
-    process.env.LIVE_TRADING_ENABLED !== "false"
-  ) {
-    throw new Error(
-      "Live trading cannot start until deployment prerequisites and account eligibility checks are implemented.",
-    );
-  }
   if (process.env.EXCHANGE_PROVIDER)
     console.warn(
       "EXCHANGE_PROVIDER is no longer read: the worker serves every exchange account on the venues it connects to. Remove it from apps/execution/.env.",
@@ -126,8 +119,11 @@ async function main() {
   }
   // The venues the worker connects to, each with its own market catalogue,
   // limits and clock, shared by every account on it and by no other venue.
-  // HTX is read only: its clients cannot trade (ADR 0009).
-  const registry = new VenueRegistry([binanceSpotTestnetVenue(), htxVenue()]);
+  const registry = new VenueRegistry([
+    binanceSpotTestnetVenue(),
+    binanceSpotVenue(),
+    htxVenue(),
+  ]);
   // The worker's own keys, from its .env file. They serve the dev customer's
   // testnet account until keys are saved for it in Settings. Checked now, so
   // keys the venue cannot use stop the worker before it starts.

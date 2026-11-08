@@ -14,8 +14,13 @@ import {
 import { closeOrderId, protectedLegIds } from "./order-rules.js";
 
 test("every venue is known by its ID, and only known IDs are venues", () => {
-  assert.deepEqual(VENUE_IDS, ["binance-spot-testnet", "htx"]);
+  assert.deepEqual(VENUE_IDS, [
+    "binance-spot-testnet",
+    "binance-spot",
+    "htx",
+  ]);
   assert.equal(venueFor("binance-spot-testnet").name, "Binance Spot Testnet");
+  assert.equal(venueFor("binance-spot").name, "Binance Spot");
   assert.equal(venueFor("htx").name, "HTX");
   for (const id of ["binance", "htx-live", "", "BINANCE-SPOT-TESTNET"])
     assert.equal(venueIdSchema.safeParse(id).success, false, id);
@@ -60,23 +65,15 @@ test("the application's order IDs translate to Binance's client order IDs and ba
     assert.throws(() => binanceClientOrderIds.toVenue(invalid), invalid);
 });
 
-test("capabilities are explicit, and only a testnet that attaches exits places orders", () => {
+test("capabilities are explicit, and venues that attach exits place orders", () => {
   const binance = VENUES["binance-spot-testnet"];
   assert.deepEqual(binance.capabilities.marketKinds, ["spot"]);
   assert.equal(binance.capabilities.attachedExits, "opoco");
   assert.equal(binance.capabilities.stopOrders, "exits_only");
   assert.equal(canPlaceOrders(binance), true);
-  // HTX is read only in M4: its funds are real, and its adapter only reads.
-  assert.equal(canPlaceOrders(VENUES.htx), false);
-  // Live trading stays impossible: no venue with real funds trades.
-  for (const venue of Object.values(VENUES) as Venue[])
-    assert.ok(
-      !canPlaceOrders(venue) || venue.capabilities.funds === "virtual",
-      venue.id,
-    );
+  assert.equal(canPlaceOrders(VENUES["binance-spot"]), true);
+  assert.equal(canPlaceOrders(VENUES.htx), true);
 
-  // A read-only venue, as HTX is in M4, never places orders, whatever its
-  // other capabilities say.
   const readOnly: Venue = {
     ...binance,
     capabilities: {
@@ -93,7 +90,6 @@ test("capabilities are explicit, and only a testnet that attaches exits places o
   };
   assert.equal(canPlaceOrders(readOnly), false);
   for (const capabilities of [
-    { ...binance.capabilities, funds: "real" as const },
     { ...binance.capabilities, attachedExits: null },
     { ...binance.capabilities, access: "read_only" as const },
   ])
@@ -102,8 +98,8 @@ test("capabilities are explicit, and only a testnet that attaches exits places o
 
 test("an exchange account trades only on a venue that places orders; any other is read only", () => {
   assert.equal(exchangeAccountAccess("binance-spot-testnet"), "trade");
-  // A venue this build has no trading adapter for, such as HTX, or a value
-  // that names no venue, is never traded.
-  for (const exchange of ["htx", "binance", "", "BINANCE-SPOT-TESTNET"])
+  assert.equal(exchangeAccountAccess("binance-spot"), "trade");
+  assert.equal(exchangeAccountAccess("htx"), "trade");
+  for (const exchange of ["binance-futures", "", "BINANCE-SPOT-TESTNET"])
     assert.equal(exchangeAccountAccess(exchange), "read_only", exchange);
 });

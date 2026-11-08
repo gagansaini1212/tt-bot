@@ -6,6 +6,7 @@ import {
   type Transaction,
 } from "@crypto-trading/database";
 import {
+  accountModes,
   canPlaceOrders,
   venueFor,
   venueIdSchema,
@@ -72,8 +73,10 @@ function served(customerId: string, row: Row): ExchangeAccount | undefined {
   if (!venue.success) return undefined;
   if (!["connected", "reconciling", "unavailable"].includes(row.status))
     return undefined;
-  const readOnly = !canPlaceOrders(venueFor(venue.data));
-  if (!readOnly && row.mode !== "simulation") return undefined;
+  const descriptor = venueFor(venue.data);
+  const allowedModes = accountModes(descriptor);
+  if (!allowedModes.includes(row.mode)) return undefined;
+  const readOnly = !canPlaceOrders(descriptor);
   return {
     customerId,
     exchangeAccountId: row.id,

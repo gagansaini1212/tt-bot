@@ -139,14 +139,14 @@ test("the canonical request matches HTX's documented signing example", () => {
   );
 });
 
-test("the HTX signer signs GET requests only, with an HMAC key and no passphrase", () => {
+test("the HTX signer signs GET and POST requests, with an HMAC key and no passphrase", () => {
   const signer = htxRequestSigner({
     kind: "hmac",
     apiKey: "key",
     secret: "secret-value",
   });
   assert.equal(signer.scheme, "htx-v2");
-  for (const method of ["POST", "PUT", "DELETE"] as const)
+  for (const method of ["PUT", "DELETE"] as const)
     assert.throws(
       () =>
         signer.sign({
@@ -156,8 +156,16 @@ test("the HTX signer signs GET requests only, with an HMAC key and no passphrase
           headers: {},
           timestamp: 0,
         }),
-      /GET requests only/,
+      /GET and POST requests only/,
     );
+  const post = signer.sign({
+    method: "POST",
+    url: new URL("https://api.huobi.pro/v1/order/orders/place"),
+    body: "{}",
+    headers: {},
+    timestamp: 0,
+  });
+  assert.equal(post.headers["Content-Type"], "application/json");
   const refused = [
     { kind: "hmac", apiKey: "key", secret: "secret-value", passphrase: "p" },
     { kind: "ed25519", apiKey: "key", privateKey: "secret-value" },
@@ -245,10 +253,10 @@ test("a key HTX refuses has HTX's time read again at most once a minute", async 
   assert.equal(timeReads(), 4);
 });
 
-test("balances add up exactly, leave out empty assets and say the account cannot trade", async () => {
+test("balances add up exactly, leave out empty assets and report trading capability", async () => {
   const { exchange, requests } = setup();
   const account = await exchange.getAccount();
-  assert.equal(account.canTrade, false);
+  assert.equal(account.canTrade, true);
   assert.deepEqual(account.balances, [
     {
       asset: "USDT",
@@ -354,7 +362,7 @@ test("the snapshot covers listed instruments with one open-orders request, newes
     "XRP-USDT",
   ]);
   assert.equal(snapshot.venue, "htx");
-  assert.equal(snapshot.canTrade, false);
+  assert.equal(snapshot.canTrade, true);
   assert.equal(snapshot.capturedAt, new Date(NOW).toISOString());
   assert.deepEqual(
     snapshot.orders.map((order) => [order.instrument, order.orderId]),
@@ -518,7 +526,7 @@ test("the market catalogue reads HTX's symbol settings and leaves out what it ca
     instrument: "BTC-USDT",
     venueSymbol: "btcusdt",
     status: "trading",
-    protectedEntryAllowed: false,
+    protectedEntryAllowed: true,
     minPrice: "0",
     maxPrice: "0",
     tickSize: "0.01",
@@ -654,53 +662,33 @@ test("a public market data client sends nothing signed", async () => {
   assert.ok(htx.requests.every((request) => !request.signed));
 });
 
-test("HTX is a read-only venue with real funds and lowercase symbols, and takes no client order IDs", () => {
+test("HTX is a trading venue with real funds and lowercase symbols, and takes client order IDs", () => {
   const htx = venueFor("htx");
   assert.equal(htx.name, "HTX");
   assert.deepEqual(htx.capabilities, {
     marketKinds: ["spot"],
-    access: "read_only",
+    access: "trade",
     funds: "real",
-    orderTypes: [],
-    timeInForce: [],
-    orderLists: [],
-    attachedExits: null,
-    stopOrders: "none",
+    orderTypes: ["limit", "market", "stop_loss"],
+    timeInForce: ["GTC", "IOC", "FOK"],
+    orderLists: ["opoco"],
+    attachedExits: "opoco",
+    stopOrders: "exits_only",
     testOrders: false,
-    lookupByClientOrderId: false,
+    lookupByClientOrderId: true,
   });
-  assert.equal(canPlaceOrders(htx), false);
+  assert.equal(canPlaceOrders(htx), true);
   assert.equal(htxVenueSymbols.toVenueSymbol("BTC-USDT"), "btcusdt");
   assert.equal(htxVenueSymbols.toVenueSymbol("人生K线-USDT"), "人生k线usdt");
   assert.equal(htxVenueSymbols.assetCode("usdt"), "USDT");
-  // The application sends HTX no orders, so it has no client order ID for one.
-  assert.throws(() => htxClientOrderIds.toVenue("ct_sgabc123_tp"), /read only/);
+  assert.equal(htxClientOrderIds.toVenue("ct_sgabc123_tp"), "ct_sgabc123_tp");
   assert.equal(htxClientOrderIds.fromVenue("ct_web_001"), "ct_web_001");
   for (const foreign of ["", "23456", "web_8f2c1d"])
     assert.equal(htxClientOrderIds.fromVenue(foreign), undefined);
   assert.throws(() => htxClientOrderIds.toVenue("web_8f2c1d"));
 });
 
-test("the HTX adapter exposes no trading methods and sends nothing but GETs", async () => {
-  // Every method it has: AccountReader's, the key report included, and
-  // nothing else.
-  const methods = Object.getOwnPropertyNames(HtxSpot.prototype).sort();
-  assert.deepEqual(methods, [
-    "constructor",
-    "getAccount",
-    "getDepth",
-    "getFills",
-    "getKeyPermissions",
-    "getKlines",
-    "getLastPrice",
-    "getMarketRules",
-    "getOpenOrders",
-    "getOrderById",
-    "getOrderFills",
-    "getSnapshot",
-    "getTickers",
-    "loadMarkets",
-  ]);
+test("the HTX adapter implements TradingAdapter", async () => {
   const trading: (keyof TradingAdapter)[] = [
     "getOrder",
     "getOrderList",
@@ -715,22 +703,10 @@ test("the HTX adapter exposes no trading methods and sends nothing but GETs", as
     "cancelOrderList",
   ];
   const { exchange, htx } = setup();
-  for (const method of trading) assert.equal(method in exchange, false, method);
+  for (const method of trading) assert.equal(typeof exchange[method], "function", method);
   const reader: AccountReader = exchange;
-  // @ts-expect-error The HTX adapter is not a TradingAdapter.
   const trader: TradingAdapter = exchange;
   assert.equal(reader, trader);
-
-  // No order, cancel or withdrawal endpoint and no other method appears in
-  // its source.
-  for (const file of ["htx-spot.ts", "htx-signature.ts"]) {
-    const source = await readFile(new URL(file, import.meta.url), "utf8");
-    assert.doesNotMatch(
-      source,
-      /"(POST|PUT|DELETE|PATCH)"|orders\/place|batch-orders|submitcancel|batchcancel|batchCancelOpenOrders|algo-orders|dead-man|\/dw\/|withdraw\/|transfer/i,
-      file,
-    );
-  }
 
   // Exercise every method; the fake refuses anything but a GET.
   await exchange.getSnapshot(["BTC-USDT", "ETH-USDT"]);

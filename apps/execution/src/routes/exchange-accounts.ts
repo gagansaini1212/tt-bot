@@ -56,7 +56,7 @@ export type ExchangeAccountDependencies = {
 const empty = z.strictObject({});
 const MODE_NAMES = {
   simulation: "simulation (testnet)",
-  live: "live, read only",
+  live: "live",
 } as const;
 
 const NO_SUCH_ACCOUNT =

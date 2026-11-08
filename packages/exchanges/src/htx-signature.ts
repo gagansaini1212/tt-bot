@@ -35,8 +35,13 @@ export function htxCanonicalQuery(
 }
 
 /** What HTX signs: the method, lowercase host, path and canonical query, one per line. */
-export function htxPreSignedText(host: string, path: string, query: string) {
-  return ["GET", host.toLowerCase(), path, query].join("\n");
+export function htxPreSignedText(
+  host: string,
+  path: string,
+  query: string,
+  method = "GET",
+) {
+  return [method.toUpperCase(), host.toLowerCase(), path, query].join("\n");
 }
 
 /**
@@ -45,9 +50,6 @@ export function htxPreSignedText(host: string, path: string, query: string) {
  * SignatureVersion and the venue-corrected Timestamp to the query, puts the
  * query in canonical order, and appends the base64 HmacSHA256 of the
  * pre-signed text as Signature.
- *
- * It signs GET requests only. HTX would sign a POST's auth parameters but
- * not its body, and the HTX adapter only reads, so it sends none.
  */
 export function htxRequestSigner(
   credentials: SigningCredentials,
@@ -64,9 +66,10 @@ export function htxRequestSigner(
   return {
     scheme: "htx-v2",
     sign(request) {
-      if (request.method !== "GET" || request.body !== undefined)
+      const method = request.method.toUpperCase();
+      if (method !== "GET" && method !== "POST")
         throw new Error(
-          "The HTX signer signs GET requests only: the HTX adapter only reads.",
+          `The HTX signer supports GET and POST requests only (received ${method}).`,
         );
       const url = new URL(request.url);
       const query = htxCanonicalQuery({
@@ -80,11 +83,20 @@ export function htxRequestSigner(
       const signature = hmac(
         "sha256",
         secret,
-        htxPreSignedText(url.host, url.pathname, query),
+        htxPreSignedText(url.host, url.pathname, query, method),
         "base64",
       );
       url.search = `${query}&Signature=${encode(signature)}`;
-      return { url, headers: { ...request.headers } };
+      return {
+        url,
+        headers: {
+          ...request.headers,
+          ...(request.body !== undefined
+            ? { "Content-Type": "application/json" }
+            : {}),
+        },
+        body: request.body,
+      };
     },
   };
 }

@@ -67,10 +67,12 @@ const STATUS_VARIANTS = {
 export function StrategyCard({
   strategy,
   now,
+  exchangeAccountId,
   onEdit,
 }: {
   strategy: StrategyView;
   now: number;
+  exchangeAccountId?: string;
   onEdit: () => void;
 }) {
   const [pending, startTransition] = useTransition();
@@ -87,9 +89,11 @@ export function StrategyCard({
     sending.current = true;
     startTransition(async () => {
       try {
-        const outcome = await controlStrategy(action, {
-          strategyId: strategy.id,
-        });
+        const outcome = await controlStrategy(
+          action,
+          { strategyId: strategy.id },
+          exchangeAccountId,
+        );
         setResult(outcome);
         if (action === "close_all") setConfirming(false);
       } finally {

@@ -108,6 +108,8 @@ export function StrategyEditor({
   markets,
   aiSource,
   now,
+  exchangeAccountId,
+  accountLabel,
   onClose,
   onBacktest,
 }: {
@@ -116,6 +118,8 @@ export function StrategyEditor({
   markets: StrategyMarket[];
   aiSource: AiSource;
   now: number;
+  exchangeAccountId?: string;
+  accountLabel?: string;
   onClose: () => void;
   onBacktest: (draft: StrategyDraft) => void;
 }) {
@@ -160,12 +164,15 @@ export function StrategyEditor({
     startTransition(async () => {
       try {
         const outcome = editing
-          ? await saveVersion({
-              strategyId: editing.id,
-              baseVersion: editing.version,
-              draft: review,
-            })
-          : await startStrategy(review);
+          ? await saveVersion(
+              {
+                strategyId: editing.id,
+                baseVersion: editing.version,
+                draft: review,
+              },
+              exchangeAccountId,
+            )
+          : await startStrategy(review, exchangeAccountId);
         setResult(outcome);
         if (outcome.result === "saved") onClose();
       } finally {
@@ -189,7 +196,9 @@ export function StrategyEditor({
             ? editing.status === "retired"
               ? "Saving makes a new version, and the strategy runs again under it."
               : "Saving makes a new version. Entries already open keep the version they were made under."
-            : "Runs on Binance Spot Testnet with virtual funds. Review its exact effects before it starts."}
+            : accountLabel
+              ? `Runs on ${accountLabel}. Review its exact effects before it starts.`
+              : "Review its exact effects before it starts."}
         </CardDescription>
       </CardHeader>
       <CardContent>

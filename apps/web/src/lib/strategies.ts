@@ -69,13 +69,17 @@ export async function getStrategies(
 async function change(
   path: `/${string}`,
   body: unknown,
+  exchangeAccountId?: string,
 ): Promise<StrategyActionResult> {
-  const result = await callWorkerForAccount({
-    method: "POST",
-    path,
-    body,
-    schema: z.object({ change: strategyChangeSchema }),
-  });
+  const result = await callWorkerForAccount(
+    {
+      method: "POST",
+      path,
+      body,
+      schema: z.object({ change: strategyChangeSchema }),
+    },
+    exchangeAccountId,
+  );
   if (result.status === "connected") return result.data.change;
   return NOT_SENT.has(result.reason)
     ? { result: "unavailable", message: result.message, strategy: null }
@@ -86,32 +90,47 @@ async function change(
       };
 }
 
-export const createStrategy = (draft: StrategyDraft) =>
-  change("/strategies", draft);
+export const createStrategy = (
+  draft: StrategyDraft,
+  exchangeAccountId?: string,
+) => change("/strategies", draft, exchangeAccountId);
 
-export const saveStrategyVersion = (request: StrategyVersionRequest) =>
-  change("/strategies/versions", request);
+export const saveStrategyVersion = (
+  request: StrategyVersionRequest,
+  exchangeAccountId?: string,
+) => change("/strategies/versions", request, exchangeAccountId);
 
-export const pauseStrategy = (strategyId: string) =>
-  change("/strategies/pause", { strategyId });
+export const pauseStrategy = (
+  strategyId: string,
+  exchangeAccountId?: string,
+) => change("/strategies/pause", { strategyId }, exchangeAccountId);
 
-export const resumeStrategy = (strategyId: string) =>
-  change("/strategies/resume", { strategyId });
+export const resumeStrategy = (
+  strategyId: string,
+  exchangeAccountId?: string,
+) => change("/strategies/resume", { strategyId }, exchangeAccountId);
 
-export const closeAllStrategy = (strategyId: string) =>
-  change("/strategies/close-all", { strategyId });
+export const closeAllStrategy = (
+  strategyId: string,
+  exchangeAccountId?: string,
+) => change("/strategies/close-all", { strategyId }, exchangeAccountId);
 
 /** The kill switch: pauses every strategy and closes every managed entry. */
-export async function activateKillSwitch(): Promise<
+export async function activateKillSwitch(
+  exchangeAccountId?: string,
+): Promise<
   | ({ result: "done" } & KillSwitchResult)
   | { result: "unavailable" | "unconfirmed"; message: string }
 > {
-  const result = await callWorkerForAccount({
-    method: "POST",
-    path: "/strategies/kill-switch",
-    body: {},
-    schema: z.object({ result: killSwitchResultSchema }),
-  });
+  const result = await callWorkerForAccount(
+    {
+      method: "POST",
+      path: "/strategies/kill-switch",
+      body: {},
+      schema: z.object({ result: killSwitchResultSchema }),
+    },
+    exchangeAccountId,
+  );
   if (result.status === "connected")
     return { result: "done", ...result.data.result };
   return NOT_SENT.has(result.reason)

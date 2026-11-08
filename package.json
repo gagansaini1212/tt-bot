@@ -16,7 +16,7 @@
     "db:up": "docker compose up -d postgres",
     "dev": "pnpm --filter @crypto-trading/web dev",
     "dev:agent": "eve dev",
-    "dev:worker": "tsx --env-file-if-exists=.env --env-file-if-exists=apps/execution/.env watch apps/execution/src/index.ts",
+    "dev:worker": "tsx --env-file-if-exists=.env --env-file-if-exists=apps/execution/.env --watch apps/execution/src/index.ts",
     "exchange": "tsx --env-file-if-exists=.env --env-file-if-exists=apps/execution/.env apps/execution/src/index.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

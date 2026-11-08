@@ -80,13 +80,12 @@ const kind = async (promise: Promise<unknown>) => {
   return "served";
 };
 
-test("the registry serves HTX read only, beside Binance Spot Testnet", () => {
+test("the registry serves HTX beside Binance Spot Testnet", () => {
   const { registry, binanceAccount, htxAccount } = sideBySide();
   assert.deepEqual(registry.venues, ["binance-spot-testnet", "htx"]);
   assert.equal(canTrade(binanceAccount), true);
-  // HTX's clients are AccountReaders: the worker never trades through one.
-  assert.equal(canTrade(htxAccount), false);
-  assert.equal("placeProtectedEntry" in htxAccount, false);
+  assert.equal(canTrade(htxAccount), true);
+  assert.equal("placeProtectedEntry" in htxAccount, true);
   assert.notEqual(
     registry.get("htx")!.limits,
     registry.get("binance-spot-testnet")!.limits,

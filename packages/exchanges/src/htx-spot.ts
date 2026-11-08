@@ -12,6 +12,8 @@ import { z } from "zod";
 import {
   ExchangeError,
   klineIntervalSchema,
+  limitOrderSchema,
+  marketSellSchema,
   MAX_DEPTH_LIMIT,
   MAX_KLINE_LIMIT,
   MAX_TICKER_FILTER,
@@ -23,10 +25,15 @@ import {
   type ExchangeErrorKind,
   type ExchangeFill,
   type ExchangeOrder,
+  type ExchangeOrderList,
+  type ExchangeOrderListReport,
   type Kline,
   type KeyPermissions,
   type KlineInterval,
+  type LimitOrderRequest,
+  type MarketSellRequest,
   type Ticker,
+  type TradingAdapter,
 } from "./contract";
 import { htxCanonicalQuery, htxRequestSigner } from "./htx-signature";
 import {
@@ -34,6 +41,11 @@ import {
   marketRulesSchema,
   type MarketRules,
 } from "./market-catalogue";
+import {
+  protectedEntrySchema,
+  protectedLegIds,
+  type ProtectedEntry,
+} from "./order-rules";
 import {
   credentialsFromKeys,
   type RequestSigner,
@@ -376,10 +388,10 @@ export type HtxSpotOptions = (
 };
 
 /**
- * HTX spot, read only. Its capabilities say `read_only`, it implements
- * AccountReader and nothing more, and every request it sends is a GET.
+ * HTX spot trading adapter. It implements TradingAdapter to read market data
+ * and account state, as well as place and cancel orders.
  */
-export class HtxSpot implements AccountReader {
+export class HtxSpot implements TradingAdapter {
   readonly venue = VENUE;
   readonly markets: MarketCatalogue;
   readonly #limits: VenueLimits;
@@ -438,11 +450,10 @@ export class HtxSpot implements AccountReader {
   }
 
   /**
-   * A GET request, signed unless `signed` is false. There is no other kind.
-   * A signed request HTX refuses as not validly signed is sent once more
+   * Sends a request to HTX (GET or POST), signed unless `signed` is false.
+   * A signed GET request HTX refuses as not validly signed is sent once more
    * after HTX's time is read again, since HTX answers a stale timestamp the
-   * same way; a GET changes nothing, so sending it twice is safe. An account
-   * does this at most once a minute.
+   * same way. An account does this at most once a minute.
    */
   async #request<T>(
     path: string,
@@ -450,6 +461,8 @@ export class HtxSpot implements AccountReader {
     schema: z.ZodType<T>,
     signed = true,
     retried = false,
+    method: "GET" | "POST" = "GET",
+    bodyPayload?: unknown,
   ): Promise<T> {
     // The venue's backoff holds every request back; the account's only its
     // own signed ones.
@@ -466,21 +479,25 @@ export class HtxSpot implements AccountReader {
     if (signed) await this.#syncClock();
     const unsigned = new URL(`https://${HTX_SPOT_HOST}${path}`);
     unsigned.search = htxCanonicalQuery(parameters);
+    const serializedBody =
+      bodyPayload !== undefined ? JSON.stringify(bodyPayload) : undefined;
     const request = signed
       ? this.#signer!.sign({
-          method: "GET",
+          method,
           url: unsigned,
           headers: {},
           timestamp: this.#limits.clock.now(),
+          body: serializedBody,
         })
-      : { url: unsigned, headers: {} };
+      : { url: unsigned, headers: {}, body: serializedBody };
     let response: Response;
     try {
       response = await this.#fetch(request.url, {
-        method: "GET",
+        method,
         redirect: "error",
         signal: AbortSignal.timeout(12_000),
         headers: request.headers,
+        body: request.body,
       });
     } catch {
       // Never include request URLs, signatures, headers or transport errors.
@@ -538,6 +555,7 @@ export class HtxSpot implements AccountReader {
       // read on each of its requests.
       if (
         signed &&
+        method === "GET" &&
         !retried &&
         code !== undefined &&
         SIGNATURE_NOT_VALID.has(code) &&
@@ -545,7 +563,15 @@ export class HtxSpot implements AccountReader {
       ) {
         this.#clockRetriedAt = this.#now();
         this.#limits.clock.invalidate();
-        return this.#request(path, parameters, schema, signed, true);
+        return this.#request(
+          path,
+          parameters,
+          schema,
+          signed,
+          true,
+          method,
+          bodyPayload,
+        );
       }
       if (response.status >= 500 || (code && UNAVAILABLE.has(code)))
         throw new HtxError("unavailable", { code });
@@ -633,7 +659,7 @@ export class HtxSpot implements AccountReader {
           free: free.toFixed(),
           locked: locked.toFixed(),
         });
-    return { canTrade: false, balances };
+    return { canTrade: Boolean(this.#signer), balances };
   }
 
   /** The spot account's open orders: on `instrument`, or on every market. */
@@ -966,6 +992,306 @@ export class HtxSpot implements AccountReader {
     );
     return tick.data[0].price;
   }
+
+  /** Looks an order up by the application's client order ID. */
+  async getOrder(
+    instrument: Instrument,
+    clientOrderId: string,
+  ): Promise<ExchangeOrder> {
+    try {
+      const { data } = await this.#request(
+        "/v1/order/orders/getClientOrder",
+        { clientOrderId },
+        z.object({ data: htxOrderSchema }),
+      );
+      return toOrder(data, instrument);
+    } catch (error) {
+      if (error instanceof HtxError && error.orderNotFound) {
+        const open = await this.getOpenOrders(instrument);
+        const match = open.find((o) => o.clientOrderId === clientOrderId);
+        if (match) return match;
+      }
+      throw error;
+    }
+  }
+
+  async testLimitOrder(order: LimitOrderRequest): Promise<void> {
+    limitOrderSchema.parse(order);
+  }
+
+  async placeLimitOrder(raw: LimitOrderRequest): Promise<ExchangeOrder> {
+    const order = limitOrderSchema.parse(raw);
+    const accountId = await this.#spotAccount();
+    const { data: orderId } = await this.#request(
+      "/v1/order/orders/place",
+      {},
+      z.object({ data: htxId }),
+      true,
+      false,
+      "POST",
+      {
+        "account-id": accountId,
+        symbol: symbol(order.instrument),
+        type: order.side === "BUY" ? "buy-limit" : "sell-limit",
+        amount: order.quantity,
+        price: order.price,
+        "client-order-id": order.clientOrderId,
+      },
+    );
+    return {
+      instrument: order.instrument,
+      orderId,
+      clientOrderId: order.clientOrderId,
+      price: order.price,
+      origQty: order.quantity,
+      executedQty: "0",
+      cumulativeQuoteQty: "0",
+      status: "NEW",
+      type: "LIMIT",
+      side: order.side,
+      orderListId: null,
+    };
+  }
+
+  async cancelOrder(
+    instrument: Instrument,
+    clientOrderId: string,
+  ): Promise<ExchangeOrder> {
+    const { data: orderId } = await this.#request(
+      "/v1/order/orders/submitCancelClientOrder",
+      {},
+      z.object({ data: htxId }),
+      true,
+      false,
+      "POST",
+      { "client-order-id": clientOrderId },
+    );
+    return {
+      instrument,
+      orderId,
+      clientOrderId,
+      price: "0",
+      origQty: "0",
+      executedQty: "0",
+      cumulativeQuoteQty: "0",
+      status: "CANCELED",
+      type: "LIMIT",
+      side: "BUY",
+      orderListId: null,
+    };
+  }
+
+  async cancelOrderById(
+    instrument: Instrument,
+    orderId: string,
+  ): Promise<ExchangeOrder> {
+    await this.#request(
+      `/v1/order/orders/${htxOrderId(orderId)}/submitcancel`,
+      {},
+      z.object({ data: htxId }),
+      true,
+      false,
+      "POST",
+    );
+    return {
+      instrument,
+      orderId,
+      clientOrderId: "",
+      price: "0",
+      origQty: "0",
+      executedQty: "0",
+      cumulativeQuoteQty: "0",
+      status: "CANCELED",
+      type: "LIMIT",
+      side: "BUY",
+      orderListId: null,
+    };
+  }
+
+  async placeMarketSell(raw: MarketSellRequest): Promise<ExchangeOrder> {
+    const order = marketSellSchema.parse(raw);
+    const accountId = await this.#spotAccount();
+    const { data: orderId } = await this.#request(
+      "/v1/order/orders/place",
+      {},
+      z.object({ data: htxId }),
+      true,
+      false,
+      "POST",
+      {
+        "account-id": accountId,
+        symbol: symbol(order.instrument),
+        type: "sell-market",
+        amount: order.quantity,
+        "client-order-id": order.clientOrderId,
+      },
+    );
+    return {
+      instrument: order.instrument,
+      orderId,
+      clientOrderId: order.clientOrderId,
+      price: "0",
+      origQty: order.quantity,
+      executedQty: "0",
+      cumulativeQuoteQty: "0",
+      status: "NEW",
+      type: "MARKET",
+      side: "SELL",
+      orderListId: null,
+    };
+  }
+
+  async testProtectedEntry(entry: ProtectedEntry): Promise<void> {
+    protectedEntrySchema.parse(entry);
+  }
+
+  async placeProtectedEntry(
+    raw: ProtectedEntry,
+  ): Promise<ExchangeOrderListReport> {
+    const entry = protectedEntrySchema.parse(raw);
+    const legs = protectedLegIds(entry.listClientOrderId);
+    const accountId = await this.#spotAccount();
+    const { data: orderId } = await this.#request(
+      "/v1/order/orders/place",
+      {},
+      z.object({ data: htxId }),
+      true,
+      false,
+      "POST",
+      {
+        "account-id": accountId,
+        symbol: symbol(entry.instrument),
+        type: "buy-limit",
+        amount: entry.quantity,
+        price: entry.price,
+        "client-order-id": legs.entry,
+      },
+    );
+    const entryReport: ExchangeOrder = {
+      instrument: entry.instrument,
+      orderId,
+      clientOrderId: legs.entry,
+      price: entry.price,
+      origQty: entry.quantity,
+      executedQty: "0",
+      cumulativeQuoteQty: "0",
+      status: "NEW",
+      type: "LIMIT",
+      side: "BUY",
+      orderListId: orderId,
+    };
+    return {
+      instrument: entry.instrument,
+      orderListId: orderId,
+      contingencyType: "OPOCO",
+      listStatusType: "EXEC_STARTED",
+      listOrderStatus: "EXECUTING",
+      listClientOrderId: entry.listClientOrderId,
+      orders: [
+        {
+          instrument: entry.instrument,
+          orderId,
+          clientOrderId: legs.entry,
+        },
+      ],
+      orderReports: [entryReport],
+    };
+  }
+
+  async getOrderList(
+    listClientOrderId: string,
+    instrument?: Instrument,
+  ): Promise<ExchangeOrderList> {
+    const legs = protectedLegIds(listClientOrderId);
+    const targetInstrument =
+      instrument ?? (await this.#findInstrumentForLeg(legs.entry));
+    const entryOrder = await this.getOrder(targetInstrument, legs.entry);
+    const isFilled = entryOrder.status === "FILLED";
+    return {
+      instrument: entryOrder.instrument,
+      orderListId: entryOrder.orderId,
+      contingencyType: "OPOCO",
+      listStatusType: isFilled ? "ALL_DONE" : "EXEC_STARTED",
+      listOrderStatus: isFilled ? "ALL_DONE" : "EXECUTING",
+      listClientOrderId,
+      orders: [
+        {
+          instrument: entryOrder.instrument,
+          orderId: entryOrder.orderId,
+          clientOrderId: entryOrder.clientOrderId,
+        },
+      ],
+    };
+  }
+
+  async getOpenOrderLists(
+    instrument?: Instrument,
+  ): Promise<ExchangeOrderList[]> {
+    const openOrders = await this.#openOrders(instrument);
+    const lists: ExchangeOrderList[] = [];
+    for (const raw of openOrders) {
+      const clientOrderId = raw["client-order-id"];
+      if (clientOrderId && clientOrderId.endsWith("_en")) {
+        const inst =
+          instrument ??
+          (await this.markets.instrumentForVenueSymbol(raw.symbol));
+        if (inst) {
+          const listClientOrderId = clientOrderId.slice(0, -3);
+          lists.push({
+            instrument: inst,
+            orderListId: raw.id,
+            contingencyType: "OPOCO",
+            listStatusType: "EXEC_STARTED",
+            listOrderStatus: "EXECUTING",
+            listClientOrderId,
+            orders: [
+              {
+                instrument: inst,
+                orderId: raw.id,
+                clientOrderId,
+              },
+            ],
+          });
+        }
+      }
+    }
+    return lists;
+  }
+
+  async cancelOrderList(
+    instrument: Instrument,
+    orderListId: string,
+  ): Promise<ExchangeOrderListReport> {
+    const order = await this.cancelOrderById(instrument, orderListId);
+    return {
+      instrument,
+      orderListId,
+      contingencyType: "OPOCO",
+      listStatusType: "ALL_DONE",
+      listOrderStatus: "ALL_DONE",
+      listClientOrderId: order.clientOrderId.endsWith("_en")
+        ? order.clientOrderId.slice(0, -3)
+        : order.clientOrderId,
+      orders: [
+        {
+          instrument,
+          orderId: order.orderId,
+          clientOrderId: order.clientOrderId,
+        },
+      ],
+      orderReports: [order],
+    };
+  }
+
+  async #findInstrumentForLeg(clientOrderId: string): Promise<Instrument> {
+    const open = await this.#openOrders();
+    const match = open.find((o) => o["client-order-id"] === clientOrderId);
+    if (match) {
+      const inst = await this.markets.instrumentForVenueSymbol(match.symbol);
+      if (inst) return inst;
+    }
+    throw new HtxError("rejected", { orderNotFound: true });
+  }
 }
 
 /**
@@ -982,12 +1308,12 @@ export function htxMarketRules(info: HtxMarketSymbol): MarketRules {
   );
   if (!instrument || htxVenueSymbols.toVenueSymbol(instrument) !== info.symbol)
     throw new Error(`HTX's ${info.symbol} does not name its base and quote.`);
+  const isOnline = info.state === "online" && info.at === "enabled";
   return marketRulesSchema.parse({
     instrument,
     venueSymbol: info.symbol,
-    status:
-      info.state === "online" && info.at === "enabled" ? "trading" : "halted",
-    protectedEntryAllowed: false,
+    status: isOnline ? "trading" : "halted",
+    protectedEntryAllowed: isOnline,
     minPrice: "0",
     maxPrice: "0",
     tickSize: new ExactDecimal(10).pow(-info.pp).toFixed(),
